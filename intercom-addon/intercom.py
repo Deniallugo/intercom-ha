@@ -39,3 +39,61 @@ def wav_header(pcm_len: int) -> bytes:
         b"data",
         pcm_len,
     )
+
+
+async def handle_intercom(request: web.Request) -> web.Response:
+    session_id = request.headers.get("X-Session-ID", str(uuid.uuid4()))
+    chunk_index = int(request.headers.get("X-Chunk-Index", "0"))
+    is_final = request.headers.get("X-Final") == "1"
+    data = await request.read()
+
+    sessions.setdefault(session_id, []).append((chunk_index, data))
+
+    if not is_final:
+        return web.Response(status=204)
+
+    # Assemble chunks in order
+    chunks = sorted(sessions.pop(session_id), key=lambda x: x[0])
+    pcm = b"".join(d for _, d in chunks)
+
+    opts = load_options()
+    ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
+    filename = f"intercom-{session_id}.wav"
+    filepath = Path(CONFIG_WWW) / filename
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(filepath, "wb") as f:
+        f.write(wav_header(len(pcm)))
+        f.write(pcm)
+
+    token = os.environ["SUPERVISOR_TOKEN"]
+    media_url = f"{ha_url}/local/{filename}"
+    duration = len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
+
+    async with ClientSession() as session:
+        for player in opts.get("media_players", []):
+            await session.post(
+                f"{HA_API}/services/media_player/play_media",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "entity_id": player,
+                    "media_content_id": media_url,
+                    "media_content_type": "music",
+                },
+            )
+
+    loop = asyncio.get_running_loop()
+    loop.call_later(duration + 5, lambda: filepath.unlink(missing_ok=True))
+
+    return web.Response(status=204)
+
+
+def main() -> None:
+    opts = load_options()
+    app = web.Application()
+    app.router.add_post("/intercom", handle_intercom)
+    web.run_app(app, host="0.0.0.0", port=opts.get("port", 9999))
+
+
+if __name__ == "__main__":
+    main()
