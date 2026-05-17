@@ -1,7 +1,7 @@
 image: ghcr.io/deniallugo/intercom-ha/intercom-relay
 name: Intercom Relay
 description: Receives audio from Atom Echo and plays it on HA media players.
-version: "1.0.1"
+version: "1.0.2"
 slug: intercom_relay
 init: false
 hassio_api: true
