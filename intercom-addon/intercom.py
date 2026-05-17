@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 HA_API = "http://supervisor/core/api"
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 48000
 SAMPLE_WIDTH = 2   # bytes, 16-bit
 CHANNELS = 1
 
