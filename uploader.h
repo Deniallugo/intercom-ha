@@ -6,7 +6,10 @@
 #include <cstring>
 #include <string>
 
-// _rec_buf and _rec_len are defined in recorder.h, included before this file.
+// recorder_get_len() and recorder_read() are defined in recorder.h,
+// which is included before this file.
+
+static uint8_t _send_buf[16384];  // read buffer: flash → network
 
 static std::string _make_session_id() {
   uint8_t rnd[8];
@@ -58,7 +61,8 @@ static void _post_chunk(const char* host, int port, const char* path,
 }
 
 void uploader_send(const char* url) {
-  if (_rec_len == 0) return;
+  size_t total = recorder_get_len();
+  if (total == 0) return;
 
   // Parse "http://host:port/path"
   char host[64] = {};
@@ -81,20 +85,18 @@ void uploader_send(const char* url) {
   }
   if (slash) strncpy(path, slash, sizeof(path) - 1);
 
-  const size_t CHUNK = 16384;
+  const size_t CHUNK = sizeof(_send_buf);
   std::string  sid   = _make_session_id();
   size_t offset = 0;
   int    idx    = 0;
 
-  while (offset < _rec_len) {
-    size_t bytes  = _rec_len - offset;
+  while (offset < total) {
+    size_t bytes = total - offset;
     if (bytes > CHUNK) bytes = CHUNK;
-    bool is_final = (offset + bytes >= _rec_len);
-    _post_chunk(host, port, path, sid.c_str(), idx, is_final,
-                _rec_buf + offset, bytes);
+    recorder_read(_send_buf, offset, bytes);
+    bool is_final = (offset + bytes >= total);
+    _post_chunk(host, port, path, sid.c_str(), idx, is_final, _send_buf, bytes);
     offset += bytes;
     idx++;
   }
-
-  _rec_len = 0;
 }
