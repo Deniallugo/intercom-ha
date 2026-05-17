@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -87,7 +86,6 @@ async def handle_intercom(request: web.Request) -> web.Response:
     players = opts.get("media_players", [])
     log.info("playing on %d player(s): %s", len(players), players)
 
-    loop = asyncio.get_running_loop()
     try:
         async with ClientSession() as session:
             for player in players:
@@ -102,8 +100,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
                 )
                 log.info("HA API  player=%s status=%d", player, resp.status)
     finally:
-        loop.call_later(duration + 5, lambda: filepath.unlink(missing_ok=True))
-        log.info("cleanup scheduled in %.1fs", duration + 5)
+        log.info("cleanup disabled — download: %s/local/%s", ha_url, filename)
 
     return web.Response(status=204)
 
