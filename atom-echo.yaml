@@ -5,6 +5,20 @@ substitutions:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  includes:
+    - recorder.h
+    - uploader.h
+  on_boot:
+    priority: 200.0
+    then:
+      - lambda: |-
+          recorder_init();
+          id(atom_mic).add_data_callback([](std::vector<int16_t> data) {
+            recorder_on_data(
+              reinterpret_cast<const uint8_t*>(data.data()),
+              data.size() * sizeof(int16_t)
+            );
+          });
 
 esp32:
   board: m5stack-atom
@@ -44,14 +58,6 @@ microphone:
     sample_rate: 16000
     correct_dc_offset: true
 
-speaker:
-  - platform: i2s_audio
-    id: atom_spk
-    i2s_dout_pin: GPIO22
-    dac_type: external
-    bits_per_sample: 16bit
-    sample_rate: 16000
-
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
 
 light:
@@ -64,42 +70,25 @@ light:
     id: status_led
     restore_mode: ALWAYS_OFF
 
-# ── Voice assistant ────────────────────────────────────────────────────────────
+# ── HTTP client ────────────────────────────────────────────────────────────────
 
-voice_assistant:
-  microphone: atom_mic
-  speaker: atom_spk
-  noise_suppression_level: 2
-  auto_gain: 31dBFS
-  volume_multiplier: 2.0
-  on_listening:
-    - light.turn_on:
-        id: status_led
-        red: 0%
-        green: 0%
-        blue: 100%
-  on_stt_end:
-    - light.turn_on:
-        id: status_led
-        red: 100%
-        green: 100%
-        blue: 0%
-  on_tts_start:
-    - light.turn_on:
-        id: status_led
-        red: 0%
-        green: 100%
-        blue: 0%
-  on_end:
-    - light.turn_off: status_led
-  on_error:
-    - light.turn_on:
-        id: status_led
-        red: 100%
-        green: 0%
-        blue: 0%
-    - delay: 2s
-    - light.turn_off: status_led
+http_request:
+  useragent: esphome/intercom
+  timeout: 30s
+
+# ── Upload script ──────────────────────────────────────────────────────────────
+
+script:
+  - id: upload_recording
+    then:
+      - light.turn_on:
+          id: status_led
+          red: 100%
+          green: 100%
+          blue: 0%
+      - lambda: |-
+          uploader_send("http://homeassistant.local:9999/intercom");
+      - light.turn_off: status_led
 
 # ── Push-to-talk button (GPIO39, active LOW) ───────────────────────────────────
 
@@ -110,7 +99,16 @@ binary_sensor:
       inverted: true
     name: "Button"
     on_press:
-      - voice_assistant.start:
-          silence_detection: true
+      - light.turn_on:
+          id: status_led
+          red: 0%
+          green: 0%
+          blue: 100%
+      - lambda: |-
+          recorder_start();
+          id(atom_mic).start();
     on_release:
-      - logger.log: "button released - VAD handles end of speech"
+      - lambda: |-
+          id(atom_mic).stop();
+          recorder_stop();
+      - script.execute: upload_recording
