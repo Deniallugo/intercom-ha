@@ -1,0 +1,4 @@
+pytest
+pytest-asyncio==0.23.*
+pytest-aiohttp
+aiohttp
