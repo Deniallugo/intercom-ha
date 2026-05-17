@@ -1,11 +1,19 @@
 import asyncio
 import json
+import logging
 import os
 import struct
 import uuid
 from pathlib import Path
 
 from aiohttp import web, ClientSession
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
@@ -47,6 +55,9 @@ async def handle_intercom(request: web.Request) -> web.Response:
     is_final = request.headers.get("X-Final") == "1"
     data = await request.read()
 
+    log.info("chunk received  session=%s index=%d size=%d final=%s",
+             session_id[:8], chunk_index, len(data), is_final)
+
     sessions.setdefault(session_id, []).append((chunk_index, data))
 
     if not is_final:
@@ -55,6 +66,10 @@ async def handle_intercom(request: web.Request) -> web.Response:
     # Assemble chunks in order
     chunks = sorted(sessions.pop(session_id), key=lambda x: x[0])
     pcm = b"".join(d for _, d in chunks)
+    duration = len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
+
+    log.info("assembling  session=%s chunks=%d pcm=%d bytes duration=%.1fs",
+             session_id[:8], len(chunks), len(pcm), duration)
 
     opts = load_options()
     ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
@@ -65,16 +80,18 @@ async def handle_intercom(request: web.Request) -> web.Response:
     with open(filepath, "wb") as f:
         f.write(wav_header(len(pcm)))
         f.write(pcm)
+    log.info("WAV written  %s", filepath)
 
     token = os.environ["SUPERVISOR_TOKEN"]
     media_url = f"{ha_url}/local/{filename}"
-    duration = len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
+    players = opts.get("media_players", [])
+    log.info("playing on %d player(s): %s", len(players), players)
 
     loop = asyncio.get_running_loop()
     try:
         async with ClientSession() as session:
-            for player in opts.get("media_players", []):
-                await session.post(
+            for player in players:
+                resp = await session.post(
                     f"{HA_API}/services/media_player/play_media",
                     headers={"Authorization": f"Bearer {token}"},
                     json={
@@ -83,17 +100,23 @@ async def handle_intercom(request: web.Request) -> web.Response:
                         "media_content_type": "music",
                     },
                 )
+                log.info("HA API  player=%s status=%d", player, resp.status)
     finally:
         loop.call_later(duration + 5, lambda: filepath.unlink(missing_ok=True))
+        log.info("cleanup scheduled in %.1fs", duration + 5)
 
     return web.Response(status=204)
 
 
 def main() -> None:
     opts = load_options()
+    port = opts.get("port", 9999)
+    players = opts.get("media_players", [])
+    log.info("starting intercom relay on port %d", port)
+    log.info("target players: %s", players)
     app = web.Application()
     app.router.add_post("/intercom", handle_intercom)
-    web.run_app(app, host="0.0.0.0", port=opts.get("port", 9999))
+    web.run_app(app, host="0.0.0.0", port=port, print=None)
 
 
 if __name__ == "__main__":
