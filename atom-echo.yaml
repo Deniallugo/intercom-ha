@@ -9,16 +9,15 @@ esphome:
     - recorder.h
     - uploader.h
   on_boot:
-    priority: 200.0
-    then:
-      - lambda: |-
-          recorder_init();
-          id(atom_mic).add_data_callback([](std::vector<int16_t> data) {
-            recorder_on_data(
-              reinterpret_cast<const uint8_t*>(data.data()),
-              data.size() * sizeof(int16_t)
-            );
-          });
+    - priority: 600.0
+      then:
+        - lambda: recorder_init();
+    - priority: 200.0
+      then:
+        - lambda: |-
+            id(atom_mic).add_data_callback([](const std::vector<uint8_t>& data) {
+              recorder_on_data(data.data(), data.size());
+            });
 
 esp32:
   board: m5stack-atom
@@ -55,8 +54,8 @@ microphone:
     i2s_din_pin: GPIO23
     adc_type: external
     pdm: true
-    sample_rate: 16000
-    correct_dc_offset: true
+    sample_rate: 48000
+    correct_dc_offset: false
 
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
 

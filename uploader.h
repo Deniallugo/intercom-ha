@@ -1,7 +1,12 @@
 #pragma once
-#include "SPIFFS.h"
-#include <HTTPClient.h>
-#include <esp_system.h>
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
+#include "esp_random.h"
+#include <cstdio>
+#include <cstring>
+#include <string>
+
+// _rec_buf and _rec_len are defined in recorder.h, included before this file.
 
 static std::string _make_session_id() {
   uint8_t rnd[8];
@@ -12,38 +17,84 @@ static std::string _make_session_id() {
   return std::string(buf);
 }
 
-// Read /rec.pcm from SPIFFS and POST it in CHUNK_SIZE chunks to `url`.
-// Headers X-Session-ID, X-Chunk-Index, and X-Final identify the session.
-// Deletes /rec.pcm after upload.
+static void _post_chunk(const char* host, int port, const char* path,
+                        const char* session_id, int chunk_index, bool is_final,
+                        const uint8_t* data, size_t len) {
+  char port_str[8];
+  snprintf(port_str, sizeof(port_str), "%d", port);
+
+  struct addrinfo hints = {};
+  hints.ai_family   = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  struct addrinfo* res = nullptr;
+  if (::getaddrinfo(host, port_str, &hints, &res) != 0 || !res) return;
+
+  int sock = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (sock < 0) { ::freeaddrinfo(res); return; }
+  if (::connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
+    ::close(sock); ::freeaddrinfo(res); return;
+  }
+  ::freeaddrinfo(res);
+
+  char hdr[512];
+  int hlen = snprintf(hdr, sizeof(hdr),
+    "POST %s HTTP/1.0\r\n"
+    "Host: %s:%d\r\n"
+    "Content-Type: audio/pcm\r\n"
+    "Content-Length: %zu\r\n"
+    "X-Session-ID: %s\r\n"
+    "X-Chunk-Index: %d\r\n"
+    "%s"
+    "\r\n",
+    path, host, port, len, session_id, chunk_index,
+    is_final ? "X-Final: 1\r\n" : "");
+
+  ::send(sock, hdr, hlen, 0);
+  ::send(sock, data, len, 0);
+
+  char resp[64];
+  ::recv(sock, resp, sizeof(resp), 0);
+  ::close(sock);
+}
+
 void uploader_send(const char* url) {
-  File f = SPIFFS.open("/rec.pcm", "r");
-  if (!f || f.size() == 0) {
-    if (f) f.close();
-    return;
+  if (_rec_len == 0) return;
+
+  // Parse "http://host:port/path"
+  char host[64] = {};
+  int  port     = 80;
+  char path[64] = "/";
+
+  const char* p = (strncmp(url, "http://", 7) == 0) ? url + 7 : url;
+  const char* colon = strchr(p, ':');
+  const char* slash = strchr(p, '/');
+
+  if (colon && (!slash || colon < slash)) {
+    size_t n = colon - p;
+    memcpy(host, p, n);
+    port = atoi(colon + 1);
+  } else if (slash) {
+    size_t n = slash - p;
+    memcpy(host, p, n);
+  } else {
+    strncpy(host, p, sizeof(host) - 1);
+  }
+  if (slash) strncpy(path, slash, sizeof(path) - 1);
+
+  const size_t CHUNK = 16384;
+  std::string  sid   = _make_session_id();
+  size_t offset = 0;
+  int    idx    = 0;
+
+  while (offset < _rec_len) {
+    size_t bytes  = _rec_len - offset;
+    if (bytes > CHUNK) bytes = CHUNK;
+    bool is_final = (offset + bytes >= _rec_len);
+    _post_chunk(host, port, path, sid.c_str(), idx, is_final,
+                _rec_buf + offset, bytes);
+    offset += bytes;
+    idx++;
   }
 
-  const size_t CHUNK_SIZE = 16384;
-  std::string session_id = _make_session_id();
-  uint8_t* buf = (uint8_t*) malloc(CHUNK_SIZE);
-  if (!buf) { f.close(); return; }
-
-  int chunk_index = 0;
-  while (f.available()) {
-    size_t bytes_read = f.read(buf, CHUNK_SIZE);
-    bool is_final = !f.available();
-
-    HTTPClient http;
-    http.begin(url);
-    http.addHeader("Content-Type", "audio/pcm");
-    http.addHeader("X-Session-ID", session_id.c_str());
-    http.addHeader("X-Chunk-Index", String(chunk_index).c_str());
-    if (is_final) http.addHeader("X-Final", "1");
-    http.sendRequest("POST", buf, bytes_read);
-    http.end();
-    chunk_index++;
-  }
-
-  free(buf);
-  f.close();
-  SPIFFS.remove("/rec.pcm");
+  _rec_len = 0;
 }
