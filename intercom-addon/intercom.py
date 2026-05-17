@@ -70,20 +70,21 @@ async def handle_intercom(request: web.Request) -> web.Response:
     media_url = f"{ha_url}/local/{filename}"
     duration = len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
 
-    async with ClientSession() as session:
-        for player in opts.get("media_players", []):
-            await session.post(
-                f"{HA_API}/services/media_player/play_media",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "entity_id": player,
-                    "media_content_id": media_url,
-                    "media_content_type": "music",
-                },
-            )
-
     loop = asyncio.get_running_loop()
-    loop.call_later(duration + 5, lambda: filepath.unlink(missing_ok=True))
+    try:
+        async with ClientSession() as session:
+            for player in opts.get("media_players", []):
+                await session.post(
+                    f"{HA_API}/services/media_player/play_media",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "entity_id": player,
+                        "media_content_id": media_url,
+                        "media_content_type": "music",
+                    },
+                )
+    finally:
+        loop.call_later(duration + 5, lambda: filepath.unlink(missing_ok=True))
 
     return web.Response(status=204)
 
