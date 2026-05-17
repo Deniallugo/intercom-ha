@@ -70,12 +70,6 @@ light:
     id: status_led
     restore_mode: ALWAYS_OFF
 
-# ── HTTP client ────────────────────────────────────────────────────────────────
-
-http_request:
-  useragent: esphome/intercom
-  timeout: 30s
-
 # ── Upload script ──────────────────────────────────────────────────────────────
 
 script:
