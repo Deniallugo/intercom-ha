@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import os
@@ -100,10 +99,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
             )
             log.info("HA API  player=%s status=%d", player, resp.status)
 
-    asyncio.get_event_loop().call_later(
-        60, lambda: filepath.unlink(missing_ok=True)
-    )
-    log.info("cleanup scheduled in 60s  %s", filename)
+    log.info("file kept for download: %s/local/%s", ha_url, filename)
 
     return web.Response(status=204)
 
