@@ -13,7 +13,7 @@ void recorder_init() {
 void recorder_start() {
   SPIFFS.remove("/rec.pcm");
   _rec_file = SPIFFS.open("/rec.pcm", "w");
-  _rec_active = true;
+  _rec_active = _rec_file ? true : false;
 }
 
 // Called from the microphone data callback — writes raw PCM bytes.

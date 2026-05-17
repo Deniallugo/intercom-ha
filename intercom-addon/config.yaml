@@ -3,6 +3,8 @@ description: Receives audio from Atom Echo and plays it on HA media players.
 version: "1.0.0"
 slug: intercom_relay
 init: false
+hassio_api: true
+hassio_role: default
 arch:
   - aarch64
   - amd64
