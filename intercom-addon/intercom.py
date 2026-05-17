@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -86,22 +87,23 @@ async def handle_intercom(request: web.Request) -> web.Response:
     players = opts.get("media_players", [])
     log.info("playing on %d player(s): %s", len(players), players)
 
-    try:
-        async with ClientSession() as session:
-            for player in players:
-                resp = await session.post(
-                    f"{HA_API}/services/media_player/play_media",
-                    headers={"Authorization": f"Bearer {token}"},
-                    json={
-                        "entity_id": player,
-                        "media_content_id": media_url,
-                        "media_content_type": "music",
-                    },
-                )
-                log.info("HA API  player=%s status=%d", player, resp.status)
-    finally:
-        filepath.unlink(missing_ok=True)
-        log.info("cleanup  %s", filename)
+    async with ClientSession() as session:
+        for player in players:
+            resp = await session.post(
+                f"{HA_API}/services/media_player/play_media",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "entity_id": player,
+                    "media_content_id": media_url,
+                    "media_content_type": "music",
+                },
+            )
+            log.info("HA API  player=%s status=%d", player, resp.status)
+
+    asyncio.get_event_loop().call_later(
+        60, lambda: filepath.unlink(missing_ok=True)
+    )
+    log.info("cleanup scheduled in 60s  %s", filename)
 
     return web.Response(status=204)
 
