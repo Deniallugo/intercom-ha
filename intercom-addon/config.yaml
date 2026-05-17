@@ -17,7 +17,7 @@ schema:
   ha_url: str
   port: int
   media_players:
-    - str
+    - entity: media_player
 map:
   - config:rw
 ports:
