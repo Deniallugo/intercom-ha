@@ -348,25 +348,50 @@ async def _delete_after(filepath: Path, delay: float) -> None:
         log.warning("cleanup failed for %s: %s", filepath.name, e)
 
 
-def main() -> None:
+def make_lan_app() -> web.Application:
+    app = web.Application(client_max_size=10 * 1024 * 1024)
+    app.router.add_post("/intercom", handle_intercom)
+    return app
+
+
+def make_ingress_app() -> web.Application:
+    app = web.Application()
+    app.router.add_get("/", handle_picker_index)
+    app.router.add_get("/api/players", handle_picker_get)
+    app.router.add_post("/api/players", handle_picker_post)
+    return app
+
+
+async def _run() -> None:
     global sample_rate, sample_width, channels
 
     opts = load_options()
     port = opts.get("port", 9999)
+    ingress_port = 8099
 
     sample_rate = opts.get("sample_rate", 16000)
     bits = opts.get("bits_per_sample", 16)
     sample_width = bits // 8
     channels = opts.get("channels", 1)
 
-    log.info("starting intercom relay on port %d", port)
+    log.info("starting intercom relay on port %d (LAN)", port)
+    log.info("starting picker UI on port %d (ingress)", ingress_port)
     log.info("audio format: %d Hz, %d-bit, %d channel(s)",
              sample_rate, bits, channels)
-    log.info("target players: %s", opts.get("media_players", []))
 
-    app = web.Application(client_max_size=10 * 1024 * 1024)
-    app.router.add_post("/intercom", handle_intercom)
-    web.run_app(app, host="0.0.0.0", port=port, print=None)
+    lan_runner = web.AppRunner(make_lan_app())
+    await lan_runner.setup()
+    await web.TCPSite(lan_runner, host="0.0.0.0", port=port).start()
+
+    ingress_runner = web.AppRunner(make_ingress_app())
+    await ingress_runner.setup()
+    await web.TCPSite(ingress_runner, host="0.0.0.0", port=ingress_port).start()
+
+    await asyncio.Event().wait()  # run forever
+
+
+def main() -> None:
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":
