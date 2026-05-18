@@ -7,7 +7,11 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from aiohttp import web, ClientSession
+from aiohttp import web
+
+from ha_client import HAClient
+
+ha = HAClient()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,7 +22,6 @@ log = logging.getLogger(__name__)
 
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
-HA_API = "http://supervisor/core/api"
 PLAYERS_FILE = "/data/players.json"
 
 # Loaded once at startup from options.json
@@ -64,16 +67,7 @@ def save_players(data: dict) -> None:
 
 async def fetch_media_players() -> list[dict]:
     """Return [{entity_id, friendly_name}, ...] for every media_player.* in HA."""
-    token = os.environ["SUPERVISOR_TOKEN"]
-    async with ClientSession() as session:
-        resp = await session.get(
-            f"{HA_API}/states",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        if resp.status != 200:
-            raise RuntimeError(f"supervisor /states returned {resp.status}")
-        states = await resp.json()
-
+    states = await ha.get_states()
     out = []
     for s in states:
         eid = s.get("entity_id", "")
@@ -366,22 +360,11 @@ async def handle_intercom(request: web.Request) -> web.Response:
         asyncio.create_task(_delete_after(filepath, duration + 10))
         return web.Response(status=204)
 
-    token = os.environ["SUPERVISOR_TOKEN"]
     media_url = f"{ha_url}/local/{filename}"
     log.info("playing on %d player(s): %s", len(targets), targets)
-
-    async with ClientSession() as session:
-        for player in targets:
-            resp = await session.post(
-                f"{HA_API}/services/media_player/play_media",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "entity_id": player,
-                    "media_content_id": media_url,
-                    "media_content_type": "music",
-                },
-            )
-            log.info("HA API  player=%s  status=%d", player, resp.status)
+    for player in targets:
+        status = await ha.play_media(player, media_url)
+        log.info("HA API  player=%s  status=%d", player, status)
 
     asyncio.create_task(_delete_after(filepath, duration + 10))
     return web.Response(status=204)

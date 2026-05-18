@@ -4,7 +4,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from aiohttp import web
@@ -57,61 +57,31 @@ def test_save_then_load_roundtrip(players_file):
     assert srv.load_players() == original
 
 
-class _FakeStatesResponse:
-    def __init__(self, payload, status=200):
-        self._payload = payload
-        self.status = status
-
-    async def json(self):
-        return self._payload
-
-
-class _FakeStatesSession:
-    def __init__(self, payload, status=200):
-        self._payload = payload
-        self._status = status
-        self.calls: list = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        pass
-
-    async def get(self, url, **kwargs):
-        self.calls.append((url, kwargs))
-        return _FakeStatesResponse(self._payload, self._status)
-
-
 @pytest.fixture
-def supervisor_token(monkeypatch):
-    monkeypatch.setitem(os.environ, "SUPERVISOR_TOKEN", "tok")
+def fake_ha(monkeypatch):
+    """Replace srv.ha methods with AsyncMock stubs; tests configure them as needed."""
+    monkeypatch.setattr(srv.ha, "get_states", AsyncMock(return_value=[]))
+    monkeypatch.setattr(srv.ha, "play_media", AsyncMock(return_value=204))
+    return srv.ha
 
 
-async def test_fetch_media_players_filters_and_maps(supervisor_token):
-    states = [
+async def test_fetch_media_players_filters_and_maps(fake_ha):
+    fake_ha.get_states.return_value = [
         {"entity_id": "media_player.kitchen", "attributes": {"friendly_name": "Kitchen"}},
         {"entity_id": "light.bulb", "attributes": {"friendly_name": "Bulb"}},
         {"entity_id": "media_player.bedroom", "attributes": {}},
     ]
-    fake = _FakeStatesSession(states)
-    with patch("intercom.ClientSession", return_value=fake):
-        result = await srv.fetch_media_players()
-
+    result = await srv.fetch_media_players()
     assert result == [
         {"entity_id": "media_player.kitchen", "friendly_name": "Kitchen"},
         {"entity_id": "media_player.bedroom", "friendly_name": "media_player.bedroom"},
     ]
-    url, kwargs = fake.calls[0]
-    assert url == f"{srv.HA_API}/states"
-    assert kwargs["headers"]["Authorization"] == "Bearer tok"
 
 
-async def test_fetch_media_players_raises_on_non_200(supervisor_token):
-    fake = _FakeStatesSession([], status=503)
-    with patch("intercom.ClientSession", return_value=fake):
-        with pytest.raises(RuntimeError):
-            await srv.fetch_media_players()
+async def test_fetch_media_players_raises_on_non_200(fake_ha):
+    fake_ha.get_states.side_effect = RuntimeError("503")
+    with pytest.raises(RuntimeError):
+        await srv.fetch_media_players()
 
 
 @pytest.fixture
@@ -123,20 +93,19 @@ def ingress_app():
 
 
 async def test_get_players_merges_available_and_routes(
-    aiohttp_client, ingress_app, players_file, supervisor_token,
+    aiohttp_client, ingress_app, players_file, fake_ha,
 ):
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": ["media_player.bedroom"],
     }))
-    states = [
+    fake_ha.get_states.return_value = [
         {"entity_id": "media_player.kitchen", "attributes": {"friendly_name": "Kitchen"}},
         {"entity_id": "media_player.bedroom", "attributes": {"friendly_name": "Bedroom"}},
     ]
     client = await aiohttp_client(ingress_app)
-    with patch("intercom.ClientSession", return_value=_FakeStatesSession(states)):
-        resp = await client.get("/api/players")
-        body = await resp.json()
+    resp = await client.get("/api/players")
+    body = await resp.json()
 
     assert resp.status == 200
     assert body["available"] == [
@@ -148,12 +117,12 @@ async def test_get_players_merges_available_and_routes(
 
 
 async def test_get_players_supervisor_failure_returns_502(
-    aiohttp_client, ingress_app, players_file, supervisor_token,
+    aiohttp_client, ingress_app, players_file, fake_ha,
 ):
+    fake_ha.get_states.side_effect = RuntimeError("boom")
     client = await aiohttp_client(ingress_app)
-    with patch("intercom.ClientSession", return_value=_FakeStatesSession([], status=503)):
-        resp = await client.get("/api/players")
-        body = await resp.json()
+    resp = await client.get("/api/players")
+    body = await resp.json()
 
     assert resp.status == 502
     assert "error" in body
@@ -224,25 +193,6 @@ async def test_post_players_rejects_missing_fields(
     assert resp.status == 400
 
 
-class _FakeMediaResponse:
-    status = 204
-
-
-class _FakeMediaSession:
-    def __init__(self):
-        self.calls: list = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        pass
-
-    async def post(self, url, **kwargs):
-        self.calls.append((url, kwargs))
-        return _FakeMediaResponse()
-
-
 @pytest.fixture
 def lan_app():
     app = web.Application()
@@ -264,106 +214,90 @@ def fake_options(monkeypatch):
 
 
 async def test_intercom_known_source_uses_route(
-    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
 ):
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": ["media_player.bedroom"],
     }))
     client = await aiohttp_client(lan_app)
-    fake = _FakeMediaSession()
     sid = str(uuid.uuid4())
-
-    with patch("intercom.ClientSession", return_value=fake):
-        resp = await client.post(
-            "/intercom", data=b"\x00" * 64,
-            headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
-        )
-
+    resp = await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+    )
     assert resp.status == 204
-    assert [c[1]["json"]["entity_id"] for c in fake.calls] == ["media_player.kitchen"]
+    called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    assert called_entities == ["media_player.kitchen"]
 
 
 async def test_intercom_unknown_source_enrolls_and_uses_default(
-    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
 ):
     players_file.write_text(json.dumps({
         "routes": {},
         "default": ["media_player.bedroom"],
     }))
     client = await aiohttp_client(lan_app)
-    fake = _FakeMediaSession()
     sid = str(uuid.uuid4())
-
-    with patch("intercom.ClientSession", return_value=fake):
-        await client.post(
-            "/intercom", data=b"\x00" * 64,
-            headers={"X-Session-ID": sid, "X-Device-Name": "new-src"},
-        )
-
+    await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": sid, "X-Device-Name": "new-src"},
+    )
     assert json.loads(players_file.read_text())["routes"] == {"new-src": []}
-    assert [c[1]["json"]["entity_id"] for c in fake.calls] == ["media_player.bedroom"]
+    called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    assert called_entities == ["media_player.bedroom"]
 
 
 async def test_intercom_missing_device_header_uses_unknown(
-    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
 ):
     players_file.write_text(json.dumps({
         "routes": {"unknown": ["media_player.kitchen"]},
         "default": [],
     }))
     client = await aiohttp_client(lan_app)
-    fake = _FakeMediaSession()
     sid = str(uuid.uuid4())
-
-    with patch("intercom.ClientSession", return_value=fake):
-        await client.post(
-            "/intercom", data=b"\x00" * 64,
-            headers={"X-Session-ID": sid},
-        )
-
-    assert [c[1]["json"]["entity_id"] for c in fake.calls] == ["media_player.kitchen"]
+    await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": sid},
+    )
+    called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    assert called_entities == ["media_player.kitchen"]
 
 
 async def test_intercom_known_source_with_empty_route_plays_nowhere(
-    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
 ):
     players_file.write_text(json.dumps({
         "routes": {"src-a": []},
         "default": ["media_player.bedroom"],
     }))
     client = await aiohttp_client(lan_app)
-    fake = _FakeMediaSession()
+    sid = str(uuid.uuid4())
+    resp = await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+    )
+    assert resp.status == 204
+    assert fake_ha.play_media.call_args_list == []
+
+
+async def test_intercom_missing_players_file_returns_204_no_call(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha, caplog,
+):
+    # players_file fixture monkeypatches PLAYERS_FILE but never creates it
+    client = await aiohttp_client(lan_app)
     sid = str(uuid.uuid4())
 
-    with patch("intercom.ClientSession", return_value=fake):
+    with caplog.at_level(logging.WARNING, logger="intercom"):
         resp = await client.post(
             "/intercom", data=b"\x00" * 64,
             headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
         )
 
     assert resp.status == 204
-    assert fake.calls == []
-
-
-async def test_intercom_missing_players_file_returns_204_no_call(
-    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
-    caplog,
-):
-    # players_file fixture monkeypatches PLAYERS_FILE but never creates it
-    client = await aiohttp_client(lan_app)
-    fake = _FakeMediaSession()
-    sid = str(uuid.uuid4())
-
-    with caplog.at_level(logging.WARNING, logger="intercom"):
-        with patch("intercom.ClientSession", return_value=fake):
-            resp = await client.post(
-                "/intercom", data=b"\x00" * 64,
-                headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
-            )
-
-    assert resp.status == 204
     # source auto-enrolled, default is empty, so no HA calls
-    assert fake.calls == []
+    assert fake_ha.play_media.call_args_list == []
     assert json.loads(players_file.read_text())["routes"] == {"src-a": []}
     assert any("players.json" in record.message for record in caplog.records if record.levelname == "WARNING")
