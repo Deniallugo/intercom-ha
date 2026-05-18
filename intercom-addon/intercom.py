@@ -39,6 +39,7 @@ def load_players() -> dict:
         with open(PLAYERS_FILE) as f:
             data = json.load(f)
     except FileNotFoundError:
+        log.warning("players.json not found; using empty routes")
         return {"routes": {}, "default": []}
     except (json.JSONDecodeError, OSError) as e:
         log.error("players.json unreadable (%s); using empty routes", e)

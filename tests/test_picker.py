@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 import uuid
@@ -347,19 +348,22 @@ async def test_intercom_known_source_with_empty_route_plays_nowhere(
 
 async def test_intercom_missing_players_file_returns_204_no_call(
     aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+    caplog,
 ):
     # players_file fixture monkeypatches PLAYERS_FILE but never creates it
     client = await aiohttp_client(lan_app)
     fake = _FakeMediaSession()
     sid = str(uuid.uuid4())
 
-    with patch("intercom.ClientSession", return_value=fake):
-        resp = await client.post(
-            "/intercom", data=b"\x00" * 64,
-            headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
-        )
+    with caplog.at_level(logging.WARNING, logger="intercom"):
+        with patch("intercom.ClientSession", return_value=fake):
+            resp = await client.post(
+                "/intercom", data=b"\x00" * 64,
+                headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+            )
 
     assert resp.status == 204
     # source auto-enrolled, default is empty, so no HA calls
     assert fake.calls == []
     assert json.loads(players_file.read_text())["routes"] == {"src-a": []}
+    assert any("players.json" in record.message for record in caplog.records if record.levelname == "WARNING")
