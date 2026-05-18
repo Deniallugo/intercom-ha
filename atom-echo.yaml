@@ -23,7 +23,7 @@ esphome:
 esp32:
   board: m5stack-atom
   framework:
-    type: arduino
+    type: esp-idf
 
 logger:
 
@@ -46,34 +46,59 @@ captive_portal:
 # ── Audio hardware ─────────────────────────────────────────────────────────────
 
 i2s_audio:
-  i2s_lrclk_pin: GPIO33
-  i2s_bclk_pin: GPIO19
+  - id: i2s_in
+    i2s_lrclk_pin:
+      number: GPIO33
+      allow_other_uses: true
+    i2s_bclk_pin:
+      number: GPIO19
+      allow_other_uses: true
+  - id: i2s_out
+    i2s_lrclk_pin:
+      number: GPIO33
+      allow_other_uses: true
+    i2s_bclk_pin:
+      number: GPIO19
+      allow_other_uses: true
 
 microphone:
   - platform: i2s_audio
     id: atom_mic
+    i2s_audio_id: i2s_in
     i2s_din_pin: GPIO23
     adc_type: external
     pdm: true
     sample_rate: 16000
     correct_dc_offset: true
 
+# ── Speaker (NS4168 amp on GPIO22) ─────────────────────────────────────────────
+
+speaker:
+  - platform: i2s_audio
+    id: atom_speaker
+    i2s_audio_id: i2s_out
+    i2s_dout_pin: GPIO22
+    dac_type: external
+    bits_per_sample: 16bit
+    sample_rate: 16000
+
 # ── Media player (HA-controllable playback) ────────────────────────────────────
 
 media_player:
-  - platform: i2s_audio
+  - platform: speaker
     id: atom_player
     name: "${friendly_name} Player"
-    dac_type: external
-    mode: mono
-    i2s_dout_pin: GPIO22
+    buffer_size: 32768
+    announcement_pipeline:
+      speaker: atom_speaker
+      format: WAV
 
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
 
 light:
-  - platform: neopixelbus
-    type: GRB
-    variant: SK6812
+  - platform: esp32_rmt_led_strip
+    rgb_order: GRB
+    chipset: SK6812
     pin: GPIO27
     num_leds: 1
     name: "Status LED"
