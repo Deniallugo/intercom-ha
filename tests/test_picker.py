@@ -50,3 +50,67 @@ def test_save_then_load_roundtrip(players_file):
     original = {"routes": {"a": ["media_player.x", "media_player.y"]}, "default": ["media_player.z"]}
     srv.save_players(original)
     assert srv.load_players() == original
+
+
+import os
+from unittest.mock import patch
+
+
+class _FakeStatesResponse:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status = status
+
+    async def json(self):
+        return self._payload
+
+    async def text(self):
+        return json.dumps(self._payload)
+
+
+class _FakeStatesSession:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self._status = status
+        self.calls: list = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+    async def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return _FakeStatesResponse(self._payload, self._status)
+
+
+@pytest.fixture
+def supervisor_token(monkeypatch):
+    monkeypatch.setitem(os.environ, "SUPERVISOR_TOKEN", "tok")
+
+
+async def test_fetch_media_players_filters_and_maps(supervisor_token):
+    states = [
+        {"entity_id": "media_player.kitchen", "attributes": {"friendly_name": "Kitchen"}},
+        {"entity_id": "light.bulb", "attributes": {"friendly_name": "Bulb"}},
+        {"entity_id": "media_player.bedroom", "attributes": {}},
+    ]
+    fake = _FakeStatesSession(states)
+    with patch("intercom.ClientSession", return_value=fake):
+        result = await srv.fetch_media_players()
+
+    assert result == [
+        {"entity_id": "media_player.kitchen", "friendly_name": "Kitchen"},
+        {"entity_id": "media_player.bedroom", "friendly_name": "media_player.bedroom"},
+    ]
+    url, kwargs = fake.calls[0]
+    assert url == f"{srv.HA_API}/states"
+    assert kwargs["headers"]["Authorization"] == "Bearer tok"
+
+
+async def test_fetch_media_players_raises_on_non_200(supervisor_token):
+    fake = _FakeStatesSession([], status=503)
+    with patch("intercom.ClientSession", return_value=fake):
+        with pytest.raises(RuntimeError):
+            await srv.fetch_media_players()

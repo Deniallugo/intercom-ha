@@ -60,6 +60,28 @@ def save_players(data: dict) -> None:
     os.replace(tmp, PLAYERS_FILE)
 
 
+async def fetch_media_players() -> list[dict]:
+    """Return [{entity_id, friendly_name}, ...] for every media_player.* in HA."""
+    token = os.environ["SUPERVISOR_TOKEN"]
+    async with ClientSession() as session:
+        resp = await session.get(
+            f"{HA_API}/states",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if resp.status != 200:
+            raise RuntimeError(f"supervisor /states returned {resp.status}")
+        states = await resp.json()
+
+    out = []
+    for s in states:
+        eid = s.get("entity_id", "")
+        if not eid.startswith("media_player."):
+            continue
+        friendly = (s.get("attributes") or {}).get("friendly_name") or eid
+        out.append({"entity_id": eid, "friendly_name": friendly})
+    return out
+
+
 def wav_header(pcm_len: int) -> bytes:
     return struct.pack(
         "<4sI4s4sIHHIIHH4sI",
