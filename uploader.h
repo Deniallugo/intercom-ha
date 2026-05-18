@@ -69,6 +69,11 @@ static void _stream_task(void* arg) {
     "Content-Type: audio/pcm\r\nTransfer-Encoding: chunked\r\n"
     "X-Session-ID: %s\r\nX-Device-Name: %s\r\nConnection: close\r\n\r\n",
     path, host, port, sid.c_str(), device ? device : "");
+  if (hlen < 0 || hlen >= (int)sizeof(hdr)) {
+    ESP_LOGE(UPL_TAG, "header too large (need %d, max %u) — aborting",
+             hlen, (unsigned)sizeof(hdr));
+    ::close(sock); _uploading = false; vTaskDelete(nullptr); return;
+  }
   ::send(sock, hdr, hlen, 0);
   ESP_LOGI(UPL_TAG, "streaming  session=%s device=%s", sid.c_str(), device ? device : "");
 
