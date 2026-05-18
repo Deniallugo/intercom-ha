@@ -100,7 +100,11 @@ async def test_post_players_writes_file(aiohttp_client, ingress_app, players_fil
     resp = await client.post("/api/players", json=payload)
 
     assert resp.status == 204
-    assert json.loads(players_file.read_text()) == payload
+    saved = json.loads(players_file.read_text())
+    assert saved["routes"] == payload["routes"]
+    assert saved["default"] == payload["default"]
+    assert saved["aliases"] == {}
+    assert saved["selves"] == {}
 
 
 async def test_post_players_rejects_non_media_player_target(
@@ -153,6 +157,65 @@ async def test_post_players_rejects_missing_fields(
 ):
     client = await aiohttp_client(ingress_app)
     resp = await client.post("/api/players", json={"routes": {}})  # no default
+    assert resp.status == 400
+
+
+async def test_get_players_includes_aliases_and_selves(
+    aiohttp_client, ingress_app, players_file, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"a": []},
+        "default": [],
+        "aliases": {"a": "Kitchen"},
+        "selves": {"a": "media_player.kitchen_player"},
+    }))
+    fake_ha.get_states.return_value = []
+    client = await aiohttp_client(ingress_app)
+    resp = await client.get("/api/players")
+    body = await resp.json()
+
+    assert resp.status == 200
+    assert body["aliases"] == {"a": "Kitchen"}
+    assert body["selves"] == {"a": "media_player.kitchen_player"}
+
+
+async def test_post_players_persists_aliases_and_selves(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    payload = {
+        "routes": {"a": []},
+        "default": [],
+        "aliases": {"a": "Kitchen"},
+        "selves": {"a": "media_player.kitchen_player"},
+    }
+    resp = await client.post("/api/players", json=payload)
+    assert resp.status == 204
+    assert json.loads(players_file.read_text()) == payload
+
+
+async def test_post_players_rejects_invalid_selves(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={
+        "routes": {},
+        "default": [],
+        "selves": {"a": "light.bulb"},
+    })
+    assert resp.status == 400
+
+
+async def test_post_players_rejects_empty_alias_value(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={
+        "routes": {"a": []},
+        "default": [],
+        "aliases": {"a": ""},
+        "selves": {},
+    })
     assert resp.status == 400
 
 

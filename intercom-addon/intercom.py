@@ -56,7 +56,10 @@ PICKER_HTML = """<!doctype html>
   h1 { margin-top: 0; }
   .row { padding: 0.75rem 0; border-bottom: 1px solid #eee; }
   .row:last-child { border-bottom: none; }
-  .src { font-family: ui-monospace, monospace; font-weight: 600; margin-bottom: 0.4rem; }
+  .src-line { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.4rem; }
+  .src-id { font-family: ui-monospace, monospace; color: #888; font-size: 0.85rem; }
+  .alias-input { padding: 0.25rem 0.5rem; font-size: 0.95rem; flex: 0 0 14rem; }
+  .self-line { margin-bottom: 0.4rem; font-size: 0.9rem; color: #444; }
   .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.4rem; min-height: 1.6rem; }
   .chip {
     display: inline-flex; align-items: center; gap: 0.35rem;
@@ -86,7 +89,7 @@ PICKER_HTML = """<!doctype html>
 </div>
 <script>
 const $ = (id) => document.getElementById(id);
-let state = { available: [], routes: {}, default: [] };
+let state = { available: [], routes: {}, default: [], aliases: {}, selves: {} };
 
 async function load() {
   $("status").textContent = "Loading...";
@@ -94,6 +97,8 @@ async function load() {
     const resp = await fetch("./api/players");
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     state = await resp.json();
+    state.aliases = state.aliases || {};
+    state.selves  = state.selves  || {};
     render();
     $("status").textContent = "";
   } catch (e) {
@@ -116,10 +121,58 @@ function renderRow(src) {
   const row = document.createElement("div");
   row.className = "row";
 
-  const label = document.createElement("div");
-  label.className = "src";
-  label.textContent = src;
-  row.appendChild(label);
+  const head = document.createElement("div");
+  head.className = "src-line";
+  if (src === "default") {
+    const label = document.createElement("div");
+    label.style.fontWeight = "600";
+    label.textContent = "default";
+    head.appendChild(label);
+  } else {
+    const aliasInput = document.createElement("input");
+    aliasInput.className = "alias-input";
+    aliasInput.placeholder = "alias (e.g. Kitchen)";
+    aliasInput.value = state.aliases[src] || "";
+    aliasInput.addEventListener("input", () => {
+      const v = aliasInput.value.trim();
+      if (v) state.aliases[src] = v;
+      else delete state.aliases[src];
+    });
+    head.appendChild(aliasInput);
+
+    const sid = document.createElement("span");
+    sid.className = "src-id";
+    sid.textContent = src;
+    head.appendChild(sid);
+  }
+  row.appendChild(head);
+
+  if (src !== "default") {
+    const selfLine = document.createElement("div");
+    selfLine.className = "self-line";
+    const lbl = document.createElement("span");
+    lbl.textContent = "this device's speaker: ";
+    selfLine.appendChild(lbl);
+
+    const selfSel = document.createElement("select");
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "(none — talkback disabled)";
+    selfSel.appendChild(none);
+    for (const tgt of state.available) {
+      const opt = document.createElement("option");
+      opt.value = tgt.entity_id;
+      opt.textContent = tgt.friendly_name + " (" + tgt.entity_id + ")";
+      if (state.selves[src] === tgt.entity_id) opt.selected = true;
+      selfSel.appendChild(opt);
+    }
+    selfSel.addEventListener("change", () => {
+      if (selfSel.value) state.selves[src] = selfSel.value;
+      else delete state.selves[src];
+    });
+    selfLine.appendChild(selfSel);
+    row.appendChild(selfLine);
+  }
 
   const chips = document.createElement("div");
   chips.className = "chips";
@@ -192,9 +245,17 @@ async function save() {
     const resp = await fetch("./api/players", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ routes: state.routes, default: state.default }),
+      body: JSON.stringify({
+        routes:  state.routes,
+        default: state.default,
+        aliases: state.aliases,
+        selves:  state.selves,
+      }),
     });
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error("HTTP " + resp.status + (body.error ? ": " + body.error : ""));
+    }
     $("toast").textContent = "Saved";
     setTimeout(() => { $("toast").textContent = ""; }, 2000);
   } catch (e) {
@@ -224,8 +285,10 @@ async def handle_picker_get(request: web.Request) -> web.Response:
     state = players.load_players()
     return web.json_response({
         "available": available,
-        "routes": state["routes"],
-        "default": state["default"],
+        "routes":    state["routes"],
+        "default":   state["default"],
+        "aliases":   state["aliases"],
+        "selves":    state["selves"],
     })
 
 
@@ -239,7 +302,12 @@ async def handle_picker_post(request: web.Request) -> web.Response:
     if err:
         return web.json_response({"error": err}, status=400)
 
-    players.save_players({"routes": body["routes"], "default": body["default"]})
+    players.save_players({
+        "routes":  body["routes"],
+        "default": body["default"],
+        "aliases": body.get("aliases", {}),
+        "selves":  body.get("selves", {}),
+    })
     return web.Response(status=204)
 
 
