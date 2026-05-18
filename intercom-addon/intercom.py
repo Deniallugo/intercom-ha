@@ -82,6 +82,25 @@ async def fetch_media_players() -> list[dict]:
     return out
 
 
+async def handle_picker_get(request: web.Request) -> web.Response:
+    try:
+        available = await fetch_media_players()
+    except Exception as e:
+        log.error("failed to fetch media players: %s", e)
+        return web.json_response({"error": str(e)}, status=502)
+
+    players = load_players()
+    return web.json_response({
+        "available": available,
+        "routes": players["routes"],
+        "default": players["default"],
+    })
+
+
+async def handle_picker_post(request: web.Request) -> web.Response:
+    return web.Response(status=501)  # filled in by Task 4
+
+
 def wav_header(pcm_len: int) -> bytes:
     return struct.pack(
         "<4sI4s4sIHHIIHH4sI",

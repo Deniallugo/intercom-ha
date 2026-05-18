@@ -114,3 +114,51 @@ async def test_fetch_media_players_raises_on_non_200(supervisor_token):
     with patch("intercom.ClientSession", return_value=fake):
         with pytest.raises(RuntimeError):
             await srv.fetch_media_players()
+
+
+from aiohttp import web
+
+
+@pytest.fixture
+def ingress_app():
+    app = web.Application()
+    app.router.add_get("/api/players", srv.handle_picker_get)
+    app.router.add_post("/api/players", srv.handle_picker_post)
+    return app
+
+
+async def test_get_players_merges_available_and_routes(
+    aiohttp_client, ingress_app, players_file, supervisor_token,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": ["media_player.bedroom"],
+    }))
+    states = [
+        {"entity_id": "media_player.kitchen", "attributes": {"friendly_name": "Kitchen"}},
+        {"entity_id": "media_player.bedroom", "attributes": {"friendly_name": "Bedroom"}},
+    ]
+    client = await aiohttp_client(ingress_app)
+    with patch("intercom.ClientSession", return_value=_FakeStatesSession(states)):
+        resp = await client.get("/api/players")
+        body = await resp.json()
+
+    assert resp.status == 200
+    assert body["available"] == [
+        {"entity_id": "media_player.kitchen", "friendly_name": "Kitchen"},
+        {"entity_id": "media_player.bedroom", "friendly_name": "Bedroom"},
+    ]
+    assert body["routes"] == {"src-a": ["media_player.kitchen"]}
+    assert body["default"] == ["media_player.bedroom"]
+
+
+async def test_get_players_supervisor_failure_returns_502(
+    aiohttp_client, ingress_app, players_file, supervisor_token,
+):
+    client = await aiohttp_client(ingress_app)
+    with patch("intercom.ClientSession", return_value=_FakeStatesSession([], status=503)):
+        resp = await client.get("/api/players")
+        body = await resp.json()
+
+    assert resp.status == 502
+    assert "error" in body
