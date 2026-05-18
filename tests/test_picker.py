@@ -25,7 +25,17 @@ def fake_ha(monkeypatch):
     """Replace srv.ha methods with AsyncMock stubs; tests configure them as needed."""
     monkeypatch.setattr(srv.ha, "get_states", AsyncMock(return_value=[]))
     monkeypatch.setattr(srv.ha, "play_media", AsyncMock(return_value=204))
+    monkeypatch.setattr(srv.ha, "get_state", AsyncMock(return_value={"state": "idle", "attributes": {}}))
+    monkeypatch.setattr(srv.ha, "pause", AsyncMock(return_value=200))
+    monkeypatch.setattr(srv.ha, "play", AsyncMock(return_value=200))
     return srv.ha
+
+
+@pytest.fixture(autouse=True)
+def _reset_ducker():
+    srv.ducker._snapshots.clear()
+    yield
+    srv.ducker._snapshots.clear()
 
 
 async def test_fetch_media_players_filters_and_maps(fake_ha):
@@ -353,3 +363,28 @@ async def test_intercom_wav_includes_chimes(
     # Total PCM = 3840 + 200 + 3840 = 7880.
     assert pcm_len == 7880
     assert wav[44 + 3840:44 + 3840 + 200] == pcm
+
+
+async def test_intercom_pauses_playing_target_then_resumes(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    import asyncio as _asyncio
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    fake_ha.get_state.return_value = {
+        "state": "playing", "attributes": {"volume_level": 0.4},
+    }
+    client = await aiohttp_client(lan_app)
+    pcm = b"\xAA\xBB" * 100
+    sid = str(uuid.uuid4())
+    await client.post(
+        "/intercom", data=pcm,
+        headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+    )
+
+    fake_ha.pause.assert_awaited_once_with("media_player.kitchen")
+    # Restore is scheduled — total duration ~0.246s + 1.5s slack.
+    await _asyncio.sleep(2.0)
+    fake_ha.play.assert_awaited_once_with("media_player.kitchen")

@@ -8,6 +8,7 @@ from aiohttp import web
 
 from ha_client import HAClient
 from chimes import ChimeMixer
+from ducking import Ducker
 import players
 
 ha = HAClient()
@@ -16,6 +17,7 @@ ha = HAClient()
 # rebuilds it if options.json overrides any of the format fields. Module-level
 # so tests can call handlers directly without going through _run().
 mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
+ducker = Ducker(ha)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -348,14 +350,23 @@ async def handle_intercom(request: web.Request) -> web.Response:
         asyncio.create_task(_delete_after(filepath, total_duration + 10))
         return web.Response(status=204)
 
+    await ducker.snapshot_and_pause(targets)
+
     media_url = f"{ha_url}/local/{filename}"
     log.info("playing on %d player(s): %s", len(targets), targets)
     for player in targets:
         status = await ha.play_media(player, media_url)
         log.info("HA API  player=%s  status=%d", player, status)
 
+    asyncio.create_task(_restore_after(list(targets), total_duration + 1.5))
     asyncio.create_task(_delete_after(filepath, total_duration + 10))
     return web.Response(status=204)
+
+
+async def _restore_after(targets: list[str], delay: float) -> None:
+    await asyncio.sleep(delay)
+    for target in targets:
+        await ducker.restore(target)
 
 
 async def _delete_after(filepath: Path, delay: float) -> None:
