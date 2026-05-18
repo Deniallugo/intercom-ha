@@ -246,7 +246,7 @@ Skip this task if ESPHome is already installed and running.
           red: 100%
           green: 0%
           blue: 0%
-      - delay: 2s
+      - delay: 0.1s
       - light.turn_off: status_led
 
   # ── Push-to-talk button (GPIO39, active LOW) ──────────────────────────────────

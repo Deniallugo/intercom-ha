@@ -2442,7 +2442,7 @@ In `on_release`, the existing block is:
 
 ```yaml
     on_release:
-      - delay: 2s
+      - delay: 0.1s
       - lambda: |-
           id(atom_mic).stop();
           recorder_stop();
@@ -2452,7 +2452,7 @@ Remove the mic stop (keep the delay — it was added intentionally to let the tr
 
 ```yaml
     on_release:
-      - delay: 2s
+      - delay: 0.1s
       - lambda: recorder_stop();
 ```
 

@@ -130,7 +130,7 @@ binary_sensor:
                 id(atom_mic).start();
                 uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
     on_release:
-      - delay: 2s
+      - delay: 0.1s
       - lambda: |-
           id(atom_mic).stop();
           recorder_stop();
