@@ -160,6 +160,7 @@ def wav_header(pcm_len: int) -> bytes:
 
 async def handle_intercom(request: web.Request) -> web.Response:
     session_id = request.headers.get("X-Session-ID", str(uuid.uuid4()))
+    source = (request.headers.get("X-Device-Name") or "unknown").strip() or "unknown"
 
     pcm = await request.read()
     if not pcm:
@@ -167,8 +168,17 @@ async def handle_intercom(request: web.Request) -> web.Response:
         return web.Response(status=400)
 
     duration = len(pcm) / (sample_rate * sample_width * channels)
-    log.info("received  session=%s  pcm=%d bytes  duration=%.1fs",
-             session_id[:8], len(pcm), duration)
+    log.info("received  session=%s  source=%s  pcm=%d bytes  duration=%.1fs",
+             session_id[:8], source, len(pcm), duration)
+
+    players = load_players()
+    if source in players["routes"]:
+        targets = players["routes"][source]
+    else:
+        players["routes"][source] = []
+        save_players(players)
+        log.info("enrolled new source=%s; using default targets", source)
+        targets = players["default"]
 
     opts = load_options()
     ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
@@ -182,13 +192,17 @@ async def handle_intercom(request: web.Request) -> web.Response:
     log.info("WAV written  %s  (%d Hz, %d-bit, %dch, %.2fs)",
              filepath, sample_rate, sample_width * 8, channels, duration)
 
+    if not targets:
+        log.warning("source=%s has no targets; skipping play", source)
+        asyncio.create_task(_delete_after(filepath, duration + 10))
+        return web.Response(status=204)
+
     token = os.environ["SUPERVISOR_TOKEN"]
     media_url = f"{ha_url}/local/{filename}"
-    players = opts.get("media_players", [])
-    log.info("playing on %d player(s): %s", len(players), players)
+    log.info("playing on %d player(s): %s", len(targets), targets)
 
     async with ClientSession() as session:
-        for player in players:
+        for player in targets:
             resp = await session.post(
                 f"{HA_API}/services/media_player/play_media",
                 headers={"Authorization": f"Bearer {token}"},

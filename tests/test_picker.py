@@ -227,3 +227,148 @@ async def test_post_players_rejects_missing_fields(
     client = await aiohttp_client(ingress_app)
     resp = await client.post("/api/players", json={"routes": {}})  # no default
     assert resp.status == 400
+
+
+import uuid
+
+
+class _FakeMediaResponse:
+    status = 204
+
+
+class _FakeMediaSession:
+    def __init__(self):
+        self.calls: list = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+    async def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return _FakeMediaResponse()
+
+
+@pytest.fixture
+def lan_app():
+    app = web.Application()
+    app.router.add_post("/intercom", srv.handle_intercom)
+    return app
+
+
+@pytest.fixture
+def www_dir(monkeypatch, tmp_path):
+    d = tmp_path / "www"
+    d.mkdir()
+    monkeypatch.setattr(srv, "CONFIG_WWW", str(d))
+    return d
+
+
+@pytest.fixture
+def fake_options(monkeypatch):
+    monkeypatch.setattr(srv, "load_options", lambda: {"ha_url": "http://ha.test:8123"})
+
+
+async def test_intercom_known_source_uses_route(
+    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": ["media_player.bedroom"],
+    }))
+    client = await aiohttp_client(lan_app)
+    fake = _FakeMediaSession()
+    sid = str(uuid.uuid4())
+
+    with patch("intercom.ClientSession", return_value=fake):
+        resp = await client.post(
+            "/intercom", data=b"\x00" * 64,
+            headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+        )
+
+    assert resp.status == 204
+    assert [c[1]["json"]["entity_id"] for c in fake.calls] == ["media_player.kitchen"]
+
+
+async def test_intercom_unknown_source_enrolls_and_uses_default(
+    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+):
+    players_file.write_text(json.dumps({
+        "routes": {},
+        "default": ["media_player.bedroom"],
+    }))
+    client = await aiohttp_client(lan_app)
+    fake = _FakeMediaSession()
+    sid = str(uuid.uuid4())
+
+    with patch("intercom.ClientSession", return_value=fake):
+        await client.post(
+            "/intercom", data=b"\x00" * 64,
+            headers={"X-Session-ID": sid, "X-Device-Name": "new-src"},
+        )
+
+    assert json.loads(players_file.read_text())["routes"] == {"new-src": []}
+    assert [c[1]["json"]["entity_id"] for c in fake.calls] == ["media_player.bedroom"]
+
+
+async def test_intercom_missing_device_header_uses_unknown(
+    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"unknown": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    client = await aiohttp_client(lan_app)
+    fake = _FakeMediaSession()
+    sid = str(uuid.uuid4())
+
+    with patch("intercom.ClientSession", return_value=fake):
+        await client.post(
+            "/intercom", data=b"\x00" * 64,
+            headers={"X-Session-ID": sid},
+        )
+
+    assert [c[1]["json"]["entity_id"] for c in fake.calls] == ["media_player.kitchen"]
+
+
+async def test_intercom_known_source_with_empty_route_plays_nowhere(
+    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": []},
+        "default": ["media_player.bedroom"],
+    }))
+    client = await aiohttp_client(lan_app)
+    fake = _FakeMediaSession()
+    sid = str(uuid.uuid4())
+
+    with patch("intercom.ClientSession", return_value=fake):
+        resp = await client.post(
+            "/intercom", data=b"\x00" * 64,
+            headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+        )
+
+    assert resp.status == 204
+    assert fake.calls == []
+
+
+async def test_intercom_missing_players_file_returns_204_no_call(
+    aiohttp_client, lan_app, players_file, supervisor_token, www_dir, fake_options,
+):
+    # players_file fixture monkeypatches PLAYERS_FILE but never creates it
+    client = await aiohttp_client(lan_app)
+    fake = _FakeMediaSession()
+    sid = str(uuid.uuid4())
+
+    with patch("intercom.ClientSession", return_value=fake):
+        resp = await client.post(
+            "/intercom", data=b"\x00" * 64,
+            headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+        )
+
+    assert resp.status == 204
+    # source auto-enrolled, default is empty, so no HA calls
+    assert fake.calls == []
+    assert json.loads(players_file.read_text())["routes"] == {"src-a": []}
