@@ -89,7 +89,7 @@ media_player:
   - platform: speaker
     id: atom_player
     name: "${friendly_name} Player"
-    buffer_size: 32768
+    buffer_size: 8192
     announcement_pipeline:
       speaker: atom_speaker
       format: WAV

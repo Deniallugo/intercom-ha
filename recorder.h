@@ -6,7 +6,7 @@
 #include "freertos/stream_buffer.h"
 
 static const char*  REC_TAG   = "recorder";
-static const size_t RBUF_SIZE = 32 * 1024;  // ~1 s at 16 kHz 16-bit
+static const size_t RBUF_SIZE = 16 * 1024;  // ~500 ms at 16 kHz 16-bit
 
 // VAD tuning (compile-time constants in v1)
 static const uint32_t VAD_MIN_MS         = 1000;
