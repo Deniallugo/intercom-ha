@@ -1,8 +1,12 @@
 import json
+import os
 import sys
+import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from aiohttp import web
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "intercom-addon"))
 import intercom as srv  # noqa: E402
@@ -52,10 +56,6 @@ def test_save_then_load_roundtrip(players_file):
     assert srv.load_players() == original
 
 
-import os
-from unittest.mock import patch
-
-
 class _FakeStatesResponse:
     def __init__(self, payload, status=200):
         self._payload = payload
@@ -63,9 +63,6 @@ class _FakeStatesResponse:
 
     async def json(self):
         return self._payload
-
-    async def text(self):
-        return json.dumps(self._payload)
 
 
 class _FakeStatesSession:
@@ -114,9 +111,6 @@ async def test_fetch_media_players_raises_on_non_200(supervisor_token):
     with patch("intercom.ClientSession", return_value=fake):
         with pytest.raises(RuntimeError):
             await srv.fetch_media_players()
-
-
-from aiohttp import web
 
 
 @pytest.fixture
@@ -227,9 +221,6 @@ async def test_post_players_rejects_missing_fields(
     client = await aiohttp_client(ingress_app)
     resp = await client.post("/api/players", json={"routes": {}})  # no default
     assert resp.status == 400
-
-
-import uuid
 
 
 class _FakeMediaResponse:
