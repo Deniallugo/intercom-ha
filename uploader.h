@@ -14,6 +14,9 @@ static const char* UPL_TAG = "uploader";
 static uint8_t       _upl_buf[4096];
 static volatile bool _uploading = false;
 
+struct _upl_args_t { const char* url; const char* device; };
+static _upl_args_t _upl_args;
+
 static std::string _make_sid() {
   uint8_t r[8]; esp_fill_random(r, 8);
   char s[17];
@@ -23,7 +26,9 @@ static std::string _make_sid() {
 }
 
 static void _stream_task(void* arg) {
-  const char* url = (const char*)arg;
+  auto* args = static_cast<_upl_args_t*>(arg);
+  const char* url    = args->url;
+  const char* device = args->device;
 
   // Parse "http://host:port/path"
   char host[64] = {}, path[64] = "/";
@@ -62,10 +67,10 @@ static void _stream_task(void* arg) {
   int hlen = snprintf(hdr, sizeof(hdr),
     "POST %s HTTP/1.1\r\nHost: %s:%d\r\n"
     "Content-Type: audio/pcm\r\nTransfer-Encoding: chunked\r\n"
-    "X-Session-ID: %s\r\nConnection: close\r\n\r\n",
-    path, host, port, sid.c_str());
+    "X-Session-ID: %s\r\nX-Device-Name: %s\r\nConnection: close\r\n\r\n",
+    path, host, port, sid.c_str(), device ? device : "");
   ::send(sock, hdr, hlen, 0);
-  ESP_LOGI(UPL_TAG, "streaming  session=%s", sid.c_str());
+  ESP_LOGI(UPL_TAG, "streaming  session=%s device=%s", sid.c_str(), device ? device : "");
 
   size_t total = 0;
   while (!recorder_is_done()) {
@@ -91,10 +96,12 @@ static void _stream_task(void* arg) {
   vTaskDelete(nullptr);
 }
 
-void uploader_start(const char* url) {
+void uploader_start(const char* url, const char* device) {
   if (_uploading) { ESP_LOGW(UPL_TAG, "already uploading, ignoring"); return; }
   _uploading = true;
-  xTaskCreate(_stream_task, "uploader", 4096, (void*)url, 5, nullptr);
+  _upl_args.url    = url;
+  _upl_args.device = device;
+  xTaskCreate(_stream_task, "uploader", 4096, &_upl_args, 5, nullptr);
 }
 
 bool uploader_is_uploading() { return _uploading; }

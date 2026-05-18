@@ -5,6 +5,7 @@ substitutions:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
   includes:
     - recorder.h
     - uploader.h
@@ -92,7 +93,7 @@ binary_sensor:
             - lambda: |-
                 recorder_start();
                 id(atom_mic).start();
-                uploader_start("http://homeassistant.local:9999/intercom");
+                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
     on_release:
       - lambda: |-
           id(atom_mic).stop();
