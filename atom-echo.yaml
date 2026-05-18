@@ -65,6 +65,7 @@ media_player:
     id: atom_player
     name: "Player"
     dac_type: external
+    mode: mono
     i2s_dout_pin: GPIO22
 
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
