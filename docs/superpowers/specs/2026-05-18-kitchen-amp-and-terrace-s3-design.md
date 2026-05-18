@@ -354,6 +354,8 @@ both models loaded.
 - Server-side behavior (chimes, aliases, ducking, talkback) is owned by that
   spec; no changes needed here.
 
-If the intercom-features work is not yet merged, this spec's implementation
-plan must include "wait for intercom-features merge" as a gate, or both can be
-implemented together as one larger plan.
+**Plan scope decision:** this work has its own implementation plan, separate
+from the intercom-features plan. The implementation plan for this spec gates
+on the intercom-features firmware (wake-word handler, `recorder_start_vad`,
+mic always-on) being merged first — the hardware swap and S3 YAML
+scaffolding here have no useful behavior without it.
