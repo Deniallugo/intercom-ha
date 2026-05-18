@@ -19,6 +19,7 @@ esphome:
             id(atom_mic).add_data_callback([](const std::vector<uint8_t>& data) {
               recorder_on_data(data.data(), data.size());
             });
+        - microphone.capture: atom_mic
 
 esp32:
   board: m5stack-atom
@@ -127,13 +128,10 @@ binary_sensor:
                 blue: 100%
             - lambda: |-
                 recorder_start();
-                id(atom_mic).start();
                 uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
     on_release:
-      - delay: 2s
-      - lambda: |-
-          id(atom_mic).stop();
-          recorder_stop();
+      - delay: 1s
+      - lambda: recorder_stop();
       - light.turn_on:
           id: status_led
           red: 100%
