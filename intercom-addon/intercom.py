@@ -17,9 +17,11 @@ log = logging.getLogger(__name__)
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 HA_API = "http://supervisor/core/api"
-SAMPLE_RATE = 48000
-SAMPLE_WIDTH = 2   # bytes, 16-bit
-CHANNELS = 1
+
+# Loaded once at startup from options.json
+sample_rate: int = 48000
+sample_width: int = 2   # bytes (bits_per_sample / 8)
+channels: int = 1
 
 sessions: dict[str, list[tuple[int, bytes]]] = {}
 
@@ -37,12 +39,12 @@ def wav_header(pcm_len: int) -> bytes:
         b"WAVE",
         b"fmt ",
         16,
-        1,                                          # PCM
-        CHANNELS,
-        SAMPLE_RATE,
-        SAMPLE_RATE * CHANNELS * SAMPLE_WIDTH,      # byte rate
-        CHANNELS * SAMPLE_WIDTH,                    # block align
-        SAMPLE_WIDTH * 8,                           # bits per sample
+        1,                                              # PCM
+        channels,
+        sample_rate,
+        sample_rate * channels * sample_width,          # byte rate
+        channels * sample_width,                        # block align
+        sample_width * 8,                               # bits per sample
         b"data",
         pcm_len,
     )
@@ -65,7 +67,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
     # Assemble chunks in order
     chunks = sorted(sessions.pop(session_id), key=lambda x: x[0])
     pcm = b"".join(d for _, d in chunks)
-    duration = len(pcm) / (SAMPLE_RATE * SAMPLE_WIDTH * CHANNELS)
+    duration = len(pcm) / (sample_rate * sample_width * channels)
 
     log.info("assembling  session=%s chunks=%d pcm=%d bytes duration=%.1fs",
              session_id[:8], len(chunks), len(pcm), duration)
@@ -79,7 +81,8 @@ async def handle_intercom(request: web.Request) -> web.Response:
     with open(filepath, "wb") as f:
         f.write(wav_header(len(pcm)))
         f.write(pcm)
-    log.info("WAV written  %s", filepath)
+    log.info("WAV written  %s  (%d Hz, %d-bit, %dch, %.2fs)",
+             filepath, sample_rate, sample_width * 8, channels, duration)
 
     token = os.environ["SUPERVISOR_TOKEN"]
     media_url = f"{ha_url}/local/{filename}"
@@ -105,11 +108,21 @@ async def handle_intercom(request: web.Request) -> web.Response:
 
 
 def main() -> None:
+    global sample_rate, sample_width, channels
+
     opts = load_options()
     port = opts.get("port", 9999)
-    players = opts.get("media_players", [])
+
+    sample_rate = opts.get("sample_rate", 48000)
+    bits = opts.get("bits_per_sample", 16)
+    sample_width = bits // 8
+    channels = opts.get("channels", 1)
+
     log.info("starting intercom relay on port %d", port)
-    log.info("target players: %s", players)
+    log.info("audio format: %d Hz, %d-bit, %d channel(s)",
+             sample_rate, bits, channels)
+    log.info("target players: %s", opts.get("media_players", []))
+
     app = web.Application()
     app.router.add_post("/intercom", handle_intercom)
     web.run_app(app, host="0.0.0.0", port=port, print=None)

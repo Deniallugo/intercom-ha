@@ -1,7 +1,7 @@
 image: ghcr.io/deniallugo/intercom-ha/intercom-relay
 name: Intercom Relay
 description: Receives audio from Atom Echo and plays it on HA media players.
-version: "1.1.0"
+version: "1.2.0"
 slug: intercom_relay
 init: false
 hassio_api: true
@@ -14,11 +14,17 @@ options:
   ha_url: "http://homeassistant.local:8123"
   port: 9999
   media_players: []
+  sample_rate: 24000
+  bits_per_sample: 16
+  channels: 1
 schema:
   ha_url: str
   port: int
   media_players:
     - str
+  sample_rate: int
+  bits_per_sample: int
+  channels: int
 map:
   - config:rw
 ports:
