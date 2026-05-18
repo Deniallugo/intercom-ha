@@ -58,6 +58,15 @@ microphone:
     sample_rate: 16000
     correct_dc_offset: true
 
+# ── Media player (HA-controllable playback) ────────────────────────────────────
+
+media_player:
+  - platform: i2s_audio
+    id: atom_player
+    name: "Player"
+    dac_type: external
+    i2s_dout_pin: GPIO22
+
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
 
 light:
