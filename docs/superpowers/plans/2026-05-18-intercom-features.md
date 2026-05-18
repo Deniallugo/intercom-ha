@@ -2442,15 +2442,17 @@ In `on_release`, the existing block is:
 
 ```yaml
     on_release:
+      - delay: 2s
       - lambda: |-
           id(atom_mic).stop();
           recorder_stop();
 ```
 
-Remove the mic stop:
+Remove the mic stop (keep the delay — it was added intentionally to let the trailing audio drain before stopping the mic; since the mic is now always-on, the delay still serves the recorder's drain):
 
 ```yaml
     on_release:
+      - delay: 2s
       - lambda: recorder_stop();
 ```
 
