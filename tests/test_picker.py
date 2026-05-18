@@ -327,3 +327,29 @@ async def test_intercom_missing_players_file_returns_204_no_call(
     assert fake_ha.play_media.call_args_list == []
     assert json.loads(players_file.read_text())["routes"] == {"src-a": []}
     assert any("players.json" in record.message for record in caplog.records if record.levelname == "WARNING")
+
+
+async def test_intercom_wav_includes_chimes(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    import struct
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    client = await aiohttp_client(lan_app)
+    pcm = b"\xAA\xBB" * 100  # 200 bytes
+    sid = str(uuid.uuid4())
+    await client.post(
+        "/intercom", data=pcm,
+        headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
+    )
+
+    wav_files = list(www_dir.glob("intercom-*.wav"))
+    assert len(wav_files) == 1
+    wav = wav_files[0].read_bytes()
+    pcm_len = struct.unpack_from("<I", wav, 40)[0]
+    # Chime is 120ms at 16k/16/1 = 3840 bytes each side.
+    # Total PCM = 3840 + 200 + 3840 = 7880.
+    assert pcm_len == 7880
+    assert wav[44 + 3840:44 + 3840 + 200] == pcm

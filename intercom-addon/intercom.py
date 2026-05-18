@@ -1,16 +1,21 @@
 import asyncio
 import json
 import logging
-import struct
 import uuid
 from pathlib import Path
 
 from aiohttp import web
 
 from ha_client import HAClient
+from chimes import ChimeMixer
 import players
 
 ha = HAClient()
+
+# Initialized at import with the addon's default audio format. _run()
+# rebuilds it if options.json overrides any of the format fields. Module-level
+# so tests can call handlers directly without going through _run().
+mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,11 +26,6 @@ log = logging.getLogger(__name__)
 
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
-
-# Loaded once at startup from options.json
-sample_rate: int = 16000
-sample_width: int = 2   # bytes (bits_per_sample / 8)
-channels: int = 1
 
 
 def load_options() -> dict:
@@ -311,25 +311,6 @@ async def handle_picker_post(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
-def wav_header(pcm_len: int) -> bytes:
-    return struct.pack(
-        "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        36 + pcm_len,
-        b"WAVE",
-        b"fmt ",
-        16,
-        1,                                              # PCM
-        channels,
-        sample_rate,
-        sample_rate * channels * sample_width,          # byte rate
-        channels * sample_width,                        # block align
-        sample_width * 8,                               # bits per sample
-        b"data",
-        pcm_len,
-    )
-
-
 async def handle_intercom(request: web.Request) -> web.Response:
     session_id = request.headers.get("X-Session-ID", str(uuid.uuid4()))
     source = (request.headers.get("X-Device-Name") or "unknown").strip() or "unknown"
@@ -339,7 +320,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
         log.warning("empty body from session=%s, ignoring", session_id[:8])
         return web.Response(status=400)
 
-    duration = len(pcm) / (sample_rate * sample_width * channels)
+    duration = mixer.pcm_duration_seconds(pcm)
     log.info("received  session=%s  source=%s  pcm=%d bytes  duration=%.1fs",
              session_id[:8], source, len(pcm), duration)
 
@@ -358,15 +339,13 @@ async def handle_intercom(request: web.Request) -> web.Response:
     filepath = Path(CONFIG_WWW) / filename
     filepath.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(filepath, "wb") as f:
-        f.write(wav_header(len(pcm)))
-        f.write(pcm)
-    log.info("WAV written  %s  (%d Hz, %d-bit, %dch, %.2fs)",
-             filepath, sample_rate, sample_width * 8, channels, duration)
+    filepath.write_bytes(mixer.build_wav(pcm))
+    total_duration = mixer.total_duration_seconds(pcm)
+    log.info("WAV written  %s  (%.2fs incl. chimes)", filepath, total_duration)
 
     if not targets:
         log.warning("source=%s has no targets; skipping play", source)
-        asyncio.create_task(_delete_after(filepath, duration + 10))
+        asyncio.create_task(_delete_after(filepath, total_duration + 10))
         return web.Response(status=204)
 
     media_url = f"{ha_url}/local/{filename}"
@@ -375,7 +354,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
         status = await ha.play_media(player, media_url)
         log.info("HA API  player=%s  status=%d", player, status)
 
-    asyncio.create_task(_delete_after(filepath, duration + 10))
+    asyncio.create_task(_delete_after(filepath, total_duration + 10))
     return web.Response(status=204)
 
 
@@ -403,7 +382,7 @@ def make_ingress_app() -> web.Application:
 
 
 async def _run() -> None:
-    global sample_rate, sample_width, channels
+    global mixer
 
     opts = load_options()
     port = opts.get("port", 9999)
@@ -411,8 +390,12 @@ async def _run() -> None:
 
     sample_rate = opts.get("sample_rate", 16000)
     bits = opts.get("bits_per_sample", 16)
-    sample_width = bits // 8
     channels = opts.get("channels", 1)
+    mixer = ChimeMixer(
+        sample_rate=sample_rate,
+        sample_width=bits // 8,
+        channels=channels,
+    )
 
     log.info("starting intercom relay on port %d (LAN)", port)
     log.info("starting picker UI on port %d (ingress)", ingress_port)
