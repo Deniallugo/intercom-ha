@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -90,8 +91,17 @@ async def handle_intercom(request: web.Request) -> web.Response:
             )
             log.info("HA API  player=%s  status=%d", player, resp.status)
 
-    log.info("file kept for download: %s/local/%s", ha_url, filename)
+    asyncio.create_task(_delete_after(filepath, duration + 10))
     return web.Response(status=204)
+
+
+async def _delete_after(filepath: Path, delay: float) -> None:
+    await asyncio.sleep(delay)
+    try:
+        filepath.unlink()
+        log.info("cleaned up %s", filepath.name)
+    except OSError as e:
+        log.warning("cleanup failed for %s: %s", filepath.name, e)
 
 
 def main() -> None:
