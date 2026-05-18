@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 HA_API = "http://supervisor/core/api"
+PLAYERS_FILE = "/data/players.json"
 
 # Loaded once at startup from options.json
 sample_rate: int = 16000
@@ -28,6 +29,35 @@ channels: int = 1
 def load_options() -> dict:
     with open(OPTIONS_FILE) as f:
         return json.load(f)
+
+
+def load_players() -> dict:
+    """Read /data/players.json. Returns {"routes": {}, "default": []} if
+    missing or malformed."""
+    try:
+        with open(PLAYERS_FILE) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {"routes": {}, "default": []}
+    except (json.JSONDecodeError, OSError) as e:
+        log.error("players.json unreadable (%s); using empty routes", e)
+        return {"routes": {}, "default": []}
+
+    routes = data.get("routes") if isinstance(data, dict) else None
+    default = data.get("default") if isinstance(data, dict) else None
+    return {
+        "routes": routes if isinstance(routes, dict) else {},
+        "default": default if isinstance(default, list) else [],
+    }
+
+
+def save_players(data: dict) -> None:
+    """Atomically write /data/players.json."""
+    tmp = PLAYERS_FILE + ".tmp"
+    os.makedirs(os.path.dirname(PLAYERS_FILE), exist_ok=True)
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, PLAYERS_FILE)
 
 
 def wav_header(pcm_len: int) -> bytes:
