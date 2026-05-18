@@ -90,18 +90,28 @@ PICKER_HTML = """<!doctype html>
 <meta charset="utf-8">
 <title>Intercom Picker</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 1.5rem; }
+  body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 720px; }
   h1 { margin-top: 0; }
-  table { border-collapse: collapse; }
-  th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: center; }
-  th.src { text-align: left; }
-  td.src { text-align: left; font-family: ui-monospace, monospace; }
-  .target-id { color: #666; font-family: ui-monospace, monospace; font-size: 0.85em; }
-  .toolbar { margin: 1rem 0; }
+  .row { padding: 0.75rem 0; border-bottom: 1px solid #eee; }
+  .row:last-child { border-bottom: none; }
+  .src { font-family: ui-monospace, monospace; font-weight: 600; margin-bottom: 0.4rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.4rem; min-height: 1.6rem; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    padding: 0.2rem 0.6rem; background: #eef; border-radius: 999px;
+    font-size: 0.9rem;
+  }
+  .chip button {
+    border: none; background: transparent; cursor: pointer;
+    font-size: 1rem; line-height: 1; padding: 0; color: #557;
+  }
+  .empty { color: #888; font-style: italic; font-size: 0.9rem; }
+  select { padding: 0.35rem 0.5rem; font-size: 0.95rem; }
+  .toolbar { margin-top: 1rem; }
   .toast { margin-left: 1rem; color: #2a7; }
   .error { color: #c33; }
-  .hint { color: #666; margin-top: 0.5rem; }
-  button { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+  .hint { color: #666; margin: 0.75rem 0; }
+  button.save { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -109,7 +119,7 @@ PICKER_HTML = """<!doctype html>
 <div id="status"></div>
 <div id="content"></div>
 <div class="toolbar">
-  <button id="save">Save</button>
+  <button class="save" id="save">Save</button>
   <span id="toast" class="toast"></span>
 </div>
 <script>
@@ -130,62 +140,99 @@ async function load() {
   }
 }
 
+function targetsFor(src) {
+  return src === "default" ? state.default : state.routes[src];
+}
+
+function friendlyName(eid) {
+  const t = state.available.find((x) => x.entity_id === eid);
+  return t ? t.friendly_name : eid;
+}
+
+function renderRow(src) {
+  const selected = targetsFor(src);
+  const row = document.createElement("div");
+  row.className = "row";
+
+  const label = document.createElement("div");
+  label.className = "src";
+  label.textContent = src;
+  row.appendChild(label);
+
+  const chips = document.createElement("div");
+  chips.className = "chips";
+  if (selected.length === 0) {
+    const e = document.createElement("span");
+    e.className = "empty";
+    e.textContent = "no targets";
+    chips.appendChild(e);
+  } else {
+    for (const eid of selected) {
+      const chip = document.createElement("span");
+      chip.className = "chip";
+      chip.textContent = friendlyName(eid) + " ";
+      const x = document.createElement("button");
+      x.textContent = "×";
+      x.title = eid;
+      x.addEventListener("click", () => {
+        const arr = targetsFor(src);
+        const i = arr.indexOf(eid);
+        if (i >= 0) arr.splice(i, 1);
+        render();
+      });
+      chip.appendChild(x);
+      chips.appendChild(chip);
+    }
+  }
+  row.appendChild(chips);
+
+  const sel = document.createElement("select");
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "+ add speaker…";
+  sel.appendChild(placeholder);
+  for (const tgt of state.available) {
+    if (selected.includes(tgt.entity_id)) continue;
+    const opt = document.createElement("option");
+    opt.value = tgt.entity_id;
+    opt.textContent = tgt.friendly_name + "  (" + tgt.entity_id + ")";
+    sel.appendChild(opt);
+  }
+  sel.addEventListener("change", () => {
+    if (!sel.value) return;
+    targetsFor(src).push(sel.value);
+    render();
+  });
+  row.appendChild(sel);
+
+  return row;
+}
+
 function render() {
   const sources = Object.keys(state.routes).sort();
-  if (sources.length === 0) {
-    $("content").innerHTML = '<div class="hint">No sources enrolled yet. Press PTT on each Atom Echo once to enroll it.</div>';
-  } else {
-    $("content").innerHTML = "";
-  }
+  $("content").innerHTML = "";
 
-  const table = document.createElement("table");
-  const head = table.insertRow();
-  const corner = head.insertCell();
-  corner.outerHTML = "<th class='src'>source &rarr; target</th>";
-  for (const tgt of state.available) {
-    const th = document.createElement("th");
-    th.innerHTML = tgt.friendly_name + '<br><span class="target-id">' + tgt.entity_id + '</span>';
-    head.appendChild(th);
+  if (sources.length === 0) {
+    const hint = document.createElement("div");
+    hint.className = "hint";
+    hint.textContent = "No sources enrolled yet. Press the PTT on each Atom Echo once to enroll it.";
+    $("content").appendChild(hint);
   }
 
   for (const src of [...sources, "default"]) {
-    const row = table.insertRow();
-    const label = row.insertCell();
-    label.className = "src";
-    label.textContent = src;
-    const selected = src === "default" ? state.default : state.routes[src];
-    for (const tgt of state.available) {
-      const td = row.insertCell();
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = selected.includes(tgt.entity_id);
-      cb.dataset.src = src;
-      cb.dataset.eid = tgt.entity_id;
-      td.appendChild(cb);
-    }
+    $("content").appendChild(renderRow(src));
   }
-  $("content").appendChild(table);
 }
 
 async function save() {
-  const routes = {};
-  for (const k of Object.keys(state.routes)) routes[k] = [];
-  let def = [];
-  for (const cb of document.querySelectorAll("input[type=checkbox]")) {
-    if (!cb.checked) continue;
-    if (cb.dataset.src === "default") def.push(cb.dataset.eid);
-    else routes[cb.dataset.src].push(cb.dataset.eid);
-  }
   $("toast").textContent = "";
   try {
     const resp = await fetch("./api/players", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({routes, default: def}),
+      body: JSON.stringify({ routes: state.routes, default: state.default }),
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);
-    state.routes = routes;
-    state.default = def;
     $("toast").textContent = "Saved";
     setTimeout(() => { $("toast").textContent = ""; }, 2000);
   } catch (e) {
