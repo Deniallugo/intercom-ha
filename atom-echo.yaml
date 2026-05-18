@@ -19,7 +19,6 @@ esphome:
             id(atom_mic).add_data_callback([](const std::vector<uint8_t>& data) {
               recorder_on_data(data.data(), data.size());
             });
-        - microphone.capture: atom_mic
 
 esp32:
   board: m5stack-atom
@@ -89,38 +88,10 @@ media_player:
   - platform: speaker
     id: atom_player
     name: "${friendly_name} Player"
-    buffer_size: 8192
+    buffer_size: 32768
     announcement_pipeline:
       speaker: atom_speaker
       format: WAV
-
-# ── Wake-word PTT alternative (always listening on atom_mic) ────────────────
-
-micro_wake_word:
-  stop_after_detection: false
-  models:
-    - model: okay_nabu
-  on_wake_word_detected:
-    - if:
-        condition:
-          lambda: 'return uploader_is_uploading() || recorder_is_active();'
-        then:
-          - logger.log: "wake word ignored — already recording/uploading"
-        else:
-          - light.turn_on:
-              id: status_led
-              red: 0%
-              green: 0%
-              blue: 100%
-          - lambda: |-
-              recorder_start_vad();
-              uploader_start("http://homeassistant.local:9999/intercom",
-                             App.get_name().c_str());
-          - wait_until:
-              condition:
-                lambda: 'return !uploader_is_uploading();'
-              timeout: 20s
-          - light.turn_off: status_led
 
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
 
@@ -156,10 +127,13 @@ binary_sensor:
                 blue: 100%
             - lambda: |-
                 recorder_start();
+                id(atom_mic).start();
                 uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
     on_release:
-      - delay: 1s
-      - lambda: recorder_stop();
+      - delay: 2s
+      - lambda: |-
+          id(atom_mic).stop();
+          recorder_stop();
       - light.turn_on:
           id: status_led
           red: 100%
