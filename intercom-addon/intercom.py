@@ -5,6 +5,7 @@ import os
 import struct
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from aiohttp import web, ClientSession
 
@@ -98,7 +99,44 @@ async def handle_picker_get(request: web.Request) -> web.Response:
 
 
 async def handle_picker_post(request: web.Request) -> web.Response:
-    return web.Response(status=501)  # filled in by Task 4
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+
+    err = _validate_players_payload(body)
+    if err:
+        return web.json_response({"error": err}, status=400)
+
+    save_players({"routes": body["routes"], "default": body["default"]})
+    return web.Response(status=204)
+
+
+def _validate_players_payload(body) -> Optional[str]:
+    if not isinstance(body, dict):
+        return "body must be an object"
+    if "routes" not in body or "default" not in body:
+        return "missing 'routes' or 'default'"
+
+    routes = body["routes"]
+    if not isinstance(routes, dict):
+        return "'routes' must be an object"
+    for key, value in routes.items():
+        if not isinstance(key, str) or not key:
+            return "route keys must be non-empty strings"
+        if not _is_entity_list(value):
+            return f"routes[{key!r}] must be a list of media_player.* entity ids"
+
+    if not _is_entity_list(body["default"]):
+        return "'default' must be a list of media_player.* entity ids"
+    return None
+
+
+def _is_entity_list(value) -> bool:
+    return (
+        isinstance(value, list)
+        and all(isinstance(v, str) and v.startswith("media_player.") for v in value)
+    )
 
 
 def wav_header(pcm_len: int) -> bytes:

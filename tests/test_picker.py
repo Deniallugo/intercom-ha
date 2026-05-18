@@ -162,3 +162,68 @@ async def test_get_players_supervisor_failure_returns_502(
 
     assert resp.status == 502
     assert "error" in body
+
+
+async def test_post_players_writes_file(aiohttp_client, ingress_app, players_file):
+    client = await aiohttp_client(ingress_app)
+    payload = {
+        "routes": {"src-a": ["media_player.kitchen", "media_player.bedroom"]},
+        "default": ["media_player.kitchen"],
+    }
+    resp = await client.post("/api/players", json=payload)
+
+    assert resp.status == 204
+    assert json.loads(players_file.read_text()) == payload
+
+
+async def test_post_players_rejects_non_media_player_target(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={
+        "routes": {"src-a": ["light.bulb"]},
+        "default": [],
+    })
+    assert resp.status == 400
+    assert not players_file.exists()
+
+
+async def test_post_players_rejects_non_list_route_value(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={
+        "routes": {"src-a": "media_player.kitchen"},  # str, not list
+        "default": [],
+    })
+    assert resp.status == 400
+
+
+async def test_post_players_rejects_empty_source_key(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={
+        "routes": {"": ["media_player.kitchen"]},
+        "default": [],
+    })
+    assert resp.status == 400
+
+
+async def test_post_players_rejects_non_media_player_default(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={
+        "routes": {},
+        "default": ["light.bulb"],
+    })
+    assert resp.status == 400
+
+
+async def test_post_players_rejects_missing_fields(
+    aiohttp_client, ingress_app, players_file,
+):
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={"routes": {}})  # no default
+    assert resp.status == 400
