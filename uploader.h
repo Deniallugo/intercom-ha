@@ -45,16 +45,16 @@ static void _stream_task(void* arg) {
   char port_s[8]; snprintf(port_s, sizeof(port_s), "%d", port);
   struct addrinfo hints = {}, *res = nullptr;
   hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
-  if (getaddrinfo(host, port_s, &hints, &res) != 0 || !res) {
+  if (::getaddrinfo(host, port_s, &hints, &res) != 0 || !res) {
     ESP_LOGE(UPL_TAG, "DNS failed for %s", host);
     _uploading = false; vTaskDelete(nullptr); return;
   }
-  int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
+  int sock = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (::connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
     ESP_LOGE(UPL_TAG, "connect failed");
-    close(sock); freeaddrinfo(res); _uploading = false; vTaskDelete(nullptr); return;
+    ::close(sock); ::freeaddrinfo(res); _uploading = false; vTaskDelete(nullptr); return;
   }
-  freeaddrinfo(res);
+  ::freeaddrinfo(res);
 
   // Send HTTP headers — chunked streaming body
   auto sid = _make_sid();
@@ -64,7 +64,7 @@ static void _stream_task(void* arg) {
     "Content-Type: audio/pcm\r\nTransfer-Encoding: chunked\r\n"
     "X-Session-ID: %s\r\nConnection: close\r\n\r\n",
     path, host, port, sid.c_str());
-  send(sock, hdr, hlen, 0);
+  ::send(sock, hdr, hlen, 0);
   ESP_LOGI(UPL_TAG, "streaming  session=%s", sid.c_str());
 
   size_t total = 0;
@@ -72,19 +72,19 @@ static void _stream_task(void* arg) {
     size_t n = recorder_drain(_upl_buf, sizeof(_upl_buf), 20);
     if (n == 0) continue;
     char szl[12]; int sl = snprintf(szl, sizeof(szl), "%x\r\n", (unsigned)n);
-    send(sock, szl, sl, 0);
-    send(sock, _upl_buf, n, 0);
-    send(sock, "\r\n", 2, 0);
+    ::send(sock, szl, sl, 0);
+    ::send(sock, _upl_buf, n, 0);
+    ::send(sock, "\r\n", 2, 0);
     total += n;
   }
 
   // Terminating chunk
-  send(sock, "0\r\n\r\n", 5, 0);
+  ::send(sock, "0\r\n\r\n", 5, 0);
   ESP_LOGI(UPL_TAG, "sent %u bytes, awaiting response", (unsigned)total);
 
   char resp[256] = {};
-  recv(sock, resp, sizeof(resp) - 1, 0);
-  close(sock);
+  ::recv(sock, resp, sizeof(resp) - 1, 0);
+  ::close(sock);
 
   ESP_LOGI(UPL_TAG, "done");
   _uploading = false;
