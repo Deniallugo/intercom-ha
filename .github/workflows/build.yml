@@ -47,8 +47,6 @@ jobs:
           args: |
             --all \
             --target /data/intercom-addon \
-            --image intercom-relay \
-            --docker-hub ghcr.io/deniallugo/intercom-ha \
             --no-latest
         env:
           DOCKER_USERNAME: ${{ github.repository_owner }}
