@@ -1,15 +1,14 @@
 import asyncio
 import json
 import logging
-import os
 import struct
 import uuid
 from pathlib import Path
-from typing import Optional
 
 from aiohttp import web
 
 from ha_client import HAClient
+import players
 
 ha = HAClient()
 
@@ -22,7 +21,6 @@ log = logging.getLogger(__name__)
 
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
-PLAYERS_FILE = "/data/players.json"
 
 # Loaded once at startup from options.json
 sample_rate: int = 16000
@@ -33,36 +31,6 @@ channels: int = 1
 def load_options() -> dict:
     with open(OPTIONS_FILE) as f:
         return json.load(f)
-
-
-def load_players() -> dict:
-    """Read /data/players.json. Returns {"routes": {}, "default": []} if
-    missing or malformed."""
-    try:
-        with open(PLAYERS_FILE) as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        log.warning("players.json not found; using empty routes")
-        return {"routes": {}, "default": []}
-    except (json.JSONDecodeError, OSError) as e:
-        log.error("players.json unreadable (%s); using empty routes", e)
-        return {"routes": {}, "default": []}
-
-    routes = data.get("routes") if isinstance(data, dict) else None
-    default = data.get("default") if isinstance(data, dict) else None
-    return {
-        "routes": routes if isinstance(routes, dict) else {},
-        "default": default if isinstance(default, list) else [],
-    }
-
-
-def save_players(data: dict) -> None:
-    """Atomically write /data/players.json."""
-    tmp = PLAYERS_FILE + ".tmp"
-    os.makedirs(os.path.dirname(PLAYERS_FILE), exist_ok=True)
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2)
-    os.replace(tmp, PLAYERS_FILE)
 
 
 async def fetch_media_players() -> list[dict]:
@@ -253,11 +221,11 @@ async def handle_picker_get(request: web.Request) -> web.Response:
         log.error("failed to fetch media players: %s", e)
         return web.json_response({"error": str(e)}, status=502)
 
-    players = load_players()
+    state = players.load_players()
     return web.json_response({
         "available": available,
-        "routes": players["routes"],
-        "default": players["default"],
+        "routes": state["routes"],
+        "default": state["default"],
     })
 
 
@@ -267,39 +235,12 @@ async def handle_picker_post(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         return web.json_response({"error": "invalid JSON"}, status=400)
 
-    err = _validate_players_payload(body)
+    err = players.validate(body)
     if err:
         return web.json_response({"error": err}, status=400)
 
-    save_players({"routes": body["routes"], "default": body["default"]})
+    players.save_players({"routes": body["routes"], "default": body["default"]})
     return web.Response(status=204)
-
-
-def _validate_players_payload(body) -> Optional[str]:
-    if not isinstance(body, dict):
-        return "body must be an object"
-    if "routes" not in body or "default" not in body:
-        return "missing 'routes' or 'default'"
-
-    routes = body["routes"]
-    if not isinstance(routes, dict):
-        return "'routes' must be an object"
-    for key, value in routes.items():
-        if not isinstance(key, str) or not key:
-            return "route keys must be non-empty strings"
-        if not _is_entity_list(value):
-            return f"routes[{key!r}] must be a list of media_player.* entity ids"
-
-    if not _is_entity_list(body["default"]):
-        return "'default' must be a list of media_player.* entity ids"
-    return None
-
-
-def _is_entity_list(value) -> bool:
-    return (
-        isinstance(value, list)
-        and all(isinstance(v, str) and v.startswith("media_player.") for v in value)
-    )
 
 
 def wav_header(pcm_len: int) -> bytes:
@@ -334,14 +275,14 @@ async def handle_intercom(request: web.Request) -> web.Response:
     log.info("received  session=%s  source=%s  pcm=%d bytes  duration=%.1fs",
              session_id[:8], source, len(pcm), duration)
 
-    players = load_players()
-    if source in players["routes"]:
-        targets = players["routes"][source]
+    state = players.load_players()
+    if source in state["routes"]:
+        targets = state["routes"][source]
     else:
-        players["routes"][source] = []
-        save_players(players)
+        state["routes"][source] = []
+        players.save_players(state)
         log.info("enrolled new source=%s; using default targets", source)
-        targets = players["default"]
+        targets = state["default"]
 
     opts = load_options()
     ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
