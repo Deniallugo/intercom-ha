@@ -54,8 +54,8 @@ microphone:
     i2s_din_pin: GPIO23
     adc_type: external
     pdm: true
-    sample_rate: 48000
-    correct_dc_offset: false
+    sample_rate: 16000
+    correct_dc_offset: true
 
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
 
@@ -69,20 +69,6 @@ light:
     id: status_led
     restore_mode: ALWAYS_OFF
 
-# ── Upload script ──────────────────────────────────────────────────────────────
-
-script:
-  - id: upload_recording
-    then:
-      - light.turn_on:
-          id: status_led
-          red: 100%
-          green: 100%
-          blue: 0%
-      - lambda: |-
-          uploader_send("http://homeassistant.local:9999/intercom");
-      - light.turn_off: status_led
-
 # ── Push-to-talk button (GPIO39, active LOW) ───────────────────────────────────
 
 binary_sensor:
@@ -94,7 +80,7 @@ binary_sensor:
     on_press:
       - if:
           condition:
-            script.is_running: upload_recording
+            lambda: 'return uploader_is_uploading();'
           then:
             - logger.log: "button ignored — upload in progress"
           else:
@@ -106,8 +92,18 @@ binary_sensor:
             - lambda: |-
                 recorder_start();
                 id(atom_mic).start();
+                uploader_start("http://homeassistant.local:9999/intercom");
     on_release:
       - lambda: |-
           id(atom_mic).stop();
           recorder_stop();
-      - script.execute: upload_recording
+      - light.turn_on:
+          id: status_led
+          red: 100%
+          green: 100%
+          blue: 0%
+      - wait_until:
+          condition:
+            lambda: 'return !uploader_is_uploading();'
+          timeout: 10s
+      - light.turn_off: status_led

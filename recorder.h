@@ -1,69 +1,47 @@
 #pragma once
 #include <cstdint>
-#include <cstring>
 #include "esp_log.h"
-#include "esp_partition.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/stream_buffer.h"
 
-static const char*  REC_TAG    = "recorder";
-static const size_t REC_MAX    = 512 * 1024;  // 5.3 s at 48 kHz
-static const size_t REC_SECTOR = 4096;
+static const char*  REC_TAG   = "recorder";
+static const size_t RBUF_SIZE = 32 * 1024;  // ~1 s at 16 kHz 16-bit
 
-static const esp_partition_t* _part       = nullptr;
-static size_t                 _rec_len    = 0;
-static size_t                 _erased_to  = 0;
-static bool                   _rec_active = false;
+static StreamBufferHandle_t _sbuf       = nullptr;
+static volatile bool        _rec_active = false;
+static volatile bool        _rec_done   = false;
 
 void recorder_init() {
-  _part = esp_partition_find_first(
-      ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
-  if (!_part) {
-    ESP_LOGE(REC_TAG, "no spiffs partition found");
-    return;
-  }
-  size_t cap = (_part->size < REC_MAX) ? _part->size : REC_MAX;
-  ESP_LOGI(REC_TAG, "flash ready: %zu KB = %.1f s at 48 kHz",
-           cap / 1024, (float)cap / (48000 * 2));
+  _sbuf = xStreamBufferCreate(RBUF_SIZE, 1);
+  if (!_sbuf) ESP_LOGE(REC_TAG, "stream buffer alloc failed");
+  else        ESP_LOGI(REC_TAG, "ready (%u KB ring buffer)", (unsigned)(RBUF_SIZE / 1024));
 }
 
 void recorder_start() {
-  if (!_part) { ESP_LOGE(REC_TAG, "no partition, cannot record"); return; }
-  _rec_len    = 0;
-  _erased_to  = 0;
+  if (!_sbuf) return;
+  xStreamBufferReset(_sbuf);
+  _rec_done   = false;
   _rec_active = true;
-  // Erase first sector so the first write is ready immediately
-  esp_partition_erase_range(_part, 0, REC_SECTOR);
-  _erased_to = REC_SECTOR;
   ESP_LOGI(REC_TAG, "recording started");
 }
 
-// Called from I2S task at 48 kHz.  Erases the next flash sector just before
-// the write pointer crosses into it — the I2S DMA buffer (~85 ms) absorbs the
-// ~10 ms sector-erase pause without dropping samples.
 void recorder_on_data(const uint8_t* data, size_t len) {
-  if (!_rec_active || !_part) return;
-  len &= ~3u;  // flash writes must be 4-byte aligned
-  if (len == 0) return;
-  size_t cap = (_part->size < REC_MAX) ? _part->size : REC_MAX;
-  size_t space = cap - _rec_len;
-  if (len > space) { len = space & ~3u; _rec_active = false; }
-  if (len == 0) return;
-  size_t end = _rec_len + len;
-  while (_erased_to < end) {
-    esp_partition_erase_range(_part, _erased_to, REC_SECTOR);
-    _erased_to += REC_SECTOR;
-  }
-  esp_partition_write(_part, _rec_len, data, len);
-  _rec_len += len;
+  if (!_rec_active || !_sbuf) return;
+  size_t sent = xStreamBufferSend(_sbuf, data, len, 0);
+  if (sent < len)
+    ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(len - sent));
 }
 
 void recorder_stop() {
   _rec_active = false;
-  ESP_LOGI(REC_TAG, "recorded %zu bytes (%.2f s at 48 kHz)",
-           _rec_len, (float)_rec_len / (48000 * 2));
+  _rec_done   = true;
+  ESP_LOGI(REC_TAG, "recording stopped");
 }
 
-size_t recorder_get_len() { return _rec_len; }
-
-void recorder_read(uint8_t* dst, size_t offset, size_t len) {
-  if (_part) esp_partition_read(_part, offset, dst, len);
+// Called by the uploader task: blocks up to wait_ms for data, returns bytes read
+size_t recorder_drain(uint8_t* dst, size_t max_len, uint32_t wait_ms) {
+  return xStreamBufferReceive(_sbuf, dst, max_len, pdMS_TO_TICKS(wait_ms));
 }
+
+bool recorder_is_active() { return _rec_active; }
+bool recorder_is_done()   { return _rec_done && xStreamBufferIsEmpty(_sbuf); }

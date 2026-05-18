@@ -1,102 +1,100 @@
 #pragma once
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
 #include "esp_random.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
 
-// recorder_get_len() and recorder_read() are defined in recorder.h,
-// which is included before this file.
+static const char* UPL_TAG = "uploader";
 
-static uint8_t _send_buf[16384];  // read buffer: flash → network
+static uint8_t       _upl_buf[4096];
+static volatile bool _uploading = false;
 
-static std::string _make_session_id() {
-  uint8_t rnd[8];
-  esp_fill_random(rnd, sizeof(rnd));
-  char buf[17];
-  for (int i = 0; i < 8; i++) sprintf(buf + i * 2, "%02x", rnd[i]);
-  buf[16] = '\0';
-  return std::string(buf);
+static std::string _make_sid() {
+  uint8_t r[8]; esp_fill_random(r, 8);
+  char s[17];
+  for (int i = 0; i < 8; i++) sprintf(s + i * 2, "%02x", r[i]);
+  s[16] = '\0';
+  return std::string(s);
 }
 
-static void _post_chunk(const char* host, int port, const char* path,
-                        const char* session_id, int chunk_index, bool is_final,
-                        const uint8_t* data, size_t len) {
-  char port_str[8];
-  snprintf(port_str, sizeof(port_str), "%d", port);
-
-  struct addrinfo hints = {};
-  hints.ai_family   = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-  struct addrinfo* res = nullptr;
-  if (::getaddrinfo(host, port_str, &hints, &res) != 0 || !res) return;
-
-  int sock = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (sock < 0) { ::freeaddrinfo(res); return; }
-  if (::connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
-    ::close(sock); ::freeaddrinfo(res); return;
-  }
-  ::freeaddrinfo(res);
-
-  char hdr[512];
-  int hlen = snprintf(hdr, sizeof(hdr),
-    "POST %s HTTP/1.0\r\n"
-    "Host: %s:%d\r\n"
-    "Content-Type: audio/pcm\r\n"
-    "Content-Length: %zu\r\n"
-    "X-Session-ID: %s\r\n"
-    "X-Chunk-Index: %d\r\n"
-    "%s"
-    "\r\n",
-    path, host, port, len, session_id, chunk_index,
-    is_final ? "X-Final: 1\r\n" : "");
-
-  ::send(sock, hdr, hlen, 0);
-  ::send(sock, data, len, 0);
-
-  char resp[64];
-  ::recv(sock, resp, sizeof(resp), 0);
-  ::close(sock);
-}
-
-void uploader_send(const char* url) {
-  size_t total = recorder_get_len();
-  if (total == 0) return;
+static void _stream_task(void* arg) {
+  const char* url = (const char*)arg;
 
   // Parse "http://host:port/path"
-  char host[64] = {};
-  int  port     = 80;
-  char path[64] = "/";
-
-  const char* p = (strncmp(url, "http://", 7) == 0) ? url + 7 : url;
+  char host[64] = {}, path[64] = "/";
+  int  port = 80;
+  const char* p     = strncmp(url, "http://", 7) == 0 ? url + 7 : url;
   const char* colon = strchr(p, ':');
   const char* slash = strchr(p, '/');
-
   if (colon && (!slash || colon < slash)) {
-    size_t n = colon - p;
-    memcpy(host, p, n);
+    memcpy(host, p, colon - p);
     port = atoi(colon + 1);
   } else if (slash) {
-    size_t n = slash - p;
-    memcpy(host, p, n);
+    memcpy(host, p, slash - p);
   } else {
     strncpy(host, p, sizeof(host) - 1);
   }
   if (slash) strncpy(path, slash, sizeof(path) - 1);
 
-  const size_t CHUNK = sizeof(_send_buf);
-  std::string  sid   = _make_session_id();
-  size_t offset = 0;
-  int    idx    = 0;
-
-  while (offset < total) {
-    size_t bytes = total - offset;
-    if (bytes > CHUNK) bytes = CHUNK;
-    recorder_read(_send_buf, offset, bytes);
-    bool is_final = (offset + bytes >= total);
-    _post_chunk(host, port, path, sid.c_str(), idx, is_final, _send_buf, bytes);
-    offset += bytes;
-    idx++;
+  // Resolve + connect
+  char port_s[8]; snprintf(port_s, sizeof(port_s), "%d", port);
+  struct addrinfo hints = {}, *res = nullptr;
+  hints.ai_family = AF_INET; hints.ai_socktype = SOCK_STREAM;
+  if (getaddrinfo(host, port_s, &hints, &res) != 0 || !res) {
+    ESP_LOGE(UPL_TAG, "DNS failed for %s", host);
+    _uploading = false; vTaskDelete(nullptr); return;
   }
+  int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+  if (connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
+    ESP_LOGE(UPL_TAG, "connect failed");
+    close(sock); freeaddrinfo(res); _uploading = false; vTaskDelete(nullptr); return;
+  }
+  freeaddrinfo(res);
+
+  // Send HTTP headers — chunked streaming body
+  auto sid = _make_sid();
+  char hdr[512];
+  int hlen = snprintf(hdr, sizeof(hdr),
+    "POST %s HTTP/1.1\r\nHost: %s:%d\r\n"
+    "Content-Type: audio/pcm\r\nTransfer-Encoding: chunked\r\n"
+    "X-Session-ID: %s\r\nConnection: close\r\n\r\n",
+    path, host, port, sid.c_str());
+  send(sock, hdr, hlen, 0);
+  ESP_LOGI(UPL_TAG, "streaming  session=%s", sid.c_str());
+
+  size_t total = 0;
+  while (!recorder_is_done()) {
+    size_t n = recorder_drain(_upl_buf, sizeof(_upl_buf), 20);
+    if (n == 0) continue;
+    char szl[12]; int sl = snprintf(szl, sizeof(szl), "%x\r\n", (unsigned)n);
+    send(sock, szl, sl, 0);
+    send(sock, _upl_buf, n, 0);
+    send(sock, "\r\n", 2, 0);
+    total += n;
+  }
+
+  // Terminating chunk
+  send(sock, "0\r\n\r\n", 5, 0);
+  ESP_LOGI(UPL_TAG, "sent %u bytes, awaiting response", (unsigned)total);
+
+  char resp[256] = {};
+  recv(sock, resp, sizeof(resp) - 1, 0);
+  close(sock);
+
+  ESP_LOGI(UPL_TAG, "done");
+  _uploading = false;
+  vTaskDelete(nullptr);
 }
+
+void uploader_start(const char* url) {
+  if (_uploading) { ESP_LOGW(UPL_TAG, "already uploading, ignoring"); return; }
+  _uploading = true;
+  xTaskCreate(_stream_task, "uploader", 4096, (void*)url, 5, nullptr);
+}
+
+bool uploader_is_uploading() { return _uploading; }

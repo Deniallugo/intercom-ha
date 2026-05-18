@@ -19,11 +19,9 @@ CONFIG_WWW = "/config/www"
 HA_API = "http://supervisor/core/api"
 
 # Loaded once at startup from options.json
-sample_rate: int = 48000
+sample_rate: int = 16000
 sample_width: int = 2   # bytes (bits_per_sample / 8)
 channels: int = 1
-
-sessions: dict[str, list[tuple[int, bytes]]] = {}
 
 
 def load_options() -> dict:
@@ -52,25 +50,15 @@ def wav_header(pcm_len: int) -> bytes:
 
 async def handle_intercom(request: web.Request) -> web.Response:
     session_id = request.headers.get("X-Session-ID", str(uuid.uuid4()))
-    chunk_index = int(request.headers.get("X-Chunk-Index", "0"))
-    is_final = request.headers.get("X-Final") == "1"
-    data = await request.read()
 
-    log.info("chunk received  session=%s index=%d size=%d final=%s",
-             session_id[:8], chunk_index, len(data), is_final)
+    pcm = await request.read()
+    if not pcm:
+        log.warning("empty body from session=%s, ignoring", session_id[:8])
+        return web.Response(status=400)
 
-    sessions.setdefault(session_id, []).append((chunk_index, data))
-
-    if not is_final:
-        return web.Response(status=204)
-
-    # Assemble chunks in order
-    chunks = sorted(sessions.pop(session_id), key=lambda x: x[0])
-    pcm = b"".join(d for _, d in chunks)
     duration = len(pcm) / (sample_rate * sample_width * channels)
-
-    log.info("assembling  session=%s chunks=%d pcm=%d bytes duration=%.1fs",
-             session_id[:8], len(chunks), len(pcm), duration)
+    log.info("received  session=%s  pcm=%d bytes  duration=%.1fs",
+             session_id[:8], len(pcm), duration)
 
     opts = load_options()
     ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
@@ -100,10 +88,9 @@ async def handle_intercom(request: web.Request) -> web.Response:
                     "media_content_type": "music",
                 },
             )
-            log.info("HA API  player=%s status=%d", player, resp.status)
+            log.info("HA API  player=%s  status=%d", player, resp.status)
 
     log.info("file kept for download: %s/local/%s", ha_url, filename)
-
     return web.Response(status=204)
 
 
@@ -113,7 +100,7 @@ def main() -> None:
     opts = load_options()
     port = opts.get("port", 9999)
 
-    sample_rate = opts.get("sample_rate", 48000)
+    sample_rate = opts.get("sample_rate", 16000)
     bits = opts.get("bits_per_sample", 16)
     sample_width = bits // 8
     channels = opts.get("channels", 1)
@@ -123,7 +110,7 @@ def main() -> None:
              sample_rate, bits, channels)
     log.info("target players: %s", opts.get("media_players", []))
 
-    app = web.Application()
+    app = web.Application(client_max_size=10 * 1024 * 1024)
     app.router.add_post("/intercom", handle_intercom)
     web.run_app(app, host="0.0.0.0", port=port, print=None)
 
