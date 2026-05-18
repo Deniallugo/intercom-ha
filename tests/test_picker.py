@@ -31,11 +31,19 @@ def fake_ha(monkeypatch):
     return srv.ha
 
 
+def _drop_ducker_state():
+    srv.ducker._snapshots.clear()
+    srv.ducker._deadlines.clear()
+    # Tasks were created in the previous test's event loop, which is now
+    # gone — just drop the references; the loop closure already cancelled them.
+    srv.ducker._tasks.clear()
+
+
 @pytest.fixture(autouse=True)
 def _reset_ducker():
-    srv.ducker._snapshots.clear()
+    _drop_ducker_state()
     yield
-    srv.ducker._snapshots.clear()
+    _drop_ducker_state()
 
 
 @pytest.fixture(autouse=True)

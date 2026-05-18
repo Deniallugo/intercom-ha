@@ -373,15 +373,9 @@ async def handle_intercom(request: web.Request) -> web.Response:
         status = await ha.play_media(player, media_url)
         log.info("HA API  player=%s  status=%d", player, status)
 
-    asyncio.create_task(_restore_after(list(targets), total_duration + 1.5))
+    ducker.schedule_restore(list(targets), total_duration + 1.5)
     asyncio.create_task(_delete_after(filepath, total_duration + 10))
     return web.Response(status=204)
-
-
-async def _restore_after(targets: list[str], delay: float) -> None:
-    await asyncio.sleep(delay)
-    for target in targets:
-        await ducker.restore(target)
 
 
 async def _delete_after(filepath: Path, delay: float) -> None:

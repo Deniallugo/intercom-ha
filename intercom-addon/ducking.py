@@ -1,6 +1,8 @@
+import asyncio
 import logging
+import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
@@ -15,13 +17,17 @@ class Ducker:
     """Snapshots target media_player state, pauses playing ones for the
     duration of a broadcast, and restores them.
 
-    Concurrent broadcasts to the same target: keep the FIRST snapshot;
-    later calls are no-ops. restore() consumes the snapshot.
+    Concurrent broadcasts to the same target: keep the FIRST snapshot; later
+    calls only extend the restore deadline. Exactly one in-flight restore
+    task per target, regardless of how many broadcasts overlapped.
     """
 
-    def __init__(self, ha):
+    def __init__(self, ha, now_func: Callable[[], float] = time.monotonic):
         self._ha = ha
+        self._now = now_func
         self._snapshots: dict[str, Snapshot] = {}
+        self._deadlines: dict[str, float] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
 
     async def snapshot_and_pause(self, targets: list[str]) -> None:
         for target in targets:
@@ -38,6 +44,32 @@ class Ducker:
                     log.warning("ducking pause failed for %s: %s", target, e)
             else:
                 log.info("ducking   %s  state=%s  → no-op", target, snap.state)
+
+    def schedule_restore(self, targets: list[str], delay: float) -> None:
+        """Restore each target `delay` seconds from now. If a restore is
+        already pending for a target, extend its deadline (don't stack tasks).
+        """
+        deadline = self._now() + delay
+        for target in targets:
+            had_deadline = target in self._deadlines
+            self._deadlines[target] = max(
+                self._deadlines.get(target, 0.0), deadline,
+            )
+            if not had_deadline:
+                self._tasks[target] = asyncio.create_task(
+                    self._restore_when_ready(target),
+                )
+
+    async def _restore_when_ready(self, target: str) -> None:
+        while True:
+            now = self._now()
+            deadline = self._deadlines.get(target, 0.0)
+            if now >= deadline:
+                break
+            await asyncio.sleep(deadline - now)
+        self._deadlines.pop(target, None)
+        self._tasks.pop(target, None)
+        await self.restore(target)
 
     async def _snapshot(self, target: str) -> Snapshot:
         try:

@@ -88,3 +88,26 @@ async def test_pause_error_does_not_block_other_targets(fake_ha):
     d = Ducker(fake_ha)
     await d.snapshot_and_pause(["media_player.broken", "media_player.ok"])
     assert fake_ha.pause.await_count == 2
+
+
+async def test_schedule_restore_extends_deadline_no_stacked_tasks(fake_ha):
+    """Two overlapping broadcasts to the same target → ONE restore task,
+    fired after the later deadline (not the earlier)."""
+    import asyncio as _asyncio
+    fake_ha.get_state.return_value = {"state": "playing", "attributes": {}}
+    d = Ducker(fake_ha)
+
+    await d.snapshot_and_pause(["media_player.x"])
+    d.schedule_restore(["media_player.x"], delay=0.05)  # would fire ~50ms
+    # Second broadcast lands before the first restore fires
+    await d.snapshot_and_pause(["media_player.x"])
+    d.schedule_restore(["media_player.x"], delay=0.30)  # extend to ~300ms
+
+    # Wait past the original deadline but before the extended one
+    await _asyncio.sleep(0.15)
+    fake_ha.play.assert_not_called()
+
+    # Wait past the extended deadline
+    await _asyncio.sleep(0.30)
+    assert fake_ha.play.await_count == 1
+    fake_ha.play.assert_awaited_with("media_player.x")
