@@ -38,6 +38,13 @@ def _reset_ducker():
     srv.ducker._snapshots.clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_talkback():
+    srv.talkback._windows.clear()
+    yield
+    srv.talkback._windows.clear()
+
+
 async def test_fetch_media_players_filters_and_maps(fake_ha):
     fake_ha.get_states.return_value = [
         {"entity_id": "media_player.kitchen", "attributes": {"friendly_name": "Kitchen"}},
@@ -388,3 +395,55 @@ async def test_intercom_pauses_playing_target_then_resumes(
     # Restore is scheduled — total duration ~0.246s + 1.5s slack.
     await _asyncio.sleep(2.0)
     fake_ha.play.assert_awaited_once_with("media_player.kitchen")
+
+
+async def test_talkback_routes_to_sender_self_not_normal_route(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    # kitchen-echo's broadcast targets living-echo's self_player, so a reply
+    # window opens for living-echo. living-echo's normal route is the bedroom.
+    # Talkback should override normal route.
+    players_file.write_text(json.dumps({
+        "routes": {
+            "kitchen-echo": ["media_player.living_speaker"],
+            "living-echo":  ["media_player.bedroom"],
+        },
+        "default": [],
+        "aliases": {},
+        "selves": {
+            "kitchen-echo": "media_player.kitchen_speaker",
+            "living-echo":  "media_player.living_speaker",
+        },
+    }))
+    client = await aiohttp_client(lan_app)
+
+    await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "kitchen-echo"},
+    )
+
+    fake_ha.play_media.reset_mock()
+    await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "living-echo"},
+    )
+    called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    assert called_entities == ["media_player.kitchen_speaker"]
+
+
+async def test_no_talkback_window_uses_normal_route(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.normal"]},
+        "default": [],
+        "aliases": {},
+        "selves": {},
+    }))
+    client = await aiohttp_client(lan_app)
+    await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    assert called_entities == ["media_player.normal"]

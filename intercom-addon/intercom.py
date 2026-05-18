@@ -9,6 +9,7 @@ from aiohttp import web
 from ha_client import HAClient
 from chimes import ChimeMixer
 from ducking import Ducker
+from talkback import TalkbackWindows
 import players
 
 ha = HAClient()
@@ -18,6 +19,7 @@ ha = HAClient()
 # so tests can call handlers directly without going through _run().
 mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
 ducker = Ducker(ha)
+talkback = TalkbackWindows()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -327,13 +329,26 @@ async def handle_intercom(request: web.Request) -> web.Response:
              session_id[:8], source, len(pcm), duration)
 
     state = players.load_players()
-    if source in state["routes"]:
+
+    # Talkback: if this source has a live reply window, route ONLY to the
+    # sender's self-player.
+    reply_to = talkback.reply_target(source)
+    if reply_to is not None:
+        log.info("talkback  source=%s  reply-to=%s", source, reply_to)
+        targets = [reply_to]
+    elif source in state["routes"]:
         targets = state["routes"][source]
     else:
         state["routes"][source] = []
         players.save_players(state)
         log.info("enrolled new source=%s; using default targets", source)
         targets = state["default"]
+
+    talkback.record_broadcast(
+        source=source,
+        targets=targets,
+        selves=state["selves"],
+    )
 
     opts = load_options()
     ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
