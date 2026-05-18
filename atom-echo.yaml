@@ -63,7 +63,7 @@ microphone:
 media_player:
   - platform: i2s_audio
     id: atom_player
-    name: "Player"
+    name: "${friendly_name} Player"
     dac_type: external
     mode: mono
     i2s_dout_pin: GPIO22
