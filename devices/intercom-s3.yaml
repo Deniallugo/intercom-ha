@@ -1,0 +1,132 @@
+substitutions:
+  name: intercom-s3
+  friendly_name: Intercom S3
+
+packages:
+  base: !include ../packages/base.yaml
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: true
+  includes:
+    - ../include/recorder.h
+    - ../include/uploader.h
+  on_boot:
+    - priority: 600.0
+      then:
+        - lambda: recorder_init();
+    - priority: 200.0
+      then:
+        - lambda: |-
+            id(s3_mic).add_data_callback([](const std::vector<uint8_t>& data) {
+              recorder_on_data(data.data(), data.size());
+            });
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ESP32S3
+  framework:
+    type: esp-idf
+
+# M5Stack VoiceS3R uses an ESP32-S3-PICO module with 8 MB octal PSRAM.
+psram:
+  mode: octal
+  speed: 80MHz
+
+# logger / api / ota / wifi / captive_portal come from packages/base.yaml
+
+# ── ES8311 codec config (mic ADC + DAC → internal NS4150 → internal speaker) ─
+
+i2c:
+  - id: bus_a
+    sda: GPIO45
+    scl: GPIO0
+    frequency: 400kHz
+
+audio_dac:
+  - platform: es8311
+    id: es8311_codec
+    i2c_id: bus_a
+    address: 0x18
+
+# ── NS4150 internal amp enable (GPIO18) ──────────────────────────────────────
+# Step 1: enabled — internal speaker active for first-boot smoke testing.
+# Later (when external amps are wired): switch this OFF to mute internal amp.
+
+switch:
+  - platform: gpio
+    pin: GPIO18
+    id: internal_amp_enable
+    name: "Internal Amp"
+    restore_mode: ALWAYS_ON
+
+# ── Single shared I²S bus (mic + speaker) ────────────────────────────────────
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO3
+    i2s_bclk_pin: GPIO17
+    i2s_mclk_pin: GPIO11
+
+microphone:
+  - platform: i2s_audio
+    id: s3_mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO48
+    adc_type: external
+    pdm: false
+    sample_rate: 16000
+    correct_dc_offset: true
+
+speaker:
+  - platform: i2s_audio
+    id: s3_speaker
+    i2s_audio_id: i2s_bus
+    i2s_dout_pin: GPIO4
+    dac_type: external
+    bits_per_sample: 16bit
+    sample_rate: 16000
+
+# ── Media player (HA-controllable playback) ──────────────────────────────────
+
+media_player:
+  - platform: speaker
+    id: s3_player
+    name: "${friendly_name} Player"
+    buffer_size: 32768
+    announcement_pipeline:
+      speaker: s3_speaker
+      format: WAV
+
+# ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO41
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    name: "Button"
+    on_press:
+      - if:
+          condition:
+            lambda: 'return uploader_is_uploading();'
+          then:
+            - logger.log: "button ignored — upload in progress"
+          else:
+            - lambda: |-
+                recorder_start();
+                id(s3_mic).start();
+                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
+    on_release:
+      - delay: 2s
+      - lambda: |-
+          id(s3_mic).stop();
+          recorder_stop();
+      - wait_until:
+          condition:
+            lambda: 'return !uploader_is_uploading();'
+          timeout: 10s
