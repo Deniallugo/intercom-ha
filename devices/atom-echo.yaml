@@ -80,10 +80,53 @@ media_player:
   - platform: speaker
     id: atom_player
     name: "${friendly_name} Player"
-    buffer_size: 32768
+    # 8 KB = 0.25 s at 16 kHz/16-bit mono — plenty for announcements. Kept small
+    # because this is a no-PSRAM ESP32 and the I2S DMA descriptors must come from
+    # the same scarce internal DMA-capable RAM. A large ring buffer here starves
+    # the speaker's DMA alloc and wedges it in a "retry forever" loop (needs reboot).
+    buffer_size: 8192
     announcement_pipeline:
       speaker: atom_speaker
       format: WAV
+
+# ── Memory diagnostics + DMA watchdog ──────────────────────────────────────────
+# I2S DMA descriptors must be allocated from internal DMA-capable RAM. On this
+# no-PSRAM ESP32 that pool fragments over time; once it can't satisfy the
+# speaker's DMA alloc, the speaker task retries forever and only a reboot
+# recovers it. The sensor lets us watch the pool; the interval auto-reboots
+# before it wedges so no manual restart is needed.
+
+sensor:
+  - platform: template
+    name: "Free DMA heap"
+    unit_of_measurement: "B"
+    update_interval: 10s
+    lambda: 'return heap_caps_get_free_size(MALLOC_CAP_DMA);'
+  # The metric that actually predicts an i2s_alloc_dma_desc failure: the largest
+  # *contiguous* DMA-capable block. Total free can be high (e.g. 135 KB) while
+  # this drops to a few KB under fragmentation, which is what wedges the speaker.
+  - platform: template
+    name: "Largest DMA block"
+    unit_of_measurement: "B"
+    update_interval: 10s
+    lambda: 'return heap_caps_get_largest_free_block(MALLOC_CAP_DMA);'
+
+interval:
+  - interval: 5s
+    then:
+      - lambda: |-
+          static uint8_t lowhits = 0;
+          // Watch the largest contiguous block, not total free — fragmentation,
+          // not exhaustion, is what starves the I2S DMA descriptor allocation.
+          size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+          if (block < 8000) {
+            if (++lowhits >= 3) {
+              ESP_LOGE("watchdog", "Largest DMA block too small (%u B), rebooting", (unsigned) block);
+              App.safe_reboot();
+            }
+          } else {
+            lowhits = 0;
+          }
 
 # ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
 

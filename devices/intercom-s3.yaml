@@ -23,6 +23,12 @@ esphome:
             id(s3_mic).add_data_callback([](const std::vector<uint8_t>& data) {
               recorder_on_data(data.data(), data.size());
             });
+    # Kick the wake-word engine into listening mode. As of ESPHome 2026.x
+    # mww does NOT auto-start — without this call it just sits configured
+    # but never actually consumes mic data.
+    - priority: 100.0
+      then:
+        - micro_wake_word.start
 
 esp32:
   variant: esp32s3
@@ -46,7 +52,14 @@ psram:
 # so logs go through USB CDC.
 logger:
   hardware_uart: USB_CDC
-  level: DEBUG
+  level: VERBOSE
+  logs:
+    # Keep noisy components quieter so micro_wake_word lines stay readable.
+    component: DEBUG
+    sensor: DEBUG
+    scheduler: DEBUG
+    api.service: DEBUG
+    api.connection: DEBUG
 
 # ── I²C for ES8311 codec ─────────────────────────────────────────────────────
 
@@ -65,7 +78,7 @@ audio_dac:
     id: es8311_dac
     bits_per_sample: 16bit
     sample_rate: 48000
-    mic_gain: 18DB              # was default 42DB — far too sensitive
+    mic_gain: 36DB              # default — needed for wake-word reliability; dial back later if intercom clips
 
 # ── NS4150 internal Class-D amp enable ───────────────────────────────────────
 # GPIO18 controls the NS4150 amp on the VoiceS3R. Without this, the codec's
@@ -79,6 +92,12 @@ switch:
     restore_mode: ALWAYS_ON
 
 # ── I²S bus shared between mic and speaker ───────────────────────────────────
+# The ES8311 is ONE full-duplex codec on ONE physical I²S bus, so mic and
+# speaker share a SINGLE i2s_audio instance (matches M5Stack's reference YAML
+# for the EchoS3R/VoiceS3R). The I2SAudioComponent guards its port with one
+# mutex, so the mic (RX) and speaker (TX) can't be live at the same time — they
+# are time-multiplexed: the wake word is stopped before playback and restarted
+# after (see the media_player on_announcement / on_idle handlers below).
 
 i2s_audio:
   - id: i2s_bus
@@ -122,6 +141,31 @@ media_player:
       format: FLAC
       sample_rate: 48000
       num_channels: 1
+    # ── Shared-bus coordination ──────────────────────────────────────────────
+    # Mic and speaker share one i2s_audio instance (one mutex), so they can't be
+    # live simultaneously. The always-on wake word holds the mic (RX); before the
+    # speaker (TX) can play we must stop the wake word and wait for the mic to
+    # actually release the bus, else the speaker hits "Parent bus is busy" and
+    # retries forever. After playback we resume listening. (M5Stack reference
+    # does this via media_player on_announcement / on_idle.)
+    on_announcement:
+      - if:
+          condition:
+            microphone.is_capturing:
+          then:
+            - micro_wake_word.stop:
+            - wait_until:
+                condition:
+                  not:
+                    microphone.is_capturing:
+                timeout: 3s
+    on_idle:
+      - if:
+          condition:
+            not:
+              micro_wake_word.is_running:
+          then:
+            - micro_wake_word.start:
 
 # ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
 
@@ -154,3 +198,29 @@ binary_sensor:
           condition:
             lambda: 'return !uploader_is_uploading();'
           timeout: 10s
+
+# ── HA Voice Assistant satellite ─────────────────────────────────────────────
+
+voice_assistant:
+  id: va
+  microphone: s3_mic
+  media_player: s3_player
+  noise_suppression_level: 2
+  auto_gain: 31dBFS
+  volume_multiplier: 2.0
+
+# ── Wake-word dispatch ───────────────────────────────────────────────────────
+# v1: single wake word ("okay nabu") → HA Assist pipeline via voice_assistant.
+# Later: add a second model for intercom (records + POSTs to addon) — see
+# spec docs/superpowers/specs/2026-05-18-kitchen-amp-and-terrace-s3-design.md.
+
+micro_wake_word:
+  id: mww
+  microphone: s3_mic
+  models:
+    - model: okay_nabu
+      id: okay_nabu
+      probability_cutoff: 0.7      # default 0.97 was too strict at our gain level
+  on_wake_word_detected:
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
