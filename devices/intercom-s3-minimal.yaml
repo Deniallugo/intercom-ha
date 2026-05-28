@@ -1,9 +1,5 @@
-# Minimal boot test for the M5Stack VoiceS3R / EchoS3R.
-# No audio, no I2C, no recorder/uploader. Just: boot → WiFi → API.
-# If this works, we add components back one at a time in intercom-s3.yaml.
-
 substitutions:
-  name: esphome-web-0f4600
+  name: esphome-web-0f4600  
   friendly_name: Intercom S3
 
 packages:
@@ -13,8 +9,20 @@ packages:
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
-  name_add_mac_suffix: true
   min_version: 2026.1.0
+  includes:
+    - ../include/recorder.h
+    - ../include/uploader.h
+  on_boot:
+    - priority: 600.0
+      then:
+        - lambda: recorder_init();
+    - priority: 200.0
+      then:
+        - lambda: |-
+            id(s3_mic).add_data_callback([](const std::vector<uint8_t>& data) {
+              recorder_on_data(data.data(), data.size());
+            });
 
 esp32:
   variant: esp32s3
@@ -22,16 +30,127 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
+    # Cache layout — required to avoid boot loops on the EchoS3R / VoiceS3R
+    # per M5Stack's reference YAML.
     sdkconfig_options:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
 
+# 8 MB octal PSRAM on the S3-PICO module.
 psram:
   mode: octal
   speed: 80MHz
 
-# Try ESPHome's default UART pick first. If still no logs, change to USB_CDC
-# or USB_SERIAL_JTAG and reflash.
+# Override base.yaml's empty logger — VoiceS3R has no UART pins broken out,
+# so logs go through USB CDC.
 logger:
+  hardware_uart: USB_CDC
   level: DEBUG
+
+# ── I²C for ES8311 codec ─────────────────────────────────────────────────────
+
+i2c:
+  - id: i2c0
+    sda:
+      number: GPIO45
+      ignore_strapping_warning: true
+    scl:
+      number: GPIO0
+      ignore_strapping_warning: true
+    scan: false
+
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    bits_per_sample: 16bit
+    sample_rate: 48000
+    mic_gain: 18DB              # was default 42DB — far too sensitive
+
+# ── NS4150 internal Class-D amp enable ───────────────────────────────────────
+# GPIO18 controls the NS4150 amp on the VoiceS3R. Without this, the codec's
+# analog output reaches the amp but the amp is off → no sound from the speaker.
+
+switch:
+  - platform: gpio
+    pin: GPIO18
+    id: internal_amp_enable
+    name: "Internal Amp"
+    restore_mode: ALWAYS_ON
+
+# ── I²S bus shared between mic and speaker ───────────────────────────────────
+
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin:
+      number: GPIO3
+      ignore_strapping_warning: true
+    i2s_bclk_pin: GPIO17
+    i2s_mclk_pin: GPIO11
+
+microphone:
+  - platform: i2s_audio
+    id: s3_mic
+    i2s_audio_id: i2s_bus
+    i2s_din_pin: GPIO4            # Mic data from codec ADC (ASDOUT silkscreen)
+    adc_type: external
+    bits_per_sample: 16bit
+    sample_rate: 16000
+    correct_dc_offset: true
+
+speaker:
+  - platform: i2s_audio
+    id: s3_speaker
+    i2s_audio_id: i2s_bus
+    i2s_dout_pin: GPIO48          # Speaker data to codec DAC (DSDIN silkscreen)
+    dac_type: external
+    bits_per_sample: 16bit
+    sample_rate: 48000
+    channel: left                  # VoiceS3R has only one internal speaker
+    audio_dac: es8311_dac
+
+# ── Media player (HA-controllable playback) ──────────────────────────────────
+
+media_player:
+  - platform: speaker
+    id: s3_player
+    name: "${friendly_name} Player"
+    volume_min: 0.5
+    volume_max: 0.9
+    announcement_pipeline:
+      speaker: s3_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+
+# ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO41
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    name: "Button"
+    on_press:
+      - if:
+          condition:
+            lambda: 'return uploader_is_uploading();'
+          then:
+            - logger.log: "button ignored — upload in progress"
+          else:
+            - lambda: |-
+                recorder_start();
+                id(s3_mic).start();
+                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
+    on_release:
+      - delay: 2s
+      - lambda: |-
+          id(s3_mic).stop();
+          recorder_stop();
+      - wait_until:
+          condition:
+            lambda: 'return !uploader_is_uploading();'
+          timeout: 10s
