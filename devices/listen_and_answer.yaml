@@ -3,6 +3,7 @@ substitutions:
   friendly_name: Atom Echo
 
 packages:
+  secrets: !include secrets-atom.yaml
   base: !include ../packages/base.yaml
 
 esphome:

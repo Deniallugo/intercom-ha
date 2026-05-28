@@ -1,23 +1,30 @@
 # Shared baseline for every ESPHome device in this repo.
-# Devices include via:  packages:  base: !include packages/base.yaml
+# Devices include via:
+#   packages:
+#     secrets: !include secrets-<device>.yaml   # defines substitutions
+#     base:    !include ../packages/base.yaml   # consumes them
 #
-# Requires the device YAML to define a `${name}` substitution before this
-# package is merged (used by the AP fallback SSID).
+# Requires the device YAML (or a secrets package loaded first) to define:
+#   ${name}                — used by AP fallback SSID
+#   ${wifi_ssid}           — Wi-Fi SSID
+#   ${wifi_password}       — Wi-Fi password
+#   ${ap_password}         — AP fallback password
+#   ${api_encryption_key}  — HA API encryption key
 
 logger:
 
 api:
   encryption:
-    key: !secret api_encryption_key
+    key: ${api_encryption_key}
 
 ota:
   - platform: esphome
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  ssid: ${wifi_ssid}
+  password: ${wifi_password}
   ap:
     ssid: "${name} Fallback"
-    password: !secret ap_password
+    password: ${ap_password}
 
 captive_portal:

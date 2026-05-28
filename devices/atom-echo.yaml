@@ -3,6 +3,7 @@ substitutions:
   friendly_name: Atom Echo
 
 packages:
+  secrets: !include secrets-atom.yaml
   base: !include ../packages/base.yaml
 
 esphome:
@@ -15,7 +16,11 @@ esphome:
   on_boot:
     - priority: 600.0
       then:
-        - lambda: recorder_init();
+        - lambda: |-
+            recorder_init();
+            // PDM mic on the Atom Echo has no PGA; boost recorded audio in
+            // software. 2/1 = +6 dB. Bump to (4, 1) for +12 dB if still quiet.
+            recorder_set_gain(2, 1);
     - priority: 200.0
       then:
         - lambda: |-
