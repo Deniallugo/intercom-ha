@@ -365,7 +365,7 @@ include <modules/front_shell.scad>
 include <modules/rear_plate.scad>
 include <modules/button_cap.scad>
 
-part = is_undef($part) ? "all" : $part;
+part = "all";   // override on the CLI: -D 'part="front"' (NOT a $-variable — -D can't set those)
 
 if (part == "front")       front_shell();
 else if (part == "rear")   rear_plate();
