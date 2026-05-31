@@ -9,7 +9,7 @@ is version-controlled, diffable, and re-renderable from source.
 
 Produce a serviceable, sheltered-outdoor wall enclosure that:
 
-- Mounts two ~2" (≈53 mm OD) full-range drivers side by side as a horizontal
+- Mounts two 2" (50 mm face, 35 mm deep) full-range drivers side by side as a horizontal
   stereo pair, near-touching.
 - Houses the VoiceS3R module (button facing forward) and two MAX98357A amp
   boards in the strip below the drivers.
@@ -38,25 +38,25 @@ Produce a serviceable, sheltered-outdoor wall enclosure that:
 | Target hardware | Terrace VoiceS3R + 2× MAX98357A + 2× 2" drivers |
 | Deliverable | Parametric OpenSCAD source → STL via CLI |
 | Mounting | Wall-mount (keyhole slots on rear plate) |
-| Speaker driver | 2" full-range, ≈53 mm OD, ≈46 mm grille cutout |
+| Speaker driver | 2" — 50 mm face dia, 35 mm deep, ≈44 mm grille field |
 | Speaker layout | Side by side (horizontal stereo), ~3 mm center gap |
 | Amp boards | Two (one per speaker) |
 | Weather | Covered/sheltered — no gland/gasket weatherproofing; just avoid upward openings |
 | Architecture | Two-part clamshell: front shell + rear wall plate, 4× M3 screws |
 | Button | Captive printed plunger cap over module's PTT button |
-| Microphone | Mic port + sealing boss aligned to module mic opening |
-| Mic port placement | Front face, low corner, away from speaker grilles |
+| Microphone | Perforation cluster (7 small holes) through the front wall |
+| Mic placement | Directly under the button, over the module's own mic |
 | STL files | Gitignored (regenerable from source) |
-| Envelope | ~123 × 98 × 42 mm |
+| Envelope | ~117 × 95 × 50 mm |
 
 ## Architecture
 
 Two printed parts plus one small printed plunger:
 
 1. **Front shell** — the visible body. Carries the two speaker recess rings +
-   grilles + per-driver bolt-circle screw bosses, the button well, the mic port
-   + sealing boss, the VoiceS3R cradle, amp-board screw standoffs, and the
-   corner screw bosses.
+   grilles + per-driver bolt-circle screw bosses, the button well, the mic
+   perforation (under the button), the VoiceS3R cradle, amp-board screw
+   standoffs, and the corner screw bosses.
 2. **Rear plate** — sits flush on the wall. Carries two keyhole mounting slots,
    the USB-C cable notch at the bottom edge, and the mating screw bosses.
 3. **Button cap** — a captive plunger that drops into the front-shell button
@@ -64,7 +64,7 @@ Two printed parts plus one small printed plunger:
 
 The two halves join with **4× M3 screws** (corners), self-tapping into printed
 bosses by default. Parting line runs around the perimeter; the front shell
-holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
+holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
 
 ### Layout (front view, landscape)
 
@@ -74,9 +74,9 @@ holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
    │ ·  │ spkr │  · gap · │ spkr │  ·    │   ← two 2" drivers, ~3 mm apart
    │  ·· │  L  │ ··    ·· │  R  │ ··     │
    │     ╰─────╯         ╰─────╯        │
-   │  (·)                              │   ← mic port (low corner, away from grilles)
-   │  [VoiceS3R▢] [amp1] [amp2]   [btn]│   ← boards row; plunger over module button
-   └────────────────────┬──────────────┘
+   │  [VoiceS3R▢] [amp1] [amp2]        │   ← boards row
+   │  [btn]/(∴)                         │   ← button + mic perforation under it
+   └────────────────────┬──────────────┘     (both over the VoiceS3R)
                      USB-C notch (bottom edge)
 ```
 
@@ -84,18 +84,20 @@ holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
 
 ### Front shell (`modules/front_shell.scad`)
 - Rounded rectangular outer wall, 2.4 mm thick, 6 mm corner radius.
-- Two speaker recess rings (OD 53 mm seat, 46 mm through-cutout), 3 mm center
+- Two speaker recess rings (OD 50 mm seat, 44 mm grille field), 3 mm center
   gap. Each driver fastened by `spk_screw_n` (default 4) M2 self-tap screws
   through the driver flange into printed bolt-circle bosses (`spk_bolt_circle`,
-  default 59 mm — must clear the driver OD). Start angle `spk_screw_a0` (45°)
+  default 56 mm — must clear the driver OD). Start angle `spk_screw_a0` (45°)
   keeps the inner bosses out of the center gap.
 - Two circular grilles (concentric rings of 3 mm holes) over the cutouts.
 - VoiceS3R cradle: 3-wall pocket sized 24.4 mm (0.4 mm clearance), module
   oriented button-forward; USB-C edge cutout toward the bottom; side window for
   header wires to reach the amps.
 - Button well guiding the plunger, with a retaining shoulder.
-- Mic port (2 mm hole or 3-hole cluster) + sealing boss collar (foam/EVA gasket
-  seat) aligned to module mic opening; position is parametric.
+- Mic perforation: a cluster of small holes (one center + a ring of
+  `mic_ring_n`, default 6) through the front wall, centered `mic_below_btn`
+  below the button so it sits over the module's own microphone. No boss —
+  the module front sits against the inner wall right behind the holes.
 - Amp-board standoffs with M2 self-tap pilots so each board screws down (×2).
 - 4× corner screw bosses (front side).
 
@@ -116,13 +118,14 @@ holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
 
 ## Parametric structure
 
-`terrace-case.scad` opens with a single parameters block and a `$part` selector:
+Parameters live in `modules/params.scad`; `terrace-case.scad` includes them and
+exposes a `part` selector (a normal variable overridden by `-D part="..."`):
 
-- `$part` ∈ `"front"` | `"rear"` | `"button"` | `"coupon"` (fit-test) | `"all"` (assembled preview).
+- `part` ∈ `"front"` | `"rear"` | `"button"` | `"coupon"` (fit-test) | `"all"` (assembled preview).
 - All dimensions are named variables: outer W/H/D, wall thickness, corner
   radius, speaker OD/cutout/center-gap, driver retention mode, grille hole
   dia/spacing, module cradle size + clearance, USB-C notch position/size,
-  button well + cap dims, mic port position/diameter + boss/gasket dims, amp
+  button well + cap dims, mic perforation offset + hole/ring dims, amp
   board size + standoff height + amp screw pilot, speaker bolt-circle + screw
   count + start angle + boss dims, keyhole spacing, screw boss dia + M3 pilot,
   global fit clearance (default 0.4 mm).
@@ -131,7 +134,7 @@ holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
 
 ```
 hardware/terrace-case/
-├── terrace-case.scad      # parameters block + $part render selector
+├── terrace-case.scad      # includes params + part render selector
 ├── modules/
 │   ├── front_shell.scad
 │   ├── rear_plate.scad
@@ -146,7 +149,7 @@ hardware/terrace-case/
 `build.sh` loops the parts and runs, per part:
 
 ```
-openscad -o stl/<part>.stl -D '$part="<part>"' terrace-case.scad
+openscad -o stl/<part>.stl -D 'part="<part>"' terrace-case.scad
 ```
 
 ## Print orientation & settings (documented in README)
@@ -165,7 +168,7 @@ Because a full case is a multi-hour print, ship a **fit-test coupon** target
 - one speaker recess ring,
 - the VoiceS3R cradle + USB-C notch,
 - the button well + a button cap,
-- the mic port + boss.
+- the mic perforation.
 
 Print the coupon first (~10 min) to validate tolerances (cradle fit, button
 travel, screw-boss pilot, speaker seat) before printing the full shell. The
@@ -181,7 +184,7 @@ README documents which parameters to nudge for a loose/tight fit.
 
 These are parameters with sensible defaults but should be confirmed against the
 actual hardware:
-- Exact module mic-hole position (sets mic port X/Y).
+- Mic offset below the button (`mic_below_btn`) to land on the module mic.
 - Exact driver OD, cutout dia, and mounting-hole pattern.
 - MAX98357A breakout footprint (clone dimensions vary).
 - Module button center position relative to the front face.

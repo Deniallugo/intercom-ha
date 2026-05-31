@@ -27,7 +27,7 @@ All in [modules/params.scad](modules/params.scad). Common edits:
 | `spk_od`, `spk_cut` | driver outer dia / grille field dia |
 | `spk_gap` | gap between the two drivers (lower = tighter) |
 | `mod_w`, `mod_d` | VoiceS3R footprint / depth |
-| `mic_x()`, `mic_y()` | mic port position — set after measuring the module |
+| `mic_below_btn` | mic perforation offset below the button — tune to the module mic |
 | `clr` | global fit clearance (raise if parts are tight) |
 | `keyhole_spacing` | wall-screw spacing |
 
@@ -58,18 +58,16 @@ button cap:
 - 4× M3 screws (self-tap into the corner front/rear bosses)
 - 8× M2 self-tap screws for the drivers (4 per driver, into the bolt-circle bosses)
 - 8× M2 self-tap screws for the amp boards (4 per board, into the standoffs)
-- Thin EVA/foam ring for the mic boss gasket
 - 2× wall screws for the keyhole slots
 
 ## Assembly
 
-1. Press the EVA ring onto the mic boss.
-2. Seat the two drivers into the front-shell rings; fasten each with 4× M2 through the flange into the bolt-circle bosses; solder driver leads to the amp `+/−`.
-3. Drop the VoiceS3R into the cradle button-forward; route header wires through the side window to the amps.
-4. Seat the amp boards on their standoffs; fasten each with 4× M2 into the standoff pilots.
-5. Drop the button cap into its well from the front (snaps captive).
-6. Hang the rear plate on two wall screws via the keyholes.
-7. Mate front to rear; drive 4× M3 from the back.
+1. Seat the two drivers into the front-shell rings; fasten each with 4× M2 through the flange into the bolt-circle bosses; solder driver leads to the amp `+/−`.
+2. Drop the VoiceS3R into the cradle button-forward (its mic ends up behind the perforation under the button); route header wires through the side window to the amps.
+3. Seat the amp boards on their standoffs; fasten each with 4× M2 into the standoff pilots.
+4. Drop the button cap into its well from the front (snaps captive).
+5. Hang the rear plate on two wall screws via the keyholes.
+6. Mate front to rear; drive 4× M3 from the back.
 
 Then run the full suite + build and confirm STLs are produced:
 ```bash

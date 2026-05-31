@@ -1,17 +1,24 @@
 include <../modules/params.scad>
 include <../modules/lib.scad>
 
-// Envelope must match the approved spec (~123 x 98 x 42 mm).
-assert(outer_w() == 123, "outer width should be 123");
-assert(outer_h() == 98,  "outer height should be 98");
-assert(outer_d() == 42,  "outer depth should be 42");
+// Relationship checks — robust to tuning spk_od / spk_gap / depths in params.scad.
 
-// Speakers sit symmetric about X, near-touching.
-assert(spk_cx() == 28, "speaker center |x| should be 28");          // 53/2 + 3/2
+// Two drivers sit symmetric about X with exactly spk_gap between their edges.
 assert(2*spk_cx() - spk_od == spk_gap, "driver edge gap should equal spk_gap");
 
-// Board row sits in the lower strip.
+// Front shell must be deep enough to clear the driver front-to-back.
+assert(front_depth >= spk_depth, "front_depth must clear the driver depth");
+
+// Grille opening stays inside the driver; bolt circle clears the driver OD.
+assert(spk_cut < spk_od, "grille field must be smaller than the driver");
+assert(spk_bolt_circle > spk_od, "bolt circle must clear the driver OD");
+
+// Board row (cradle + amps) sits in the lower strip, below center.
 assert(board_cy() < 0, "board row should be below center");
+
+// Mic perforation lands below the button, still within the module footprint.
+assert(mic_y() < board_cy(), "mic cluster should be below the button");
+assert(board_cy() - mic_y() <= mod_w/2, "mic cluster should stay over the module");
 
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);

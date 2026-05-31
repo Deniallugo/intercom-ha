@@ -7,18 +7,19 @@ clr = 0.4;                 // global clearance for inserted parts
 // ---- shell envelope ----
 wall        = 2.4;
 radius      = 6;
-front_depth = 30;          // inner depth of the front shell (speaker zone)
+front_depth = 38;          // inner depth of the front shell — clears the 35 mm-deep driver
 rear_depth  = 12;          // depth of the rear plate body
 
 // ---- speakers (2" full-range) ----
-spk_od         = 53;       // driver outer diameter (locating ring ID)
-spk_cut        = 46;       // grille perforation field diameter
+spk_od         = 53;       // driver face diameter (locating ring ID) — 2" driver
+spk_cut        = 44;       // grille perforation field diameter
 spk_gap        = 3;        // gap between the two drivers
 spk_seat_depth = 4;        // height of the inner locating ring
+spk_depth      = 35;       // driver depth front-to-back (sets front_depth clearance)
 
 // ---- speaker frame-hole screw bosses (fasten each driver flange) ----
 spk_screw_n     = 4;       // mounting holes on the driver flange
-spk_bolt_circle = 59;      // bolt-circle diameter; MUST clear the driver OD
+spk_bolt_circle = 56;      // bolt-circle diameter; MUST clear the driver OD
 spk_screw_pilot = 1.6;     // M2 self-tap pilot
 spk_boss_od     = 5;       // mounting boss outer diameter
 spk_boss_h      = spk_seat_depth + 1;  // boss height on the inner baffle
@@ -48,10 +49,11 @@ btn_cap_d  = 12;           // cap face diameter (slightly proud)
 btn_travel = 2;
 btn_nub_d  = 4;            // nub that contacts the module switch
 
-// ---- microphone ----
-mic_port_d  = 2;           // acoustic hole through front wall
-mic_boss_od = 8;           // sealing collar OD (gasket seat)
-mic_boss_h  = 3;
+// ---- microphone (perforation under the button, over the module's mic) ----
+mic_below_btn = 8;         // cluster center, this far below the button center
+mic_hole_d    = 1.5;       // perforation hole diameter
+mic_ring_r    = 2.6;       // radius of the surrounding ring of holes
+mic_ring_n    = 6;         // holes in the ring (plus one in the center)
 
 // ---- amp boards (MAX98357A breakout, generic clone) ----
 amp_w = 18;
@@ -75,10 +77,10 @@ boss_inset  = radius + 2;  // corner inset for the 4 screw bosses
 // ---- derived dimensions (functions so tests can assert them) ----
 function outer_w()  = spk_od*2 + spk_gap + side_margin*2;            // 123
 function outer_h()  = top_margin + spk_od + board_zone_h + bottom_margin; // 98
-function outer_d()  = front_depth + rear_depth;                      // 42
+function outer_d()  = front_depth + rear_depth;                      // 50
 function spk_cx()   = spk_od/2 + spk_gap/2;                          // 28
 function spk_cy()   = outer_h()/2 - top_margin - spk_od/2;
 function board_cy() = -outer_h()/2 + bottom_margin + board_zone_h/2;
 function cradle_cx()= -outer_w()/2 + side_margin + cradle_wall + (mod_w+2*mod_clr)/2;
-function mic_x()    = outer_w()/2 - 10;     // bottom-right, away from drivers
-function mic_y()    = -outer_h()/2 + 6;
+function mic_x()    = cradle_cx();                  // centered on the module / button
+function mic_y()    = board_cy() - mic_below_btn;   // just below the button

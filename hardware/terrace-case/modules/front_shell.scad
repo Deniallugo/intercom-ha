@@ -42,15 +42,13 @@ module button_well() {
     }
 }
 
-// acoustic hole through the front wall (subtracted)
-module mic_port() {
-    translate([mic_x(), mic_y(), -0.1]) cylinder(h = wall + 0.2, d = mic_port_d);
-}
-// sealing collar on the inside, gasket seats on its top face (added)
-module mic_boss() {
-    translate([mic_x(), mic_y(), wall]) difference() {
-        cylinder(h = mic_boss_h, d = mic_boss_od);
-        translate([0, 0, -0.1]) cylinder(h = mic_boss_h + 0.2, d = mic_port_d + 0.6);
+// mic perforation: a small cluster of holes through the front wall, centered
+// just below the button, directly over the module's microphone (subtracted).
+module mic_perf() {
+    translate([mic_x(), mic_y(), -0.1]) linear_extrude(wall + 0.2) {
+        circle(d = mic_hole_d);
+        for (i = [0 : mic_ring_n - 1])
+            rotate(i*360/mic_ring_n) translate([mic_ring_r, 0]) circle(d = mic_hole_d);
     }
 }
 
@@ -91,13 +89,12 @@ module front_shell() {
             speaker_seats();
             speaker_screw_bosses();
             voicesr_cradle();
-            mic_boss();
             amp_mounts();
             front_bosses();
         }
         grille_cut();
         button_well();
-        mic_port();
+        mic_perf();
     }
 }
 
