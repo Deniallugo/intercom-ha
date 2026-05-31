@@ -33,6 +33,15 @@ module voicesr_cradle() {
     }
 }
 
+// well bored through the front wall, centered over the module button,
+// with an internal retaining shoulder the cap's lip catches behind.
+module button_well() {
+    translate([cradle_cx(), board_cy(), -0.1]) {
+        cylinder(h = wall + 0.2, d = btn_well_d);                       // bore
+        translate([0, 0, wall]) cylinder(h = 1.2, d = btn_well_d + 1.6); // shoulder pocket
+    }
+}
+
 module front_shell() {
     difference() {
         union() {
@@ -41,5 +50,6 @@ module front_shell() {
             voicesr_cradle();
         }
         grille_cut();
+        button_well();
     }
 }
