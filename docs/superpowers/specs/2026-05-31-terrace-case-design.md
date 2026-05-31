@@ -9,7 +9,7 @@ is version-controlled, diffable, and re-renderable from source.
 
 Produce a serviceable, sheltered-outdoor wall enclosure that:
 
-- Mounts two 2" (50 mm face, 35 mm deep) full-range drivers side by side as a horizontal
+- Mounts two 2" (53 mm face, 35 mm deep) full-range drivers side by side as a horizontal
   pair, near-touching (driven dual mono — both play the same mix).
 - Houses the VoiceS3R module (button facing forward) and two MAX98357A amp
   boards in the strip below the drivers.
@@ -38,7 +38,7 @@ Produce a serviceable, sheltered-outdoor wall enclosure that:
 | Target hardware | Terrace VoiceS3R + 2× MAX98357A + 2× 2" drivers |
 | Deliverable | Parametric OpenSCAD source → STL via CLI |
 | Mounting | Wall-mount (keyhole slots on rear plate) |
-| Speaker driver | 2" — 50 mm face dia, 35 mm deep, ≈44 mm grille field |
+| Speaker driver | 2" — 53 mm face dia, 35 mm deep, ≈44 mm grille field |
 | Speaker layout | Side by side (horizontal pair, dual mono), ~3 mm center gap |
 | Amp boards | Two (one per speaker) |
 | Weather | Covered/sheltered — no gland/gasket weatherproofing; just avoid upward openings |
@@ -47,7 +47,7 @@ Produce a serviceable, sheltered-outdoor wall enclosure that:
 | Microphone | Perforation cluster (7 small holes) through the front wall |
 | Mic placement | Directly under the button, over the module's own mic |
 | STL files | Gitignored (regenerable from source) |
-| Envelope | ~117 × 95 × 50 mm |
+| Envelope | ~123 × 98 × 50 mm |
 
 ## Architecture
 
@@ -84,7 +84,7 @@ holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
 
 ### Front shell (`modules/front_shell.scad`)
 - Rounded rectangular outer wall, 2.4 mm thick, 6 mm corner radius.
-- Two speaker recess rings (OD 50 mm seat, 44 mm grille field), 3 mm center
+- Two speaker recess rings (OD 53 mm seat, 44 mm grille field), 3 mm center
   gap. Each driver fastened by `spk_screw_n` (default 4) M2 self-tap screws
   through the driver flange into printed bolt-circle bosses (`spk_bolt_circle`,
   default 56 mm — must clear the driver OD). Start angle `spk_screw_a0` (45°)
@@ -176,7 +176,7 @@ openscad -o stl/<part>.stl -D 'part="<part>"' terrace-case.scad
 ## Verification (physical)
 
 Because a full case is a multi-hour print, ship a **fit-test coupon** target
-(`$part="coupon"`) containing just:
+(`part="coupon"`) containing just:
 - one speaker recess ring,
 - the VoiceS3R cradle + USB-C notch,
 - the button well + a button cap,
