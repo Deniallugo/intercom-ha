@@ -54,7 +54,19 @@ module mic_boss() {
     }
 }
 
-// two amp boards in a row, right of the cradle, on short standoff posts
+// frame-hole screw bosses around each driver: the flange screws down into
+// these from inside the case (bolt circle clears the driver OD).
+module speaker_screw_bosses() {
+    for (sx = [-1, 1])
+        translate([sx*spk_cx(), spk_cy(), wall])
+            for (i = [0 : spk_screw_n - 1])
+                rotate(spk_screw_a0 + i*360/spk_screw_n)
+                    translate([spk_bolt_circle/2, 0, 0])
+                        screw_boss(spk_boss_h, spk_boss_od, spk_screw_pilot);
+}
+
+// two amp boards in a row, right of the cradle, on standoff posts with
+// M2 self-tap pilots so each board screws down.
 module amp_mounts() {
     base_x = cradle_cx() + (mod_w/2) + cradle_wall + 6 + amp_w/2;
     for (i = [0 : 1]) {
@@ -62,7 +74,7 @@ module amp_mounts() {
         translate([bx, board_cy(), wall])
             for (sx = [-1, 1], sy = [-1, 1])
                 translate([sx*(amp_w/2 - 2), sy*(amp_l/2 - 2), 0])
-                    cylinder(h = amp_standoff_h, d = 3);
+                    screw_boss(amp_standoff_h, amp_standoff_od, amp_screw_pilot);
     }
 }
 // 4 corner screw bosses (front side), self-tap pilots
@@ -77,6 +89,7 @@ module front_shell() {
         union() {
             shell_body(front_depth);
             speaker_seats();
+            speaker_screw_bosses();
             voicesr_cradle();
             mic_boss();
             amp_mounts();

@@ -16,6 +16,14 @@ spk_cut        = 46;       // grille perforation field diameter
 spk_gap        = 3;        // gap between the two drivers
 spk_seat_depth = 4;        // height of the inner locating ring
 
+// ---- speaker frame-hole screw bosses (fasten each driver flange) ----
+spk_screw_n     = 4;       // mounting holes on the driver flange
+spk_bolt_circle = 59;      // bolt-circle diameter; MUST clear the driver OD
+spk_screw_pilot = 1.6;     // M2 self-tap pilot
+spk_boss_od     = 5;       // mounting boss outer diameter
+spk_boss_h      = spk_seat_depth + 1;  // boss height on the inner baffle
+spk_screw_a0    = 45;      // start angle (deg); 45 dodges the center gap for n=4
+
 // ---- margins / board zone ----
 side_margin   = 7;
 top_margin    = 7;
@@ -49,6 +57,8 @@ mic_boss_h  = 3;
 amp_w = 18;
 amp_l = 16;
 amp_standoff_h = 3;
+amp_standoff_od = 4.5;     // post OD (wide enough to take a pilot)
+amp_screw_pilot = 1.6;     // M2 self-tap pilot in each amp standoff
 
 // ---- wall mount ----
 keyhole_spacing = 90;

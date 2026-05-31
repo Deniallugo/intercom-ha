@@ -41,6 +41,7 @@ button cap:
 - Cradle too tight/loose → adjust `clr` / `mod_clr`.
 - Button binds or has no travel → adjust `btn_well_d` / `btn_travel`.
 - Driver doesn't seat → adjust `spk_od` / `spk_seat_depth`.
+- Driver screw holes don't line up → adjust `spk_bolt_circle` / `spk_screw_n` / `spk_screw_a0` to match your driver's flange.
 
 ## Print settings
 
@@ -54,16 +55,18 @@ button cap:
 - 1× M5Stack ATOM Echo S3R (VoiceS3R)
 - 2× MAX98357A breakout
 - 2× 2" full-range driver (~53 mm OD)
-- 4× M3 screws (self-tap into front bosses)
+- 4× M3 screws (self-tap into the corner front/rear bosses)
+- 8× M2 self-tap screws for the drivers (4 per driver, into the bolt-circle bosses)
+- 8× M2 self-tap screws for the amp boards (4 per board, into the standoffs)
 - Thin EVA/foam ring for the mic boss gasket
 - 2× wall screws for the keyhole slots
 
 ## Assembly
 
 1. Press the EVA ring onto the mic boss.
-2. Seat the two drivers into the front-shell rings; secure with M2 screws or printed tabs; solder driver leads to the amp `+/−`.
+2. Seat the two drivers into the front-shell rings; fasten each with 4× M2 through the flange into the bolt-circle bosses; solder driver leads to the amp `+/−`.
 3. Drop the VoiceS3R into the cradle button-forward; route header wires through the side window to the amps.
-4. Seat the amp boards on their standoffs.
+4. Seat the amp boards on their standoffs; fasten each with 4× M2 into the standoff pilots.
 5. Drop the button cap into its well from the front (snaps captive).
 6. Hang the rear plate on two wall screws via the keyholes.
 7. Mate front to rear; drive 4× M3 from the back.

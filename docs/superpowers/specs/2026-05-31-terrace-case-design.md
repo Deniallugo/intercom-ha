@@ -54,8 +54,9 @@ Produce a serviceable, sheltered-outdoor wall enclosure that:
 Two printed parts plus one small printed plunger:
 
 1. **Front shell** — the visible body. Carries the two speaker recess rings +
-   grilles, the button well, the mic port + sealing boss, the VoiceS3R cradle,
-   amp-board standoffs/clips, and the screw bosses.
+   grilles + per-driver bolt-circle screw bosses, the button well, the mic port
+   + sealing boss, the VoiceS3R cradle, amp-board screw standoffs, and the
+   corner screw bosses.
 2. **Rear plate** — sits flush on the wall. Carries two keyhole mounting slots,
    the USB-C cable notch at the bottom edge, and the mating screw bosses.
 3. **Button cap** — a captive plunger that drops into the front-shell button
@@ -84,8 +85,10 @@ holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
 ### Front shell (`modules/front_shell.scad`)
 - Rounded rectangular outer wall, 2.4 mm thick, 6 mm corner radius.
 - Two speaker recess rings (OD 53 mm seat, 46 mm through-cutout), 3 mm center
-  gap. Each driver retained by 4 small printed tabs *or* M2 screws through the
-  frame holes — selectable via parameter.
+  gap. Each driver fastened by `spk_screw_n` (default 4) M2 self-tap screws
+  through the driver flange into printed bolt-circle bosses (`spk_bolt_circle`,
+  default 59 mm — must clear the driver OD). Start angle `spk_screw_a0` (45°)
+  keeps the inner bosses out of the center gap.
 - Two circular grilles (concentric rings of 3 mm holes) over the cutouts.
 - VoiceS3R cradle: 3-wall pocket sized 24.4 mm (0.4 mm clearance), module
   oriented button-forward; USB-C edge cutout toward the bottom; side window for
@@ -93,7 +96,7 @@ holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
 - Button well guiding the plunger, with a retaining shoulder.
 - Mic port (2 mm hole or 3-hole cluster) + sealing boss collar (foam/EVA gasket
   seat) aligned to module mic opening; position is parametric.
-- Amp-board standoffs + printed retention clips (×2).
+- Amp-board standoffs with M2 self-tap pilots so each board screws down (×2).
 - 4× corner screw bosses (front side).
 
 ### Rear plate (`modules/rear_plate.scad`)
@@ -120,7 +123,8 @@ holds the deeper (~30 mm) speaker zone, the rear plate is shallow (~12 mm).
   radius, speaker OD/cutout/center-gap, driver retention mode, grille hole
   dia/spacing, module cradle size + clearance, USB-C notch position/size,
   button well + cap dims, mic port position/diameter + boss/gasket dims, amp
-  board size + standoff height, keyhole spacing, screw boss dia + M3 pilot,
+  board size + standoff height + amp screw pilot, speaker bolt-circle + screw
+  count + start angle + boss dims, keyhole spacing, screw boss dia + M3 pilot,
   global fit clearance (default 0.4 mm).
 
 ## Build & file layout
