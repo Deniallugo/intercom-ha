@@ -42,14 +42,28 @@ module button_well() {
     }
 }
 
+// acoustic hole through the front wall (subtracted)
+module mic_port() {
+    translate([mic_x(), mic_y(), -0.1]) cylinder(h = wall + 0.2, d = mic_port_d);
+}
+// sealing collar on the inside, gasket seats on its top face (added)
+module mic_boss() {
+    translate([mic_x(), mic_y(), wall]) difference() {
+        cylinder(h = mic_boss_h, d = mic_boss_od);
+        translate([0, 0, -0.1]) cylinder(h = mic_boss_h + 0.2, d = mic_port_d + 0.6);
+    }
+}
+
 module front_shell() {
     difference() {
         union() {
             shell_body(front_depth);
             speaker_seats();
             voicesr_cradle();
+            mic_boss();
         }
         grille_cut();
         button_well();
+        mic_port();
     }
 }
