@@ -24,7 +24,7 @@ The core verification primitive throughout: render a part with `--hardwarnings` 
 
 ```
 hardware/terrace-case/
-├── terrace-case.scad        # includes everything; $part selector + render
+├── terrace-case.scad        # includes everything; part selector + render
 ├── modules/
 │   ├── params.scad          # ALL variables + derived-dimension functions. No geometry.
 │   ├── lib.scad             # rounded_rect, grille, keyhole, screw_boss. No top-level geometry.
@@ -223,10 +223,12 @@ git commit -m "feat(case): parameters + derived-dimension asserts"
 - [ ] **Step 1: Write the failing test** (append to `tests/asserts.scad`, before the `cube(1);` sentinel)
 
 ```openscad
-// helper render smoke — these must produce geometry without warnings
-rounded_rect(20, 10, 2);
-grille(spk_cut);
-keyhole(keyhole_slot_w, keyhole_head_d, keyhole_drop);
+// helper render smoke — these must produce geometry without warnings.
+// 2D helpers are linear_extrude'd so the top level is all-3D (OpenSCAD
+// rejects mixing 2D and 3D objects at the top level under --hardwarnings).
+linear_extrude(1) rounded_rect(20, 10, 2);
+linear_extrude(1) grille(spk_cut);
+linear_extrude(1) keyhole(keyhole_slot_w, keyhole_head_d, keyhole_drop);
 screw_boss(8, boss_od, screw_pilot);
 ```
 And add at the very top of `tests/asserts.scad`, right after the existing include line:
@@ -355,7 +357,7 @@ module front_shell() {
 `hardware/terrace-case/terrace-case.scad`:
 ```openscad
 // ===== Terrace VoiceS3R enclosure — render entry point =====
-// Render a single part:  openscad -D '$part="front"' -o out.stl terrace-case.scad
+// Render a single part:  openscad -D 'part="front"' -o out.stl terrace-case.scad
 // Parts: "front" | "rear" | "button" | "coupon" | "all" (assembled preview)
 include <modules/params.scad>
 include <modules/lib.scad>
@@ -386,7 +388,7 @@ printf '// placeholder\nmodule button_cap(){}\n' > hardware/terrace-case/modules
 
 Run:
 ```bash
-"$OPENSCAD" --hardwarnings -D '$part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
+"$OPENSCAD" --hardwarnings -D 'part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
 ```
 Expected: PASS, STL well over 1000 bytes. (If `--hardwarnings` trips on a CGAL note, read it — a real non-manifold means two solids share a face; nudge overlaps by 0.1.)
 
@@ -394,7 +396,7 @@ Expected: PASS, STL well over 1000 bytes. (If `--hardwarnings` trips on a CGAL n
 
 Run:
 ```bash
-"$OPENSCAD" -D '$part="front"' --camera=0,0,0,55,0,25,260 --imgsize=900,700 -o /tmp/front.png hardware/terrace-case/terrace-case.scad
+"$OPENSCAD" -D 'part="front"' --camera=0,0,0,55,0,25,260 --imgsize=900,700 -o /tmp/front.png hardware/terrace-case/terrace-case.scad
 ```
 Open `/tmp/front.png`: confirm a landscape box with two perforated circular grilles side by side near the top.
 
@@ -448,7 +450,7 @@ Change the `union()` block inside `front_shell()` to:
 
 Run:
 ```bash
-"$OPENSCAD" --hardwarnings -D '$part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
+"$OPENSCAD" --hardwarnings -D 'part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
 ```
 Expected: PASS, STL larger than before.
 
@@ -513,8 +515,8 @@ module button_cap() {
 
 Run:
 ```bash
-"$OPENSCAD" --hardwarnings -D '$part="front"'  -o /tmp/front.stl  hardware/terrace-case/terrace-case.scad && \
-"$OPENSCAD" --hardwarnings -D '$part="button"' -o /tmp/button.stl hardware/terrace-case/terrace-case.scad && \
+"$OPENSCAD" --hardwarnings -D 'part="front"'  -o /tmp/front.stl  hardware/terrace-case/terrace-case.scad && \
+"$OPENSCAD" --hardwarnings -D 'part="button"' -o /tmp/button.stl hardware/terrace-case/terrace-case.scad && \
 wc -c /tmp/front.stl /tmp/button.stl
 ```
 Expected: PASS for both; both STLs > 1000 bytes.
@@ -566,7 +568,7 @@ module mic_boss() {
 
 Run:
 ```bash
-"$OPENSCAD" --hardwarnings -D '$part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
+"$OPENSCAD" --hardwarnings -D 'part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
 ```
 Expected: PASS.
 
@@ -624,7 +626,7 @@ module front_bosses() {
 
 Run:
 ```bash
-"$OPENSCAD" --hardwarnings -D '$part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
+"$OPENSCAD" --hardwarnings -D 'part="front"' -o /tmp/front.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/front.stl
 ```
 Expected: PASS. The front shell is now feature-complete.
 
@@ -675,7 +677,7 @@ Remove the placeholder `coupon_render(){}` line if it's still in this file — `
 
 Run:
 ```bash
-"$OPENSCAD" --hardwarnings -D '$part="rear"' -o /tmp/rear.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/rear.stl
+"$OPENSCAD" --hardwarnings -D 'part="rear"' -o /tmp/rear.stl hardware/terrace-case/terrace-case.scad && wc -c /tmp/rear.stl
 ```
 Expected: PASS, STL > 1000 bytes.
 
@@ -683,7 +685,7 @@ Expected: PASS, STL > 1000 bytes.
 
 Run:
 ```bash
-"$OPENSCAD" -D '$part="rear"' --camera=0,0,0,55,0,0,260 --imgsize=900,700 -o /tmp/rear.png hardware/terrace-case/terrace-case.scad
+"$OPENSCAD" -D 'part="rear"' --camera=0,0,0,55,0,0,260 --imgsize=900,700 -o /tmp/rear.png hardware/terrace-case/terrace-case.scad
 ```
 Confirm a plate with two keyhole slots (head + slot) and four corner bosses; a notch in the bottom edge.
 
@@ -735,7 +737,7 @@ echo "== parameter asserts =="
     && echo "OK asserts" || { echo "FAIL asserts"; fail=1; }
 
 for part in front rear button coupon; do
-    if "$OPENSCAD" --hardwarnings -D "\$part=\"$part\"" -o "stl/$part.stl" terrace-case.scad 2>/tmp/tc_err; then
+    if "$OPENSCAD" --hardwarnings -D "part=\"$part\"" -o "stl/$part.stl" terrace-case.scad 2>/tmp/tc_err; then
         sz=$(wc -c < "stl/$part.stl")
         if [ "$sz" -lt 1000 ]; then echo "FAIL $part: STL too small ($sz B)"; fail=1
         else echo "OK $part ($sz B)"; fi
@@ -758,7 +760,7 @@ cd "$(dirname "$0")"
 mkdir -p stl
 for part in front rear button; do
     echo "rendering $part ..."
-    "$OPENSCAD" -D "\$part=\"$part\"" -o "stl/$part.stl" terrace-case.scad
+    "$OPENSCAD" -D "part=\"$part\"" -o "stl/$part.stl" terrace-case.scad
 done
 echo "done -> stl/"
 ```
@@ -806,7 +808,7 @@ export OPENSCAD="${OPENSCAD:-$(command -v openscad || echo /Applications/OpenSCA
 
 Render one part manually:
 ```bash
-"$OPENSCAD" -D '$part="front"' -o stl/front.stl terrace-case.scad
+"$OPENSCAD" -D 'part="front"' -o stl/front.stl terrace-case.scad
 ```
 Parts: `front`, `rear`, `button`, `coupon` (fit test), `all` (assembled preview).
 
@@ -828,7 +830,7 @@ All in [modules/params.scad](modules/params.scad). Common edits:
 Print the **coupon** first (~10 min) and dry-fit the module, a driver, and the
 button cap:
 ```bash
-"$OPENSCAD" -D '$part="coupon"' -o stl/coupon.stl terrace-case.scad
+"$OPENSCAD" -D 'part="coupon"' -o stl/coupon.stl terrace-case.scad
 ```
 - Cradle too tight/loose → adjust `clr` / `mod_clr`.
 - Button binds or has no travel → adjust `btn_well_d` / `btn_travel`.
