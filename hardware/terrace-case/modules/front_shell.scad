@@ -54,6 +54,24 @@ module mic_boss() {
     }
 }
 
+// two amp boards in a row, right of the cradle, on short standoff posts
+module amp_mounts() {
+    base_x = cradle_cx() + (mod_w/2) + cradle_wall + 6 + amp_w/2;
+    for (i = [0 : 1]) {
+        bx = base_x + i*(amp_w + 6);
+        translate([bx, board_cy(), wall])
+            for (sx = [-1, 1], sy = [-1, 1])
+                translate([sx*(amp_w/2 - 2), sy*(amp_l/2 - 2), 0])
+                    cylinder(h = amp_standoff_h, d = 3);
+    }
+}
+// 4 corner screw bosses (front side), self-tap pilots
+module front_bosses() {
+    for (sx = [-1, 1], sy = [-1, 1])
+        translate([sx*(outer_w()/2 - boss_inset), sy*(outer_h()/2 - boss_inset), wall])
+            screw_boss(front_depth - wall, boss_od, screw_pilot);
+}
+
 module front_shell() {
     difference() {
         union() {
@@ -61,6 +79,8 @@ module front_shell() {
             speaker_seats();
             voicesr_cradle();
             mic_boss();
+            amp_mounts();
+            front_bosses();
         }
         grille_cut();
         button_well();
