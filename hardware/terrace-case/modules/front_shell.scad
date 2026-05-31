@@ -87,3 +87,14 @@ module front_shell() {
         mic_port();
     }
 }
+
+// fit-test coupon: the left slice of the front shell — one speaker seat,
+// the cradle, button well, and mic features — plus a button cap to test.
+module coupon_render() {
+    intersection() {
+        front_shell();
+        translate([-outer_w()/2 - 1, board_cy() - 28, -5])
+            cube([outer_w()/2 + 12, 70, front_depth + 10]);
+    }
+    translate([-outer_w()/2 + 6, board_cy() + 40, 0]) button_cap();
+}
