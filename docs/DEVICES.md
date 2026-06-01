@@ -1,21 +1,24 @@
 # Intercom System — Current State
 
 A two-device PTT intercom + voice satellite running on Home Assistant.
-The kitchen Atom Echo is unmodified hardware. The terrace VoiceS3R has two
-MAX98357A amps wired to its free GPIOs, both playing the same mono mix into a
-pair of larger drivers (dual mono).
+The kitchen Atom Echo has one MAX98357A amp wired to its exposed I²S header
+pads, driving a larger speaker in place of the disconnected internal one. The
+terrace VoiceS3R has two MAX98357A amps wired to its free GPIOs, both playing
+the same mono mix into a pair of larger drivers (dual mono).
 
 ---
 
 ## Devices
 
-### Kitchen — M5Stack Atom Echo (unmodified)
+### Kitchen — M5Stack Atom Echo + external amp
 
 | Item | Detail |
 |---|---|
 | MCU | ESP32 classic, ~520 KB SRAM, no PSRAM |
 | Mic | Internal PDM (SPM1423) on GPIO23 |
-| Speaker | Internal NS4168 amp → built-in 1 W speaker on GPIO22 |
+| Internal speaker | Internal NS4168 amp → built-in 0.5 W speaker on GPIO22 (disconnected — replaced by external amp) |
+| External amp | 1× MAX98357A as a passive parallel I²S listener on G19/G33/G22 (+12 dB) |
+| External speaker | One 4 Ω driver on the MAX98357A `+ / −` output |
 | Button | Built-in tactile on GPIO39 (active LOW) |
 | LED | Built-in SK6812 RGB on GPIO27 |
 | Power | USB-C |
@@ -43,8 +46,8 @@ pair of larger drivers (dual mono).
 | Wake-word + HA Assist (STT, intent, TTS reply) | — | ✓ (`okay nabu`) |
 | Music streaming from Spotify via Music Assistant | — | ✓ |
 | HA TTS announcements (`media_player.play_media`) | ✓ | ✓ |
-| External larger-driver speakers | — | ✓ (2× MAX98357A, dual mono) |
-| Internal speaker fallback | n/a | ✓ (HA-toggleable switch) |
+| External larger-driver speakers | ✓ (1× MAX98357A) | ✓ (2× MAX98357A, dual mono) |
+| Internal speaker fallback | — (disconnected) | ✓ (HA-toggleable switch) |
 | Software mic gain | +6 dB (recorder.h) | n/a (codec PGA at 36 dB) |
 | DMA watchdog auto-reboot | ✓ | — |
 
@@ -79,18 +82,56 @@ The mic on the separate internal I²S bus (ES8311 codec) feeds:
 
 ## Wiring
 
-### Kitchen — Atom Echo
+### Kitchen — Atom Echo + external MAX98357A
 
-No external wiring. Everything lives inside the M5Stack case.
+One MAX98357A is wired as a passive parallel listener on the Atom Echo's
+existing I²S-out signals, exposed on the bottom headers. It decodes the same
+stream the internal NS4168 receives — ESPHome is unaware of it, so there is
+**no YAML change**. The internal 0.5 W speaker is physically disconnected, so
+only the external driver plays. (M5Stack labels G19/G22/G23/G33 "reserved for
+internal audio"; tapping them as a high-impedance listener is the same
+technique the terrace uses — it does not repurpose the pins.)
 
 | GPIO | Function |
 |---|---|
-| GPIO33 | I²S LRCLK (mic + internal amp) |
-| GPIO19 | I²S BCLK (shared) |
+| GPIO33 | I²S LRCLK (mic + amps) — also feeds MAX98357A LRC |
+| GPIO19 | I²S BCLK (shared) — also feeds MAX98357A BCLK |
 | GPIO23 | PDM mic data in |
-| GPIO22 | I²S DOUT → internal NS4168 amp |
+| GPIO22 | I²S DOUT → (internal NS4168, disconnected) + MAX98357A DIN |
 | GPIO39 | Button (active LOW, internal pull-up) |
 | GPIO27 | SK6812 RGB LED data |
+
+#### External MAX98357A wiring
+
+| MAX98357A pin | Atom Echo pin | Header |
+|---|---|---|
+| VIN | 5V | bottom header (`G21 / G25 / 5V / GND` side) |
+| GND | GND | bottom header |
+| BCLK | G19 | `3V3 / G22 / G19 / G23 / G33` side |
+| LRC | G33 | same side |
+| DIN | G22 | same side |
+| GAIN | bridged to GND (bare wire) | +12 dB |
+| SD | left floating | on-board pull-up = enabled, mono-average |
+| `+ / −` | one 4 Ω driver | — |
+
+```
+       M5Stack Atom Echo                  MAX98357A (×1)
+       ┌─────────────────────┐            ┌──────────────────┐
+       │ 3V3 G22 G19 G23 G33 │            │                  │
+       │      │   │      │    │            │  GAIN ──┐        │
+       │      │   │      │    └───────────►│  LRC    │(GAIN→GND
+       │      │   └──────┼────────────────►│  BCLK   │  = +12 dB)
+       │      └──────────┼────────────────►│  DIN    │        │
+       │                 └────────────────►│  GND ───┘        │
+       │ G21 G25  5V  GND│                 │                  │
+       │           │   │ │       ┌────────►│  VIN             │
+       │           └───┼─┼───────┘         │                  │
+       │               └─┼───────────────►│  GND  (power)     │
+       │  USB-C in       │                 │   +  ────────────┼── + driver
+       └─────────────────┘                 │   −  ────────────┼── − driver
+                                            └──────────────────┘
+   Internal NS4168 speaker: disconnected (NS4168 has no enable pin).
+```
 
 ### Terrace — VoiceS3R
 
