@@ -91,6 +91,24 @@ switch:
     name: "Internal Amp"
     restore_mode: ALWAYS_ON
 
+  # In-case MAX98357A enable/shutdown for BOTH amps. Lets you silence the
+  # drivers independently — e.g. when a PCM5100 3.5 mm line-out is added (a
+  # separate chip on the same bus) and you want the jack live but the speakers
+  # quiet. HIGH = both amps on, LOW = both in shutdown.
+  #
+  # HARDWARE: tie BOTH MAX SD pins to G8 (instead of VIN). Safe here because the
+  # build is dual *mono* — both amps run in the same left slot, so one 3.3 V GPIO
+  # drives both correctly (3.3 V ≥ 1.4 V = left/mono; 0 V = shutdown). Until SD
+  # is moved off VIN this switch is a harmless no-op. NB: this only works because
+  # it's dual mono — if you ever split into L/R stereo (right board biased ~1 V
+  # on SD), SD also selects channel, so power-gate the boards with a MOSFET on G8
+  # instead of driving SD directly.
+  - platform: gpio
+    pin: GPIO8
+    id: ext_amp_enable
+    name: "Speaker Amp"
+    restore_mode: ALWAYS_ON
+
 # ── I²S bus shared between mic and speaker ───────────────────────────────────
 # The ES8311 is ONE full-duplex codec on ONE physical I²S bus, so mic and
 # speaker share a SINGLE i2s_audio instance (matches M5Stack's reference YAML
@@ -100,12 +118,25 @@ switch:
 # after (see the media_player on_announcement / on_idle handlers below).
 
 i2s_audio:
+  # Bus 1 — internal codec (ES8311). Pins are hard-wired inside the EchoS3R
+  # and not broken out on the side headers.
   - id: i2s_bus
     i2s_lrclk_pin:
       number: GPIO3
       ignore_strapping_warning: true
     i2s_bclk_pin: GPIO17
     i2s_mclk_pin: GPIO11
+
+  # Bus 2 — in-case MAX98357A amp on the bottom-header free GPIOs (G5/G6/G7).
+  # ESP32-S3 has two I²S peripherals; this is the second one. It's a broadcast
+  # bus: any number of I²S sinks can listen to these same three wires in
+  # parallel. Today that's the one MAX98357A; an optional PCM5100 line-out DAC
+  # for a 3.5 mm jack can be tapped onto the same G5/G6/G7 later (see the
+  # s3_speaker_ext notes). No MCLK is broken out here — fine for the MAX (needs
+  # none) and for a PCM5100 strapped SCK→GND.
+  - id: i2s_bus_ext
+    i2s_lrclk_pin: GPIO6
+    i2s_bclk_pin: GPIO5
 
 microphone:
   - platform: i2s_audio
@@ -118,6 +149,9 @@ microphone:
     correct_dc_offset: true
 
 speaker:
+  # Internal — ES8311 codec → NS4150 amp → built-in 1 W speaker.
+  # Kept for fallback / parallel testing. Toggle the "Internal Amp" switch off
+  # in HA once external is confirmed working to silence it.
   - platform: i2s_audio
     id: s3_speaker
     i2s_audio_id: i2s_bus
@@ -128,16 +162,59 @@ speaker:
     channel: left                  # VoiceS3R has only one internal speaker
     audio_dac: es8311_dac
 
+  # In-case speakers — 2× MAX98357A on this I²S bus, each driving one driver,
+  # both playing the SAME mono mix (dual mono, not stereo). Each MAX is a
+  # self-contained DAC+amp that decodes the I²S stream directly, so this works
+  # with NOTHING else on the bus (no codec, no PCM5100). Both boards are wired
+  # identically — BCLK/LRC/DIN on G5/G6/G7, SD high = left/mono slot — and
+  # `channel: mono` feeds the mono mix. ESPHome sees ONE speaker: the two amps
+  # are passive parallel listeners, so adding the 2nd board is wiring-only (no
+  # YAML change — this block is unchanged whether 1 or 2 boards are attached).
+  #
+  # OPTIONAL FUTURE — a PCM5100 line-out DAC can be added as a *parallel*
+  # listener on this same bus (tap G5/G6/G7), strapped SCK→GND and XSMT→high,
+  # with LOUT/ROUT/AGND → a 3.5 mm jack. No YAML change (it just listens), no
+  # I²C; it plays the same stream. See docs/DEVICES.md "Optional: PCM5100 3.5 mm
+  # line-out". To keep the jack live while silencing the drivers, route both MAX
+  # SD pins to G8 and toggle the "Speaker Amp" switch below.
+  - platform: i2s_audio
+    id: s3_speaker_ext
+    i2s_audio_id: i2s_bus_ext
+    i2s_dout_pin: GPIO7
+    dac_type: external
+    bits_per_sample: 16bit
+    sample_rate: 48000
+    channel: mono
+
+  # Mixer — gives media_player two virtual source endpoints so announcements
+  # (TTS, intercom, wake-word chirp) and music (Music Assistant / Spotify) can
+  # coexist on the same physical speaker. Required: ESPHome's speaker platform
+  # rejects same-speaker for both pipelines.
+  - platform: mixer
+    id: s3_mixer
+    output_speaker: s3_speaker_ext
+    source_speakers:
+      - id: s3_announcement_src
+      - id: s3_media_src
+
 # ── Media player (HA-controllable playback) ──────────────────────────────────
 
 media_player:
   - platform: speaker
     id: s3_player
     name: "${friendly_name} Player"
-    volume_min: 0.5
-    volume_max: 0.9
+    volume_min: 0.6
+    volume_max: 1.0      # was 0.9 — uncap for external amp
+    buffer_size: 1000000 # 1 MB PSRAM-backed buffer for music streaming
+    # Long-form music streams from Spotify / Music Assistant.
+    media_pipeline:
+      speaker: s3_media_src
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    # Short interruptions: TTS, intercom playback, wake-word feedback sounds.
     announcement_pipeline:
-      speaker: s3_speaker
+      speaker: s3_announcement_src
       format: FLAC
       sample_rate: 48000
       num_channels: 1
@@ -207,7 +284,19 @@ voice_assistant:
   media_player: s3_player
   noise_suppression_level: 2
   auto_gain: 31dBFS
-  volume_multiplier: 2.0
+  volume_multiplier: 2.0       # was 2.0 — boost TTS playback for external amp
+  # Restore the music we ducked on wake-word detection. Both handlers fire so
+  # the music never stays stuck quiet if the pipeline errors out partway.
+  on_end:
+    - mixer_speaker.apply_ducking:
+        id: s3_media_src
+        decibel_reduction: 0
+        duration: 0.5s
+  on_error:
+    - mixer_speaker.apply_ducking:
+        id: s3_media_src
+        decibel_reduction: 0
+        duration: 0.5s
 
 # ── Wake-word dispatch ───────────────────────────────────────────────────────
 # v1: single wake word ("okay nabu") → HA Assist pipeline via voice_assistant.
@@ -222,5 +311,40 @@ micro_wake_word:
       id: okay_nabu
       probability_cutoff: 0.7      # default 0.97 was too strict at our gain level
   on_wake_word_detected:
+    # 1. Duck music hard (~20 dB) with a short ramp so the drop isn't jarring.
+    - mixer_speaker.apply_ducking:
+        id: s3_media_src
+        decibel_reduction: 20
+        duration: 0.3s
+    # 2. Acknowledgment chime: 120 ms 800->1200 Hz sine sweep, 5 ms fades,
+    #    48 kHz / 16-bit / mono (matches s3_speaker_ext). Generated once into a
+    #    function-static buffer and replayed on each wake. Plays on the external
+    #    bus (i2s_bus_ext), which does NOT share the mic's mutex, so it sounds
+    #    immediately and mixes over any music. Matches intercom-addon/chimes.py.
+    - speaker.play:
+        id: s3_announcement_src
+        data: !lambda |-
+          static std::vector<uint8_t> chime;
+          if (chime.empty()) {
+            const int sr = 48000;
+            const int n = sr * 120 / 1000;        // 120 ms
+            int nf = sr * 5 / 1000;               // 5 ms fade
+            if (nf < 1) nf = 1;
+            const float f0 = 800.0f, f1 = 1200.0f, amp = 16000.0f;
+            const float two_pi = 6.28318530718f;
+            chime.reserve(n * 2);
+            for (int i = 0; i < n; i++) {
+              float t = (float) i / sr;
+              float freq = f0 + (f1 - f0) * ((float) i / n);
+              float env = 1.0f;
+              if (i < nf) env = (float) i / nf;
+              else if (i > n - nf) env = (float) (n - i) / nf;
+              int16_t s = (int16_t) (sinf(two_pi * freq * t) * env * amp);
+              chime.push_back((uint8_t) (s & 0xFF));
+              chime.push_back((uint8_t) ((s >> 8) & 0xFF));
+            }
+          }
+          return chime;
+    # 3. Hand off to the HA Assist pipeline (unchanged behavior).
     - voice_assistant.start:
         wake_word: !lambda return wake_word;
