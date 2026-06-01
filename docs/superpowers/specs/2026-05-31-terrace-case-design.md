@@ -10,7 +10,7 @@ is version-controlled, diffable, and re-renderable from source.
 Produce a serviceable, sheltered-outdoor wall enclosure that:
 
 - Mounts two 2" (50 mm face, 35 mm deep) full-range drivers side by side as a horizontal
-  stereo pair, near-touching.
+  pair, near-touching (driven dual mono — both play the same mix).
 - Houses the VoiceS3R module (button facing forward) and two MAX98357A amp
   boards in the strip below the drivers.
 - Exposes the VoiceS3R's built-in PTT button through a captive printed plunger
@@ -26,8 +26,8 @@ Produce a serviceable, sheltered-outdoor wall enclosure that:
 
 - Device docs: [docs/DEVICES.md](../../DEVICES.md) — terrace VoiceS3R section.
 - Firmware: [devices/intercom-s3.yaml](../../../devices/intercom-s3.yaml).
-  The speaker block describes `2× MAX98357A` in stereo (`channel: stereo`),
-  which this two-driver enclosure matches.
+  The speaker block drives `2× MAX98357A` as dual mono (`channel: mono`, both
+  amps in the same slot), which this two-driver enclosure matches.
 - The kitchen Atom Echo already has a working case and is out of scope.
 - No prior CAD exists in the repo; this is a clean start.
 
@@ -39,7 +39,7 @@ Produce a serviceable, sheltered-outdoor wall enclosure that:
 | Deliverable | Parametric OpenSCAD source → STL via CLI |
 | Mounting | Wall-mount (keyhole slots on rear plate) |
 | Speaker driver | 2" — 50 mm face dia, 35 mm deep, ≈44 mm grille field |
-| Speaker layout | Side by side (horizontal stereo), ~3 mm center gap |
+| Speaker layout | Side by side (horizontal pair, dual mono), ~3 mm center gap |
 | Amp boards | Two (one per speaker) |
 | Weather | Covered/sheltered — no gland/gasket weatherproofing; just avoid upward openings |
 | Architecture | Two-part clamshell: front shell + rear wall plate, 4× M3 screws |
@@ -93,11 +93,13 @@ holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
 - VoiceS3R cradle: 3-wall pocket sized 24.4 mm (0.4 mm clearance), module
   oriented button-forward; USB-C edge cutout toward the bottom; side window for
   header wires to reach the amps.
-- Button well guiding the plunger, with a retaining shoulder.
+- Button well guiding the plunger, with a retaining shoulder. The bore goes
+  through the front wall **and** the cradle floor behind it, so the plunger
+  nub can reach the module's switch.
 - Mic perforation: a cluster of small holes (one center + a ring of
-  `mic_ring_n`, default 6) through the front wall, centered `mic_below_btn`
-  below the button so it sits over the module's own microphone. No boss —
-  the module front sits against the inner wall right behind the holes.
+  `mic_ring_n`, default 6) through the front wall **and** the cradle floor,
+  centered `mic_below_btn` below the button so they open into the pocket right
+  at the module's own microphone. No boss needed.
 - Amp-board standoffs with M2 self-tap pilots so each board screws down (×2).
 - 4× corner screw bosses (front side).
 
@@ -179,6 +181,11 @@ README documents which parameters to nudge for a loose/tight fit.
 - Kitchen Atom Echo enclosure (already cased).
 - Weatherproofing beyond "no upward openings" (location is sheltered).
 - Any firmware/YAML changes — this is hardware only.
+- **3.5 mm line-out jack** (optional PCM5100 DAC add-on) — deferred. The
+  PCM5100 would sit as a parallel I²S listener on the same G5/G6/G7 bus and
+  drive a panel-mount 3.5 mm jack; adding it later would need a small board
+  standoff + a jack cutout (likely a side or bottom wall). See
+  [docs/DEVICES.md](../../DEVICES.md) "Optional: PCM5100 3.5 mm line-out".
 
 ## Open items requiring physical measurement before final print
 

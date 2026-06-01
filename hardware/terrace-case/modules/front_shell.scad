@@ -33,19 +33,20 @@ module voicesr_cradle() {
     }
 }
 
-// well bored through the front wall, centered over the module button,
-// with an internal retaining shoulder the cap's lip catches behind.
+// well bored through the front wall AND the cradle floor behind it, so the
+// plunger nub can reach the module's switch. A retaining shoulder the cap's
+// lip catches behind sits at the front-wall inner face.
 module button_well() {
     translate([cradle_cx(), board_cy(), -0.1]) {
-        cylinder(h = wall + 0.2, d = btn_well_d);                       // bore
+        cylinder(h = wall + cradle_wall + 0.2, d = btn_well_d);          // bore through wall + cradle floor
         translate([0, 0, wall]) cylinder(h = 1.2, d = btn_well_d + 1.6); // shoulder pocket
     }
 }
 
-// mic perforation: a small cluster of holes through the front wall, centered
-// just below the button, directly over the module's microphone (subtracted).
+// mic perforation: a small cluster of holes through the front wall AND the
+// cradle floor, so the holes open into the pocket right at the module's mic.
 module mic_perf() {
-    translate([mic_x(), mic_y(), -0.1]) linear_extrude(wall + 0.2) {
+    translate([mic_x(), mic_y(), -0.1]) linear_extrude(wall + cradle_wall + 0.2) {
         circle(d = mic_hole_d);
         for (i = [0 : mic_ring_n - 1])
             rotate(i*360/mic_ring_n) translate([mic_ring_r, 0]) circle(d = mic_hole_d);
