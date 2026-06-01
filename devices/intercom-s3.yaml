@@ -338,7 +338,7 @@ micro_wake_word:
               float freq = f0 + (f1 - f0) * ((float) i / n);
               float env = 1.0f;
               if (i < nf) env = (float) i / nf;
-              else if (i > n - nf) env = (float) (n - i) / nf;
+              else if (i >= n - nf) env = (float) (n - 1 - i) / nf;
               int16_t s = (int16_t) (sinf(two_pi * freq * t) * env * amp);
               chime.push_back((uint8_t) (s & 0xFF));
               chime.push_back((uint8_t) ((s >> 8) & 0xFF));
