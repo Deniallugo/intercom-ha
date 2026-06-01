@@ -17,6 +17,11 @@ spk_gap        = 3;        // gap between the two drivers
 spk_seat_depth = 4;        // height of the inner locating ring
 spk_depth      = 35;       // driver depth front-to-back (sets front_depth clearance)
 
+// ---- driver gasket groove (foam ring seals the flange to the baffle) ----
+gasket_od    = spk_od - 1;   // groove outer diameter (just inside the locating ring)
+gasket_id    = spk_cut + 1;  // groove inner diameter (just outside the grille field)
+gasket_depth = 1.0;          // groove depth cut into the baffle inner face
+
 // ---- speaker frame-hole screw bosses (fasten each driver flange) ----
 spk_screw_n     = 4;       // mounting holes on the driver flange
 spk_bolt_circle = 56;      // bolt-circle diameter; MUST clear the driver OD

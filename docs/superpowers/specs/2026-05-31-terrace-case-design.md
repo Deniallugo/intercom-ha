@@ -90,6 +90,9 @@ holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
   default 56 mm — must clear the driver OD). Start angle `spk_screw_a0` (45°)
   keeps the inner bosses out of the center gap.
 - Two circular grilles (concentric rings of 3 mm holes) over the cutouts.
+- A gasket groove in the baffle under each driver flange (`gasket_id`..`gasket_od`,
+  `gasket_depth` deep) seats a foam/EVA ring so the flange seals the front
+  wave from the back wave — the key small-driver sound-quality fix.
 - VoiceS3R cradle: 3-wall pocket sized 24.4 mm (0.4 mm clearance), centered
   horizontally with an amp board flanking each side; module oriented
   button-forward; USB-C edge cutout toward the bottom; side windows on both

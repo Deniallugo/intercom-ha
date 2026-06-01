@@ -16,6 +16,17 @@ module grille_cut() {
         for (sx = [-1, 1]) translate([sx*spk_cx(), spk_cy()]) grille(spk_cut);
 }
 
+// annular groove in the baffle inner face under each driver flange — seats a
+// foam/EVA gasket ring so the flange seals the front wave from the back wave.
+module gasket_grooves() {
+    for (sx = [-1, 1])
+        translate([sx*spk_cx(), spk_cy(), wall - gasket_depth])
+            difference() {
+                cylinder(h = gasket_depth + 0.1, d = gasket_od);
+                translate([0, 0, -0.1]) cylinder(h = gasket_depth + 0.3, d = gasket_id);
+            }
+}
+
 // 3-wall pocket holding the module button-forward; open at the back (+z),
 // USB-C slot toward the bottom edge, wire window toward the amps (+x).
 module voicesr_cradle() {
@@ -95,6 +106,7 @@ module front_shell() {
             front_bosses();
         }
         grille_cut();
+        gasket_grooves();
         button_well();
         mic_perf();
     }

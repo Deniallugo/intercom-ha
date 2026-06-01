@@ -13,6 +13,11 @@ assert(front_depth >= spk_depth, "front_depth must clear the driver depth");
 assert(spk_cut < spk_od, "grille field must be smaller than the driver");
 assert(spk_bolt_circle > spk_od, "bolt circle must clear the driver OD");
 
+// Gasket groove sits on the flange land and doesn't cut through the baffle.
+assert(gasket_id < gasket_od, "gasket groove must have id < od");
+assert(gasket_id >= spk_cut && gasket_od <= spk_od, "gasket must sit on the flange land");
+assert(gasket_depth < wall, "gasket groove must not cut through the baffle");
+
 // Board row (cradle + amps) sits in the lower strip, below center.
 assert(board_cy() < 0, "board row should be below center");
 

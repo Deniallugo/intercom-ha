@@ -58,11 +58,12 @@ button cap:
 - 4× M3 screws (self-tap into the corner front/rear bosses)
 - 8× M2 self-tap screws for the drivers (4 per driver, into the bolt-circle bosses)
 - 8× M2 self-tap screws for the amp boards (4 per board, into the standoffs)
+- 2× foam/EVA gasket rings for the drivers (~45–52 mm, seat in the baffle groove)
 - 2× wall screws for the keyhole slots
 
 ## Assembly
 
-1. Seat the two drivers into the front-shell rings; fasten each with 4× M2 through the flange into the bolt-circle bosses; solder driver leads to the amp `+/−`.
+1. Drop a foam/EVA gasket ring into the baffle groove around each driver, then seat the drivers into the front-shell rings; fasten each with 4× M2 through the flange into the bolt-circle bosses (compressing the gasket); solder driver leads to the amp `+/−`.
 2. Drop the VoiceS3R into the cradle button-forward (its mic ends up behind the perforation under the button); route header wires through the side window to the amps.
 3. Seat the amp boards on their standoffs; fasten each with 4× M2 into the standoff pilots.
 4. Drop the button cap into its well from the front (snaps captive).
