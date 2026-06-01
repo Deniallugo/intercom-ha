@@ -81,6 +81,6 @@ function outer_d()  = front_depth + rear_depth;                      // 50
 function spk_cx()   = spk_od/2 + spk_gap/2;                          // 28
 function spk_cy()   = outer_h()/2 - top_margin - spk_od/2;
 function board_cy() = -outer_h()/2 + bottom_margin + board_zone_h/2;
-function cradle_cx()= -outer_w()/2 + side_margin + cradle_wall + (mod_w+2*mod_clr)/2;
+function cradle_cx()= 0;   // module centered horizontally; amps flank it left/right
 function mic_x()    = cradle_cx();                  // centered on the module / button
 function mic_y()    = board_cy() - mic_below_btn;   // just below the button

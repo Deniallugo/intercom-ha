@@ -74,8 +74,8 @@ holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
    │ ·  │ spkr │  · gap · │ spkr │  ·    │   ← two 2" drivers, ~3 mm apart
    │  ·· │  L  │ ··    ·· │  R  │ ··     │
    │     ╰─────╯         ╰─────╯        │
-   │  [VoiceS3R▢] [amp1] [amp2]        │   ← boards row
-   │  [btn]/(∴)                         │   ← button + mic perforation under it
+   │   [amp1]  [VoiceS3R▢]  [amp2]      │   ← boards row, module centered
+   │            [btn]/(∴)               │   ← button + mic perforation under it
    └────────────────────┬──────────────┘     (both over the VoiceS3R)
                      USB-C notch (bottom edge)
 ```
@@ -90,9 +90,10 @@ holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
   default 56 mm — must clear the driver OD). Start angle `spk_screw_a0` (45°)
   keeps the inner bosses out of the center gap.
 - Two circular grilles (concentric rings of 3 mm holes) over the cutouts.
-- VoiceS3R cradle: 3-wall pocket sized 24.4 mm (0.4 mm clearance), module
-  oriented button-forward; USB-C edge cutout toward the bottom; side window for
-  header wires to reach the amps.
+- VoiceS3R cradle: 3-wall pocket sized 24.4 mm (0.4 mm clearance), centered
+  horizontally with an amp board flanking each side; module oriented
+  button-forward; USB-C edge cutout toward the bottom; side windows on both
+  sides for header wires to reach the amps.
 - Button well guiding the plunger, with a retaining shoulder. The bore goes
   through the front wall **and** the cradle floor behind it, so the plunger
   nub can reach the module's switch.

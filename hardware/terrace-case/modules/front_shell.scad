@@ -27,9 +27,10 @@ module voicesr_cradle() {
         // USB-C slot through the bottom wall (toward -y)
         translate([0, -(cw/2 + cradle_wall), mod_usb_h/2 + 1])
             cube([mod_usb_w, cradle_wall*3, mod_usb_h], center = true);
-        // wire window toward the amps (+x)
-        translate([cw/2 + cradle_wall, 0, mod_d*0.55])
-            cube([cradle_wall*3, mod_w*0.6, mod_d*0.6], center = true);
+        // wire windows toward the amps on both sides (±x)
+        for (s = [-1, 1])
+            translate([s*(cw/2 + cradle_wall), 0, mod_d*0.55])
+                cube([cradle_wall*3, mod_w*0.6, mod_d*0.6], center = true);
     }
 }
 
@@ -64,12 +65,12 @@ module speaker_screw_bosses() {
                         screw_boss(spk_boss_h, spk_boss_od, spk_screw_pilot);
 }
 
-// two amp boards in a row, right of the cradle, on standoff posts with
-// M2 self-tap pilots so each board screws down.
+// two amp boards flanking the centered module (one left, one right), on
+// standoff posts with M2 self-tap pilots so each board screws down.
 module amp_mounts() {
-    base_x = cradle_cx() + (mod_w/2) + cradle_wall + 6 + amp_w/2;
-    for (i = [0 : 1]) {
-        bx = base_x + i*(amp_w + 6);
+    off = (mod_w + 2*mod_clr)/2 + cradle_wall + 6 + amp_w/2;  // amp center, from module center
+    for (s = [-1, 1]) {
+        bx = cradle_cx() + s*off;
         translate([bx, board_cy(), wall])
             for (sx = [-1, 1], sy = [-1, 1])
                 translate([sx*(amp_w/2 - 2), sy*(amp_l/2 - 2), 0])
