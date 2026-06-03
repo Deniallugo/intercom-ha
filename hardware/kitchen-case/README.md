@@ -31,8 +31,9 @@ All in [modules/params.scad](modules/params.scad). Common edits:
 | `spk_gap` | gap between the two drivers (lower = tighter) |
 | `mod_w`, `mod_d` | Atom Echo footprint / depth |
 | `amp_gap` | space between the module cradle and the amp board |
-| `usb_conn_w`, `usb_conn_t` | USB-C plug body cross-section (10×10 mm) — drives the bottom exit size |
+| `usb_conn_w`, `usb_conn_t` | USB-C plug body cross-section (10×10 mm) — drives the bottom hole size |
 | `usb_clr` | clearance around the connector in every opening |
+| `usb_z` | USB-C port depth from the front face — centers the bounded bottom hole |
 | `mic_below_btn` | mic perforation offset below the button — tune to the module mic |
 | `clr` | global fit clearance (raise if parts are tight) |
 | `keyhole_spacing` | wall-screw spacing |

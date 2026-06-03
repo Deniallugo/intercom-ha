@@ -57,6 +57,7 @@ usb_conn_w   = 10;         // connector width  — across the case (x)
 usb_conn_t   = 10;         // connector thickness — into the case (z)
 usb_conn_len = 30;         // connector length (protrudes out the bottom; reference)
 usb_clr      = 3;          // clearance around the connector in every opening
+usb_z        = wall + mod_d/2;  // USB-C port center depth from the front face — centers the bottom hole [confirm vs hardware]
 cradle_wall = 1.6;
 
 // ---- button ----
