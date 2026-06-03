@@ -23,9 +23,7 @@ esphome:
             id(s3_mic).add_data_callback([](const std::vector<uint8_t>& data) {
               recorder_on_data(data.data(), data.size());
             });
-    # Kick the wake-word engine into listening mode. As of ESPHome 2026.x
-    # mww does NOT auto-start — without this call it just sits configured
-    # but never actually consumes mic data.
+    # mww doesn't auto-start in ESPHome 2026.x — without this it never listens.
     - priority: 100.0
       then:
         - micro_wake_word.start
@@ -36,8 +34,7 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    # Cache layout — required to avoid boot loops on the EchoS3R / VoiceS3R
-    # per M5Stack's reference YAML.
+    # Cache layout — avoids boot loops (per M5Stack reference).
     sdkconfig_options:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
@@ -48,13 +45,12 @@ psram:
   mode: octal
   speed: 80MHz
 
-# Override base.yaml's empty logger — VoiceS3R has no UART pins broken out,
-# so logs go through USB CDC.
+# No UART pins broken out — log over USB CDC.
 logger:
   hardware_uart: USB_CDC
   level: VERBOSE
   logs:
-    # Keep noisy components quieter so micro_wake_word lines stay readable.
+    # Quiet noisy components so wake-word logs stay readable.
     component: DEBUG
     sensor: DEBUG
     scheduler: DEBUG
@@ -78,11 +74,10 @@ audio_dac:
     id: es8311_dac
     bits_per_sample: 16bit
     sample_rate: 48000
-    mic_gain: 36DB              # default — needed for wake-word reliability; dial back later if intercom clips
+    mic_gain: 36DB              # wake word needs this; lower if intercom clips
 
 # ── NS4150 internal Class-D amp enable ───────────────────────────────────────
-# GPIO18 controls the NS4150 amp on the VoiceS3R. Without this, the codec's
-# analog output reaches the amp but the amp is off → no sound from the speaker.
+# GPIO18 enables the internal NS4150 amp — off = no internal speaker sound.
 
 switch:
   - platform: gpio
@@ -91,21 +86,25 @@ switch:
     name: "Internal Amp"
     restore_mode: ALWAYS_ON
 
-# ── I²S bus shared between mic and speaker ───────────────────────────────────
-# The ES8311 is ONE full-duplex codec on ONE physical I²S bus, so mic and
-# speaker share a SINGLE i2s_audio instance (matches M5Stack's reference YAML
-# for the EchoS3R/VoiceS3R). The I2SAudioComponent guards its port with one
-# mutex, so the mic (RX) and speaker (TX) can't be live at the same time — they
-# are time-multiplexed: the wake word is stopped before playback and restarted
-# after (see the media_player on_announcement / on_idle handlers below).
+# ── I²S buses ────────────────────────────────────────────────────────────────
+# The ES8311 is one full-duplex codec on one I²S bus, so mic (RX) and speaker
+# (TX) share a single instance and can't be live at once — the wake word is
+# stopped before playback, restarted after (see on_announcement / on_idle).
 
 i2s_audio:
+  # Bus 1 — internal ES8311 codec, hard-wired, not on the headers.
   - id: i2s_bus
     i2s_lrclk_pin:
       number: GPIO3
       ignore_strapping_warning: true
     i2s_bclk_pin: GPIO17
     i2s_mclk_pin: GPIO11
+
+  # Bus 2 — free pins G5/G6/G7. Broadcast bus: both MAX98357A amps listen in
+  # parallel. No MCLK broken out (the MAX doesn't need it).
+  - id: i2s_bus_ext
+    i2s_lrclk_pin: GPIO6
+    i2s_bclk_pin: GPIO5
 
 microphone:
   - platform: i2s_audio
@@ -118,6 +117,7 @@ microphone:
     correct_dc_offset: true
 
 speaker:
+  # Internal ES8311 → NS4150 → 1 W speaker. Fallback; mute via "Internal Amp".
   - platform: i2s_audio
     id: s3_speaker
     i2s_audio_id: i2s_bus
@@ -128,26 +128,51 @@ speaker:
     channel: left                  # VoiceS3R has only one internal speaker
     audio_dac: es8311_dac
 
+  # 2× MAX98357A, both playing the same mono mix (dual mono). Each is a
+  # self-contained DAC+amp on G5/G6/G7. ESPHome sees ONE speaker — the amps are
+  # passive parallel listeners, so the 2nd board is wiring-only (no YAML change).
+  # Optional 3.5 mm line-out via a PCM5100 on the same bus — see docs/DEVICES.md.
+  - platform: i2s_audio
+    id: s3_speaker_ext
+    i2s_audio_id: i2s_bus_ext
+    i2s_dout_pin: GPIO7
+    dac_type: external
+    bits_per_sample: 16bit
+    sample_rate: 48000
+    channel: mono
+
+  # Two virtual sources so TTS announcements and music can share one speaker
+  # (ESPHome rejects the same speaker on both pipelines).
+  - platform: mixer
+    id: s3_mixer
+    output_speaker: s3_speaker_ext
+    source_speakers:
+      - id: s3_announcement_src
+      - id: s3_media_src
+
 # ── Media player (HA-controllable playback) ──────────────────────────────────
 
 media_player:
   - platform: speaker
     id: s3_player
     name: "${friendly_name} Player"
-    volume_min: 0.5
+    volume_min: 0.2
     volume_max: 0.9
-    announcement_pipeline:
-      speaker: s3_speaker
+    buffer_size: 1000000 # 1 MB PSRAM buffer for music streaming
+    # Music (Spotify / Music Assistant).
+    media_pipeline:
+      speaker: s3_media_src
       format: FLAC
       sample_rate: 48000
       num_channels: 1
-    # ── Shared-bus coordination ──────────────────────────────────────────────
-    # Mic and speaker share one i2s_audio instance (one mutex), so they can't be
-    # live simultaneously. The always-on wake word holds the mic (RX); before the
-    # speaker (TX) can play we must stop the wake word and wait for the mic to
-    # actually release the bus, else the speaker hits "Parent bus is busy" and
-    # retries forever. After playback we resume listening. (M5Stack reference
-    # does this via media_player on_announcement / on_idle.)
+    # Short interruptions: TTS, intercom, wake-word sounds.
+    announcement_pipeline:
+      speaker: s3_announcement_src
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    # Mic and speaker share one I²S instance. Stop the wake word and wait for the
+    # mic to release the bus before playback, else "Parent bus is busy". Resume after.
     on_announcement:
       - if:
           condition:
@@ -207,12 +232,37 @@ voice_assistant:
   media_player: s3_player
   noise_suppression_level: 2
   auto_gain: 31dBFS
-  volume_multiplier: 2.0
+  volume_multiplier: 2.0       # back from 4.0 — 4× clipped TTS at +12 dB GAIN
+  on_end:
+    # Re-arm the wake word — VA stopped it, and on_idle won't restart it while
+    # music keeps playing (so the next "okay nabu" was ignored).
+    - micro_wake_word.start:
+    # Keep music ducked until the answer finishes playing. on_end fires before the
+    # TTS plays, so wait for the announcement to start, then end, then restore.
+    # Timeouts cover the no-answer case (first times out, second passes through).
+    - wait_until:
+        condition:
+          lambda: 'return id(s3_player)->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+        timeout: 1500ms
+    - wait_until:
+        condition:
+          lambda: 'return id(s3_player)->state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+        timeout: 30s
+    - mixer_speaker.apply_ducking:
+        id: s3_media_src
+        decibel_reduction: 0
+        duration: 0.5s
+  # No answer coming — restore music and re-arm.
+  on_error:
+    - mixer_speaker.apply_ducking:
+        id: s3_media_src
+        decibel_reduction: 0
+        duration: 0.5s
+    - micro_wake_word.start:
 
 # ── Wake-word dispatch ───────────────────────────────────────────────────────
-# v1: single wake word ("okay nabu") → HA Assist pipeline via voice_assistant.
-# Later: add a second model for intercom (records + POSTs to addon) — see
-# spec docs/superpowers/specs/2026-05-18-kitchen-amp-and-terrace-s3-design.md.
+# "okay nabu" → HA Assist. Later: a 2nd model for intercom — see
+# docs/superpowers/specs/2026-05-18-kitchen-amp-and-terrace-s3-design.md.
 
 micro_wake_word:
   id: mww
@@ -220,7 +270,14 @@ micro_wake_word:
   models:
     - model: okay_nabu
       id: okay_nabu
-      probability_cutoff: 0.7      # default 0.97 was too strict at our gain level
+      probability_cutoff: 0.7      # default 0.97 too strict at our gain
   on_wake_word_detected:
+    # Duck music ~20 dB with a short ramp; restored when the answer finishes.
+    # Chime is configured HA-side — an on-device chime fails ("Incompatible audio
+    # streams"): external-speaker audio must go through the media_player pipeline.
+    - mixer_speaker.apply_ducking:
+        id: s3_media_src
+        decibel_reduction: 20
+        duration: 0.3s
     - voice_assistant.start:
         wake_word: !lambda return wake_word;

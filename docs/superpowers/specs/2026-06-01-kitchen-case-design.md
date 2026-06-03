@@ -1,0 +1,249 @@
+# Kitchen Atom Echo Enclosure — Design
+
+**Date:** 2026-06-01
+**Status:** Design — pending implementation
+**Device:** Kitchen M5Stack Atom Echo (`devices/atom-echo.yaml`)
+
+A wall-mounted, 3D-printable enclosure for the kitchen intercom: the classic
+M5Stack **Atom Echo** module, **one** MAX98357A amp breakout, and **two** 4 cm
+external speaker drivers (side by side, wired in series off the one amp). A
+fork of the terrace case
+([2026-05-31-terrace-case-design.md](2026-05-31-terrace-case-design.md)),
+keeping the two-driver baffle but driving both drivers from a single amp, and
+re-cradled for the classic Atom Echo. Authored as parametric OpenSCAD so the
+model is version-controlled, diffable, and re-renderable from source.
+
+## Goal
+
+Produce a serviceable wall enclosure that:
+
+- Mounts **two** 4 cm (≈40 mm locating dia, 20 mm deep) full-range drivers, side
+  by side as a horizontal pair, near-touching.
+- Houses the classic Atom Echo module (top face forward) and **one** MAX98357A
+  amp board (driving both drivers in series) in the strip below the drivers.
+- Exposes the Atom Echo's built-in PTT button through a captive printed plunger
+  that presses solidly.
+- Gives the module's microphone a clear acoustic path to outside air, isolated
+  from internal speaker noise.
+- Keeps the USB-C port reachable for power and re-flashing without opening the
+  case.
+- Splits front/rear so the rear plate stays on the wall and the body lifts off
+  for servicing.
+
+## Context
+
+- Device docs: [docs/DEVICES.md](../../DEVICES.md) — kitchen Atom Echo section.
+- Amp/wiring: the kitchen louder-amp design
+  ([2026-06-01-kitchen-atom-echo-louder-amp-design.md](2026-06-01-kitchen-atom-echo-louder-amp-design.md))
+  adds one MAX98357A as a passive parallel I²S listener at the Atom Echo's
+  header pads (BCLK G19, LRCLK G33, DIN G22, +5V/GND), GAIN→GND = +12 dB,
+  driving one bigger 4 Ω driver. This enclosure houses exactly that combo.
+- Prior CAD: `hardware/terrace-case` — the two-speaker/two-amp VoiceS3R case
+  this design forks from.
+
+## Why fork (not share a library)
+
+Per the locked decision, the kitchen case is a **new `hardware/kitchen-case`
+directory** copied from the terrace structure and adapted. It is independent
+and simple to reason about, at the cost of a duplicated `lib.scad`. (Sharing a
+common library across both cases was considered and declined — the small
+duplication is worth the decoupling.)
+
+## Decisions (locked)
+
+| Topic | Decision |
+|---|---|
+| Target hardware | Kitchen classic Atom Echo + 1× MAX98357A + 2× 4 cm drivers |
+| Deliverable | Parametric OpenSCAD source → STL via CLI |
+| Code layout | New `hardware/kitchen-case` (fork of terrace-case); own `lib.scad` |
+| Mounting | Wall-mount (keyhole slots on rear plate), same as terrace |
+| Speaker driver | 4 cm — ≈40 mm locating dia, 20 mm deep, ≈33 mm grille field |
+| Speaker layout | **Two** drivers, side by side, ~3 mm center gap |
+| Driver retention | Friction/glue (locating ring + gasket; no flange screws in this tight shell) |
+| Speaker wiring | Both drivers in **series** off the one amp (doubles impedance; safe) |
+| Amp boards | **One** (MAX98357A) driving both drivers |
+| Weather | Indoor (kitchen) — no weatherproofing needed |
+| Architecture | Two-part clamshell: front shell + rear wall plate, 4× M3 screws |
+| Button | Captive printed plunger cap over the module's top-face button |
+| Microphone | Perforation cluster (center + ring) through the front wall |
+| Mic placement | Under the button, over the module's top-face mic |
+| STL files | Gitignored (regenerable from source) |
+| Envelope | ~95 × 85 × 38 mm (two 4 cm drivers; shallower than terrace) |
+
+## Module orientation
+
+The classic Atom Echo carries **both** its PTT button (G39) and its PDM mic on
+its **top face**. The module is cradled **top-face-forward** — the same trick
+the terrace case uses with the VoiceS3R — so the plunger presses the button and
+the mic perforation opens onto the mic right beside it through the front wall.
+
+## Architecture
+
+Two printed parts plus one small printed plunger:
+
+1. **Front shell** — the visible body. Carries two side-by-side speaker recess
+   rings + grilles + per-driver bolt-circle screw bosses + gasket grooves, the
+   button well, the mic perforation (under the button), the Atom Echo cradle,
+   **one** amp-board screw standoff, and the corner screw bosses.
+2. **Rear plate** — sits flush on the wall. Carries two keyhole mounting slots,
+   the USB-C cable notch at the bottom edge, and the mating screw bosses.
+3. **Button cap** — a captive plunger that drops into the front-shell button
+   well and presses the module's top-face button.
+
+The two halves join with **4× M3 screws** (corners), self-tapping into printed
+bosses by default. Parting line runs around the perimeter; the front shell
+holds the deeper (~26 mm) speaker zone, the rear plate is shallow (~12 mm).
+
+### Layout (front view)
+
+```
+   ┌──────────────────────────────┐
+   │  ·· ╭─────╮ ··  ·· ╭─────╮ ·· │
+   │ ·  │ spkr │  · gap · │ spkr │·│   ← two 4 cm drivers, ~3 mm apart
+   │  ·· │  L  │ ··    ·· │  R  │·· │
+   │     ╰─────╯         ╰─────╯    │
+   │      [AtomEcho▢]   [amp]       │   ← module centered + single amp to its right
+   │         [btn]/(∴)              │   ← button + mic perforation under it
+   └─────────────┬────────────────┘      (both over the module top face)
+             USB-C notch (bottom edge)
+```
+
+## Components
+
+### Front shell (`modules/front_shell.scad`)
+- Rounded rectangular outer wall, 2.4 mm thick, 6 mm corner radius.
+- **Two** side-by-side speaker recess rings (≈40 mm seat, ≈33 mm grille field),
+  ~3 mm center gap. Drivers are **friction/glue-mounted** (`spk_screw_n = 0`):
+  held by the locating ring + gasket + a dab of glue/foam, no flange screws.
+  (Per-driver bolt-circle screw bosses are parametrically available via
+  `spk_screw_n > 0`, but in this tight envelope the diagonal top-outer bosses
+  collided with the corner M3 lid bosses — so screw-mounting requires enlarging
+  the shell. `tests/asserts.scad` guards that collision.)
+- Two circular grilles (concentric rings of 3 mm holes) over the cutouts.
+- A gasket groove in the baffle under each driver flange
+  (`gasket_id`..`gasket_od`, `gasket_depth` deep) seats a foam/EVA ring so the
+  flange seals the front wave from the back wave.
+- Atom Echo cradle: 3-wall pocket sized to the module footprint
+  (`mod_w` + `clr`), centered with the single amp board to one side;
+  module oriented top-face-forward; a side window for header wires to reach the
+  amp. The cradle's bottom (-y) wall is slotted down its full depth so the USB-C
+  connector clears the pocket regardless of port depth.
+- USB-C bottom exit: a **bounded** (sealed) hole through the front shell's
+  bottom (-y) perimeter wall, centered under the cradle at the port depth
+  (`usb_z`) and sized to the connector cross-section + `usb_clr`. The cable
+  leaves out the **bottom of the case** while bottom-wall material remains both
+  in front of and behind the hole — it does not run off to the back edge. The
+  rear plate's bottom edge stays solid (no notch).
+- Button well guiding the plunger, with a retaining shoulder. The bore goes
+  through the front wall **and** the cradle floor behind it, so the plunger nub
+  can reach the module's button.
+- Mic perforation: a cluster of small holes (one center + a ring of
+  `mic_ring_n`, default 6) through the front wall **and** the cradle floor,
+  centered `mic_below_btn` from the button so they open into the pocket at the
+  module's mic. No boss needed.
+- **One** amp-board standoff set with M2 self-tap pilots so the board screws
+  down.
+- 4× corner screw bosses (front side).
+
+### Rear plate (`modules/rear_plate.scad`)
+- Flat plate matching the shell footprint, 2.4 mm thick.
+- Two keyhole slots, default 70 mm apart (parametric — scaled to the two-driver
+  footprint), sized for common screw heads.
+- USB-C cable notch at the bottom edge.
+- 4× mating screw bosses (self-tapping or insert-ready).
+
+### Button cap (`modules/button_cap.scad`)
+- Captive plunger: face disc (~12 mm dia, slightly proud), skirt with a
+  retention lip catching behind the well wall, underside nub landing on the
+  module button. ~1.5–2 mm travel; module switch provides return spring.
+
+### Shared library (`modules/lib.scad`)
+- Helpers copied from terrace-case: rounded box, grille hole pattern, keyhole
+  slot, screw boss.
+
+## Parametric structure
+
+Parameters live in `modules/params.scad`; `kitchen-case.scad` includes them and
+exposes a `part` selector (a normal variable overridden by `-D part="..."`):
+
+- `part` ∈ `"front"` | `"rear"` | `"button"` | `"coupon"` (fit-test) |
+  `"all"` (assembled preview).
+- All dimensions are named variables: outer W/H/D, wall thickness, corner
+  radius, speaker OD/cutout/center-gap, driver retention, grille hole
+  dia/spacing, module cradle size + clearance, USB-C notch position/size,
+  button well + cap dims, mic perforation offset + hole/ring dims, amp board
+  size + standoff height + amp screw pilot, speaker bolt-circle + screw count +
+  start angle + boss dims, keyhole spacing, screw boss dia + M3 pilot, global
+  fit clearance (default 0.4 mm).
+- Two side-by-side drivers (`spk_gap` between them) sharing a single amp
+  standoff: the two-driver baffle is geometry; the single amp is the only board
+  standoff (not two as in terrace).
+
+## Build & file layout
+
+```
+hardware/kitchen-case/
+├── kitchen-case.scad      # includes params + part render selector
+├── modules/
+│   ├── front_shell.scad
+│   ├── rear_plate.scad
+│   ├── button_cap.scad
+│   └── lib.scad
+├── build.sh               # openscad CLI → exports each part to stl/
+├── test.sh                # asserts + clean-render check per part
+├── tests/
+│   └── asserts.scad
+├── stl/                   # generated meshes (gitignored)
+├── .gitignore             # ignores stl/
+└── README.md              # parameters, print settings, BOM, assembly
+```
+
+`build.sh` loops the parts and runs, per part:
+
+```
+openscad -o stl/<part>.stl -D 'part="<part>"' kitchen-case.scad
+```
+
+## Print orientation & settings (documented in README)
+
+- Front shell: grille face down — grille and front surface print without
+  supports.
+- Rear plate: flat.
+- Button cap: face down, small.
+- Suggested: 0.2 mm layers, ≥4 perimeters, 20–30 % infill. Indoor location;
+  material is the user's choice.
+
+## Verification (physical)
+
+Ship a **fit-test coupon** target (`part="coupon"`) — the left slice of the
+shell — containing just:
+- one speaker recess ring,
+- the Atom Echo cradle + USB-C notch,
+- the button well + a button cap,
+- the mic perforation.
+
+Print the coupon first (~10 min) to validate tolerances (cradle fit, button
+travel, screw-boss pilot, speaker seat) before printing the full shell. The
+README documents which parameters to nudge for a loose/tight fit.
+
+## Out of scope
+
+- The amp wiring itself and disconnecting the internal 0.5 W speaker — covered
+  by the louder-amp design
+  ([2026-06-01-kitchen-atom-echo-louder-amp-design.md](2026-06-01-kitchen-atom-echo-louder-amp-design.md)).
+- Any firmware/YAML change — this is hardware only.
+- Music streaming / media-player features (the kitchen device stays
+  announcement + PTT only).
+- Sharing a CAD library with the terrace case (forked instead).
+
+## Open items requiring physical measurement before final print
+
+These have sensible defaults but must be confirmed against the actual hardware:
+- Atom Echo cradle dimensions (`mod_w`/`mod_d`/`mod_h`) and **USB-C port
+  position/orientation** — differs from the VoiceS3R. The USB-C **plug body** is
+  ~10×10 mm cross-section × ~30 mm long (`usb_conn_w`/`usb_conn_t`/`usb_conn_len`);
+  the bottom exit + cradle slot are sized to pass it with `usb_clr` clearance.
+- Mic offset below the button (`mic_below_btn`) to land on the module mic.
+- Exact driver OD, cutout dia, and mounting-hole (bolt-circle) pattern.
+- MAX98357A breakout footprint (clone dimensions vary).
+- Module button center position relative to the front face.
