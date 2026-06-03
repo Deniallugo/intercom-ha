@@ -59,6 +59,7 @@ duplication is worth the decoupling.)
 | Mounting | Wall-mount (keyhole slots on rear plate), same as terrace |
 | Speaker driver | 4 cm — ≈40 mm locating dia, 20 mm deep, ≈33 mm grille field |
 | Speaker layout | **Two** drivers, side by side, ~3 mm center gap |
+| Driver retention | Friction/glue (locating ring + gasket; no flange screws in this tight shell) |
 | Speaker wiring | Both drivers in **series** off the one amp (doubles impedance; safe) |
 | Amp boards | **One** (MAX98357A) driving both drivers |
 | Weather | Indoor (kitchen) — no weatherproofing needed |
@@ -112,10 +113,12 @@ holds the deeper (~26 mm) speaker zone, the rear plate is shallow (~12 mm).
 ### Front shell (`modules/front_shell.scad`)
 - Rounded rectangular outer wall, 2.4 mm thick, 6 mm corner radius.
 - **Two** side-by-side speaker recess rings (≈40 mm seat, ≈33 mm grille field),
-  ~3 mm center gap. Each driver fastened by `spk_screw_n` (default 4) M2
-  self-tap screws through the driver flange into printed bolt-circle bosses
-  (`spk_bolt_circle`, default 46 mm — must clear the driver OD), start angle
-  `spk_screw_a0` (45°) keeps the inner bosses out of the center gap.
+  ~3 mm center gap. Drivers are **friction/glue-mounted** (`spk_screw_n = 0`):
+  held by the locating ring + gasket + a dab of glue/foam, no flange screws.
+  (Per-driver bolt-circle screw bosses are parametrically available via
+  `spk_screw_n > 0`, but in this tight envelope the diagonal top-outer bosses
+  collided with the corner M3 lid bosses — so screw-mounting requires enlarging
+  the shell. `tests/asserts.scad` guards that collision.)
 - Two circular grilles (concentric rings of 3 mm holes) over the cutouts.
 - A gasket groove in the baffle under each driver flange
   (`gasket_id`..`gasket_od`, `gasket_depth` deep) seats a foam/EVA ring so the

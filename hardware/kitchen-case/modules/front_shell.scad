@@ -66,14 +66,16 @@ module mic_perf() {
 
 // frame-hole screw bosses around each driver: the flange screws down into these
 // from inside the case (bolt circle clears the driver OD; a0=45 keeps the inner
-// bosses out of the center gap).
+// bosses out of the center gap). Disabled when spk_screw_n = 0 (friction/glue
+// mount) — the drivers are held by the locating ring + gasket instead.
 module speaker_screw_bosses() {
-    for (sx = [-1, 1])
-        translate([sx*spk_cx(), spk_cy(), wall])
-            for (i = [0 : spk_screw_n - 1])
-                rotate(spk_screw_a0 + i*360/spk_screw_n)
-                    translate([spk_bolt_circle/2, 0, 0])
-                        screw_boss(spk_boss_h, spk_boss_od, spk_screw_pilot);
+    if (spk_screw_n > 0)
+        for (sx = [-1, 1])
+            translate([sx*spk_cx(), spk_cy(), wall])
+                for (i = [0 : spk_screw_n - 1])
+                    rotate(spk_screw_a0 + i*360/spk_screw_n)
+                        translate([spk_bolt_circle/2, 0, 0])
+                            screw_boss(spk_boss_h, spk_boss_od, spk_screw_pilot);
 }
 
 // one amp board to the right of the centered module, on standoff posts with M2

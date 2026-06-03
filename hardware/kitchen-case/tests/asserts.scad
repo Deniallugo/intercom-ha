@@ -13,6 +13,22 @@ assert(front_depth >= spk_depth, "front_depth must clear the driver depth");
 assert(spk_cut < spk_od, "grille field must be smaller than the driver");
 assert(spk_bolt_circle > spk_od, "bolt circle must clear the driver OD");
 
+// Driver screw bosses (when enabled, spk_screw_n > 0) must clear the corner lid
+// bosses. Regression guard for the tight-envelope collision: the top-outer
+// bolt-circle boss landing on the top corner boss. With spk_screw_n = 0
+// (friction-mounted drivers) this loop is empty and the check is vacuous.
+spk_corner_clear = spk_boss_od/2 + boss_od/2;
+spk_corners = [for (sx = [-1, 1], sy = [-1, 1]) [sx*(outer_w()/2 - boss_inset), sy*(outer_h()/2 - boss_inset)]];
+if (spk_screw_n > 0)
+    for (sx = [-1, 1])
+        for (i = [0 : spk_screw_n - 1]) {
+            a  = spk_screw_a0 + i*360/spk_screw_n;
+            bp = [sx*spk_cx() + spk_bolt_circle/2*cos(a), spk_cy() + spk_bolt_circle/2*sin(a)];
+            for (c = spk_corners)
+                assert(norm(bp - c) >= spk_corner_clear,
+                       "driver screw boss overlaps a corner lid boss — enlarge the shell or set spk_screw_n=0 (friction mount)");
+        }
+
 // Gasket groove sits on the flange land and doesn't cut through the baffle.
 assert(gasket_id < gasket_od, "gasket groove must have id < od");
 assert(gasket_id >= spk_cut && gasket_od <= spk_od, "gasket must sit on the flange land");

@@ -22,10 +22,15 @@ gasket_od    = spk_od - 1;   // groove outer diameter (just inside the locating 
 gasket_id    = spk_cut + 1;  // groove inner diameter (just outside the grille field)
 gasket_depth = 1.0;          // groove depth cut into the baffle inner face
 
-// ---- speaker frame-hole screw bosses (fasten the driver flange) ----
-spk_screw_n     = 4;       // mounting holes on the driver flange
+// ---- speaker mounting (friction/glue) ----
+// The 4 cm drivers are held by the locating ring + gasket + a dab of glue/foam
+// (no flange screws). spk_screw_n = 0 disables the per-driver bolt-circle bosses
+// — in this tight envelope the diagonal top-outer bosses collided with the
+// corner M3 lid bosses. To re-enable driver screws, set spk_screw_n > 0 AND
+// enlarge the shell until tests/asserts.scad passes (it guards this collision).
+spk_screw_n     = 0;       // 0 = friction/glue mount (no driver screws)
 spk_bolt_circle = 46;      // bolt-circle diameter; MUST clear the driver OD [confirm vs hardware]
-spk_screw_pilot = 1.6;     // M2 self-tap pilot
+spk_screw_pilot = 1.6;     // M2 self-tap pilot (only used when spk_screw_n > 0)
 spk_boss_od     = 5;       // mounting boss outer diameter
 spk_boss_h      = spk_seat_depth + 1;  // boss height on the inner baffle
 spk_screw_a0    = 45;      // start angle (deg); 45 dodges the center gap for n=4

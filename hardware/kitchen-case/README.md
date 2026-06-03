@@ -49,7 +49,7 @@ button cap:
 - Cradle too tight/loose → adjust `clr` / `mod_clr`.
 - Button binds or has no travel → adjust `btn_well_d` / `btn_travel`.
 - Driver doesn't seat → adjust `spk_od` / `spk_seat_depth`.
-- Driver screw holes don't line up → adjust `spk_bolt_circle` / `spk_screw_n` / `spk_screw_a0` to match your driver's flange.
+- Drivers are friction/glue-mounted (`spk_screw_n = 0`); the locating ring + gasket hold them. To screw-mount instead, set `spk_screw_n > 0` and enlarge the shell until `test.sh` passes (the asserts guard against the bolt-circle bosses colliding with the corner lid screws in this tight envelope).
 
 ## Print settings
 
@@ -64,9 +64,9 @@ button cap:
 - 1× MAX98357A breakout
 - 2× 4 cm full-range drivers (~40 mm locating dia, ~20 mm deep)
 - 4× M3 screws (self-tap into the corner front/rear bosses)
-- 8× M2 self-tap screws for the drivers (4 per driver, into the bolt-circle bosses)
 - 4× M2 self-tap screws for the amp board (into the standoffs)
 - 2× foam/EVA gasket rings for the drivers (~34–39 mm, seat in the baffle grooves)
+- a dab of glue / foam tape to retain each driver in its locating ring (drivers are friction/glue-mounted, not screwed)
 - 2× wall screws for the keyhole slots
 
 ## Speaker wiring (two drivers, one amp)
@@ -80,7 +80,7 @@ halve the impedance — fine for 8 Ω drivers, but 2× 4 Ω → 2 Ω risks overh
 
 ## Assembly
 
-1. Drop a foam/EVA gasket ring into the baffle groove around each driver, then seat the drivers into the front-shell rings; fasten each with 4× M2 through the flange into the bolt-circle bosses (compressing the gasket). Wire the two drivers in series (see above) and solder the series pair to the amp `+/−`.
+1. Drop a foam/EVA gasket ring into the baffle groove around each driver, then seat the drivers into the front-shell locating rings (compressing the gasket); retain each with a dab of glue or foam tape — the rings + gaskets hold them, there are no driver screws. Wire the two drivers in series (see above) and solder the series pair to the amp `+/−`.
 2. Drop the Atom Echo into the cradle top-face-forward (its button + mic end up behind the well and the perforation in the front wall); route header wires through the side window to the amp.
 3. Seat the amp board on its standoffs; fasten with 4× M2 into the standoff pilots.
 4. Drop the button cap into its well from the front (snaps captive).
