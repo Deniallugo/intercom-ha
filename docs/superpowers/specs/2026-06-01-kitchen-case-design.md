@@ -125,8 +125,14 @@ holds the deeper (~26 mm) speaker zone, the rear plate is shallow (~12 mm).
   flange seals the front wave from the back wave.
 - Atom Echo cradle: 3-wall pocket sized to the module footprint
   (`mod_w` + `clr`), centered with the single amp board to one side;
-  module oriented top-face-forward; USB-C edge cutout toward the bottom; a side
-  window for header wires to reach the amp.
+  module oriented top-face-forward; a side window for header wires to reach the
+  amp. The cradle's bottom (-y) wall is slotted down its full depth so the USB-C
+  connector clears the pocket regardless of port depth.
+- USB-C bottom exit: a cutout through the front shell's bottom (-y) perimeter
+  wall, centered under the cradle and spanning the front-shell depth, so the
+  cable leaves straight out the **bottom of the case** (the bottom wall is
+  otherwise solid). The rear plate's bottom-edge notch is sized to match, making
+  the bottom opening continuous across the parting line.
 - Button well guiding the plunger, with a retaining shoulder. The bore goes
   through the front wall **and** the cradle floor behind it, so the plunger nub
   can reach the module's button.

@@ -49,8 +49,9 @@ grille_ring_step = 6;      // radial spacing between hole rings
 mod_w   = 24;              // module footprint (square)            [confirm vs hardware]
 mod_d   = 17;              // module depth front-to-back in the case [confirm vs hardware]
 mod_clr = clr;
-mod_usb_w = 10;            // USB-C cutout width                   [confirm position vs hardware]
-mod_usb_h = 4;             // USB-C cutout height
+mod_usb_w = 10;            // USB-C connector width                [confirm position vs hardware]
+mod_usb_h = 4;             // USB-C connector height
+usb_floor_clr = 4;         // extra width on the bottom-of-case USB exit, for the cable
 cradle_wall = 1.6;
 
 // ---- button ----

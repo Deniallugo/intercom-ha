@@ -28,20 +28,30 @@ module gasket_grooves() {
 }
 
 // 3-wall pocket holding the Atom Echo top-face-forward; open at the back (+z),
-// USB-C slot toward the bottom edge, wire window toward the amp (+x).
+// USB-C slot down the full depth of the bottom (-y) wall so the connector clears
+// the pocket whatever depth the port sits at, wire window toward the amp (+x).
 module atom_cradle() {
     cw = mod_w + 2*mod_clr;                 // inner pocket size
     translate([cradle_cx(), board_cy(), wall]) difference() {
         translate([0, 0, mod_d/2]) cube([cw + 2*cradle_wall, cw + 2*cradle_wall, mod_d], center = true);
         // pocket, open at back
         translate([0, 0, mod_d/2 + cradle_wall]) cube([cw, cw, mod_d], center = true);
-        // USB-C slot through the bottom wall (toward -y)
-        translate([0, -(cw/2 + cradle_wall), mod_usb_h/2 + 1])
-            cube([mod_usb_w, cradle_wall*3, mod_usb_h], center = true);
+        // USB-C slot through the bottom (-y) wall, spanning the module depth
+        translate([0, -(cw/2 + cradle_wall), mod_d/2])
+            cube([mod_usb_w, cradle_wall*3, mod_d + 0.2], center = true);
         // wire window toward the amp on the +x side
         translate([(cw/2 + cradle_wall), 0, mod_d*0.55])
             cube([cradle_wall*3, mod_w*0.6, mod_d*0.6], center = true);
     }
+}
+
+// USB-C exit through the front shell's bottom (-y) perimeter wall, centered
+// under the cradle and spanning the front-shell depth, so the cable leaves
+// straight out the bottom of the case (the bottom wall is otherwise solid).
+module usb_floor_cut() {
+    w = mod_usb_w + usb_floor_clr;
+    translate([cradle_cx(), -outer_h()/2, (wall + front_depth)/2])
+        cube([w, wall*3, front_depth - wall + 0.2], center = true);
 }
 
 // well bored through the front wall AND the cradle floor behind it, so the
@@ -108,6 +118,7 @@ module front_shell() {
         gasket_grooves();
         button_well();
         mic_perf();
+        usb_floor_cut();
     }
 }
 
