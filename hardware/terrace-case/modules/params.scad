@@ -44,8 +44,15 @@ grille_ring_step = 6;      // radial spacing between hole rings
 mod_w   = 24;              // module footprint (square)
 mod_d   = 17;              // module depth front-to-back inside the case
 mod_clr = clr;
-mod_usb_w = 10;            // USB-C cutout width
-mod_usb_h = 4;             // USB-C cutout height
+// USB-C plug body (the connector + boot, not just the socket): 10×10 mm
+// cross-section, ~30 mm long. The long axis points -y (down) and the plug
+// protrudes out the bottom of the case; the 10×10 cross-section is what every
+// opening must pass.                                    [confirm vs hardware]
+usb_conn_w   = 10;         // connector width  — across the case (x)
+usb_conn_t   = 10;         // connector thickness — into the case (z)
+usb_conn_len = 30;         // connector length (protrudes out the bottom; reference)
+usb_clr      = 3;          // clearance around the connector in every opening
+usb_z        = wall + mod_d/2;  // USB-C port center depth from the front face — centers the bottom hole [confirm vs hardware]
 cradle_wall = 1.6;
 
 // ---- button ----

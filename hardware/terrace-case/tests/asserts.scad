@@ -25,6 +25,16 @@ assert(board_cy() < 0, "board row should be below center");
 assert(mic_y() < board_cy(), "mic cluster should be below the button");
 assert(board_cy() - mic_y() <= mod_w/2, "mic cluster should stay over the module");
 
+// USB-C bottom exit is a BOUNDED (sealed) hole at the port depth usb_z, sized to
+// the connector cross-section + clearance. It must leave bottom-wall material
+// front AND back (not run off to the back edge), and the matching cradle slot
+// must sit within the module depth.
+usb_z_half = (usb_conn_t + usb_clr)/2;
+assert(usb_z - usb_z_half >= wall, "USB bottom hole runs into the front face — increase usb_z");
+assert(usb_z + usb_z_half <= front_depth - wall, "USB bottom hole runs to the back edge (not sealed) — decrease usb_z or deepen the shell");
+assert(usb_z - wall - usb_z_half >= 0 && usb_z - wall + usb_z_half <= mod_d, "cradle USB slot falls outside the module depth — adjust usb_z");
+assert((usb_conn_w + usb_clr)/2 + boss_od/2 <= (outer_w()/2 - boss_inset), "USB bottom hole overlaps a corner lid boss");
+
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);
 linear_extrude(1) grille(spk_cut);

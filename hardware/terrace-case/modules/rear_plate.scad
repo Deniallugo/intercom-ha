@@ -15,8 +15,7 @@ module rear_plate() {
         for (sx = [-1, 1])
             translate([sx*keyhole_spacing/2, 0, -0.1])
                 linear_extrude(wall + 0.2) keyhole(keyhole_slot_w, keyhole_head_d, keyhole_drop);
-        // USB-C cable notch in the bottom edge, aligned under the cradle
-        translate([cradle_cx(), -outer_h()/2, rear_depth/2])
-            cube([mod_usb_w + 2, wall*4, rear_depth + 0.2], center = true);
+        // (no USB notch — the USB-C exit is a bounded hole in the front shell's
+        //  bottom wall, so the rear plate's bottom edge stays solid)
     }
 }

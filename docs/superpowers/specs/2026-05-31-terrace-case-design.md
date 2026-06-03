@@ -95,8 +95,13 @@ holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
   wave from the back wave — the key small-driver sound-quality fix.
 - VoiceS3R cradle: 3-wall pocket sized 24.4 mm (0.4 mm clearance), centered
   horizontally with an amp board flanking each side; module oriented
-  button-forward; USB-C edge cutout toward the bottom; side windows on both
-  sides for header wires to reach the amps.
+  button-forward; bottom (-y) wall slotted for the USB-C plug at the port depth;
+  side windows on both sides for header wires to reach the amps.
+- USB-C bottom exit: a **bounded** (sealed) hole through the front shell's
+  bottom (-y) wall, centered under the cradle at the port depth (`usb_z`) and
+  sized to the connector cross-section (`usb_conn_w`×`usb_conn_t`) + `usb_clr`.
+  The cable leaves out the bottom of the case while bottom-wall material remains
+  in front of and behind the hole (it does not run to the back edge).
 - Button well guiding the plunger, with a retaining shoulder. The bore goes
   through the front wall **and** the cradle floor behind it, so the plunger
   nub can reach the module's switch.
@@ -111,7 +116,8 @@ holds the deeper (~38 mm) speaker zone, the rear plate is shallow (~12 mm).
 - Flat plate matching the shell footprint, 2.4 mm thick.
 - Two keyhole slots, default 90 mm apart (parametric), sized for common screw
   heads.
-- USB-C cable notch at the bottom edge.
+- Bottom edge stays solid (the USB-C exit is a bounded hole in the front shell's
+  bottom wall, not a rear-edge notch).
 - 4× mating screw bosses (self-tapping or insert-ready).
 
 ### Button cap (`modules/button_cap.scad`)
