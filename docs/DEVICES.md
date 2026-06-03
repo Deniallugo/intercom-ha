@@ -46,6 +46,7 @@ the same mono mix into a pair of larger drivers (dual mono).
 | Wake-word + HA Assist (STT, intent, TTS reply) | — | ✓ (`okay nabu`) |
 | Music streaming from Spotify via Music Assistant | — | ✓ |
 | HA TTS announcements (`media_player.play_media`) | ✓ | ✓ |
+| Text announcements (UI + automation TTS) | ✓ | ✓ |
 | External larger-driver speakers | ✓ (1× MAX98357A) | ✓ (2× MAX98357A, dual mono) |
 | Internal speaker fallback | — (disconnected) | ✓ (HA-toggleable switch) |
 | Software mic gain | +6 dB (recorder.h) | n/a (codec PGA at 36 dB) |
@@ -330,3 +331,44 @@ intercom/
   PSRAM-backed buffer for smooth streaming.
 - **HA intercom-addon** — Python service on port 9999 receiving audio
   uploads from either device; broadcasts to configured target media players.
+
+---
+
+## Announcements (text-to-speech)
+
+Type a message in the **Intercom** addon panel (the "Announce" box) or trigger
+one from a Home Assistant automation. The addon renders the text with Piper TTS,
+prefixes/suffixes the intercom chime, ducks any playing media on the targets,
+and plays it — the same path the PTT intercom uses.
+
+- TTS engine is configurable via the addon's `tts_engine` option (default
+  `tts.piper`).
+- From the UI you pick the target players each time. If you trigger via the API
+  and omit `targets`, the announcement plays on **every** `media_player` in HA.
+
+### Trigger from an automation
+
+Define a `rest_command` once (in `configuration.yaml`), pointing at the same
+host/port the devices already use for the intercom:
+
+```yaml
+rest_command:
+  intercom_announce:
+    url: "http://homeassistant.local:9999/announce"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"text": "{{ text }}",
+       "targets": {{ targets | tojson }}}
+```
+
+Then call it from any automation (omit `targets` to hit all players):
+
+```yaml
+- action: rest_command.intercom_announce
+  data:
+    text: "Someone is at the front door"
+    targets:
+      - media_player.atom_echo_player
+      - media_player.intercom_s3_player
+```

@@ -33,6 +33,18 @@
 </head>
 <body>
 <h1>Intercom Routes</h1>
+<section id="announce" style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid #eee;">
+  <h2 style="margin: 0 0 0.5rem;">Announce</h2>
+  <textarea id="ann-text" rows="2" placeholder="Type a message to speak…"
+            style="width: 100%; box-sizing: border-box; font-size: 1rem; padding: 0.5rem;"></textarea>
+  <div class="chips" id="ann-chips"></div>
+  <select id="ann-add"><option value="">+ add speaker…</option></select>
+  <span class="hint" id="ann-allhint"> (no speakers = announce on all)</span>
+  <div style="margin-top: 0.6rem;">
+    <button class="save" id="ann-send">Announce</button>
+    <span id="ann-toast" class="toast"></span>
+  </div>
+</section>
 <div id="status"></div>
 <div id="content"></div>
 <div class="toolbar">
@@ -189,6 +201,7 @@ function render() {
   for (const src of [...sources, "default"]) {
     $("content").appendChild(renderRow(src));
   }
+  renderAnnounce();
 }
 
 async function save() {
@@ -216,6 +229,68 @@ async function save() {
 }
 
 $("save").addEventListener("click", save);
+
+let annTargets = [];
+
+function renderAnnounce() {
+  const chips = $("ann-chips");
+  chips.innerHTML = "";
+  for (const eid of annTargets) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = friendlyName(eid) + " ";
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = eid;
+    x.addEventListener("click", () => {
+      annTargets = annTargets.filter((e) => e !== eid);
+      renderAnnounce();
+    });
+    chip.appendChild(x);
+    chips.appendChild(chip);
+  }
+  const sel = $("ann-add");
+  sel.innerHTML = '<option value="">+ add speaker…</option>';
+  for (const tgt of state.available) {
+    if (annTargets.includes(tgt.entity_id)) continue;
+    const opt = document.createElement("option");
+    opt.value = tgt.entity_id;
+    opt.textContent = tgt.friendly_name + "  (" + tgt.entity_id + ")";
+    sel.appendChild(opt);
+  }
+}
+
+$("ann-add").addEventListener("change", (e) => {
+  if (!e.target.value) return;
+  annTargets.push(e.target.value);
+  renderAnnounce();
+});
+
+$("ann-send").addEventListener("click", async () => {
+  const text = $("ann-text").value.trim();
+  $("ann-toast").textContent = "";
+  if (!text) {
+    $("ann-toast").innerHTML = '<span class="error">Enter a message first</span>';
+    return;
+  }
+  try {
+    const resp = await fetch("./api/announce", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text, targets: annTargets}),
+    });
+    if (!resp.ok) {
+      const b = await resp.json().catch(() => ({}));
+      throw new Error("HTTP " + resp.status + (b.error ? ": " + b.error : ""));
+    }
+    $("ann-toast").textContent = "Announced";
+    $("ann-text").value = "";
+    setTimeout(() => { $("ann-toast").textContent = ""; }, 2000);
+  } catch (e) {
+    $("ann-toast").innerHTML = '<span class="error">Failed: ' + e + '</span>';
+  }
+});
+
 load();
 </script>
 </body>

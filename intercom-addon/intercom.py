@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from chimes import ChimeMixer
 from ducking import Ducker
 from talkback import TalkbackWindows
 import players
+import announce
 
 ha = HAClient()
 
@@ -31,6 +33,16 @@ log = logging.getLogger(__name__)
 OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 PICKER_HTML_FILE = Path(__file__).parent / "picker.html"
+
+# X-Session-ID is attacker-controllable and is interpolated into a /config/www
+# filename, so a value like "../../config/foo" would escape the directory and
+# let a LAN client write an arbitrary .wav. Accept it for logging/correlation
+# only when it's a safe token; otherwise fall back to a fresh random id.
+_SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def safe_session_id(raw: str) -> str:
+    return raw if _SAFE_SESSION_ID.match(raw) else str(uuid.uuid4())
 
 
 def load_options() -> dict:
@@ -92,7 +104,7 @@ async def handle_picker_post(request: web.Request) -> web.Response:
 
 
 async def handle_intercom(request: web.Request) -> web.Response:
-    session_id = request.headers.get("X-Session-ID", str(uuid.uuid4()))
+    session_id = safe_session_id(request.headers.get("X-Session-ID", ""))
     source = (request.headers.get("X-Device-Name") or "unknown").strip() or "unknown"
 
     pcm = await request.read()
@@ -126,32 +138,93 @@ async def handle_intercom(request: web.Request) -> web.Response:
         selves=state["selves"],
     )
 
-    opts = load_options()
-    ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
-    filename = f"intercom-{session_id}.wav"
-    filepath = Path(CONFIG_WWW) / filename
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-
-    filepath.write_bytes(mixer.build_wav(pcm))
+    wav = mixer.build_wav(pcm)
     total_duration = mixer.total_duration_seconds(pcm)
-    log.info("WAV written  %s  (%.2fs incl. chimes)", filepath, total_duration)
+    log.info("WAV built  %s  (%.2fs incl. chimes)", session_id[:8], total_duration)
+
+    await _play_on_targets(
+        wav, "wav", total_duration, targets, name=f"intercom-{session_id}"
+    )
+    return web.Response(status=204)
+
+
+async def handle_announce(request: web.Request) -> web.Response:
+    """Speak `text` (Piper TTS) on `targets`. Shared by the LAN endpoint
+    (automations) and the ingress endpoint (UI). If `targets` is omitted/empty,
+    announce on every media_player in HA."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return web.json_response(
+            {"error": "'text' must be a non-empty string"}, status=400
+        )
+    text = text.strip()
+
+    targets = body.get("targets")
+    if targets is not None and not players._is_entity_list(targets):
+        return web.json_response(
+            {"error": "'targets' must be a list of media_player.* entity ids"},
+            status=400,
+        )
+    if not targets:
+        try:
+            available = await fetch_media_players()
+        except Exception as e:
+            log.error("announce: failed to fetch media players: %s", e)
+            return web.json_response({"error": str(e)}, status=502)
+        targets = [p["entity_id"] for p in available]
 
     if not targets:
-        log.warning("source=%s has no targets; skipping play", source)
-        asyncio.create_task(_delete_after(filepath, total_duration + 10))
+        log.warning("announce: no media players available; skipping")
         return web.Response(status=204)
 
-    await ducker.snapshot_and_pause(targets)
+    opts = load_options()
+    tts_engine = opts.get("tts_engine", "tts.piper")
+    try:
+        audio = await ha.tts_get_audio(tts_engine, text)
+    except Exception as e:
+        log.error("announce: tts_get_audio failed: %s", e)
+        return web.json_response({"error": str(e)}, status=502)
 
+    wav, ext, duration = announce.build_announcement_wav(audio)
+    log.info("announce  text=%r  targets=%d", text[:40], len(targets))
+    await _play_on_targets(
+        wav, ext, duration, targets, name=f"announce-{uuid.uuid4()}"
+    )
+    return web.Response(status=204)
+
+
+async def _play_on_targets(
+    wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str
+) -> None:
+    """Write the media to /config/www and play it on `targets` with the same
+    duck/restore/cleanup behavior the intercom uses. Used by both the intercom
+    and announcement handlers."""
+    filename = f"{name}.{ext}"
+    filepath = Path(CONFIG_WWW) / filename
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    filepath.write_bytes(wav_bytes)
+    log.info("media written  %s  (%.2fs)", filepath, duration)
+
+    if not targets:
+        log.warning("no targets; skipping play for %s", filename)
+        asyncio.create_task(_delete_after(filepath, duration + 10))
+        return
+
+    opts = load_options()
+    ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
+    await ducker.snapshot_and_pause(targets)
     media_url = f"{ha_url}/local/{filename}"
     log.info("playing on %d player(s): %s", len(targets), targets)
     for player in targets:
         status = await ha.play_media(player, media_url)
         log.info("HA API  player=%s  status=%d", player, status)
-
-    ducker.schedule_restore(list(targets), total_duration + 1.5)
-    asyncio.create_task(_delete_after(filepath, total_duration + 10))
-    return web.Response(status=204)
+    ducker.schedule_restore(list(targets), duration + 1.5)
+    asyncio.create_task(_delete_after(filepath, duration + 10))
 
 
 async def _delete_after(filepath: Path, delay: float) -> None:
@@ -166,6 +239,7 @@ async def _delete_after(filepath: Path, delay: float) -> None:
 def make_lan_app() -> web.Application:
     app = web.Application(client_max_size=10 * 1024 * 1024)
     app.router.add_post("/intercom", handle_intercom)
+    app.router.add_post("/announce", handle_announce)
     return app
 
 
@@ -174,6 +248,7 @@ def make_ingress_app() -> web.Application:
     app.router.add_get("/", handle_picker_index)
     app.router.add_get("/api/players", handle_picker_get)
     app.router.add_post("/api/players", handle_picker_post)
+    app.router.add_post("/api/announce", handle_announce)
     return app
 
 
@@ -197,6 +272,7 @@ async def _run() -> None:
     log.info("starting picker UI on port %d (ingress)", ingress_port)
     log.info("audio format: %d Hz, %d-bit, %d channel(s)",
              sample_rate, bits, channels)
+    log.info("tts engine: %s", opts.get("tts_engine", "tts.piper"))
 
     lan_runner = web.AppRunner(make_lan_app())
     await lan_runner.setup()

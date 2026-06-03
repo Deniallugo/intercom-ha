@@ -3,7 +3,8 @@ from typing import Optional
 
 from aiohttp import ClientSession
 
-HA_API = "http://supervisor/core/api"
+SUPERVISOR_CORE = "http://supervisor/core"
+HA_API = f"{SUPERVISOR_CORE}/api"
 
 
 class HAClient:
@@ -71,6 +72,30 @@ class HAClient:
             json={"entity_id": entity_id},
         )
         return resp.status
+
+    async def tts_get_audio(self, engine_id: str, message: str) -> bytes:
+        """Generate TTS via HA and return the raw audio bytes.
+
+        POSTs /api/tts_get_url to make HA render the speech, then GETs the
+        returned proxy path (kept on the internal supervisor proxy).
+        """
+        resp = await self.session.post(
+            f"{HA_API}/tts_get_url",
+            headers=self._auth_headers(),
+            json={"engine_id": engine_id, "message": message},
+        )
+        if resp.status != 200:
+            raise RuntimeError(f"tts_get_url returned {resp.status}")
+        data = await resp.json()
+        path = data.get("path")
+        if not path:
+            raise RuntimeError("tts_get_url response missing 'path'")
+        audio_resp = await self.session.get(
+            f"{SUPERVISOR_CORE}{path}", headers=self._auth_headers()
+        )
+        if audio_resp.status != 200:
+            raise RuntimeError(f"tts audio fetch returned {audio_resp.status}")
+        return await audio_resp.read()
 
     async def close(self) -> None:
         if self._session is not None:
