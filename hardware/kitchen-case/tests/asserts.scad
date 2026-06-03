@@ -1,10 +1,10 @@
 include <../modules/params.scad>
 include <../modules/lib.scad>
 
-// Relationship checks — robust to tuning spk_od / depths / amp position in params.scad.
+// Relationship checks — robust to tuning spk_od / spk_gap / depths / amp position in params.scad.
 
-// One driver, centered on X.
-assert(spk_cx() == 0, "single driver must be centered on X");
+// Two drivers sit symmetric about X with exactly spk_gap between their edges.
+assert(2*spk_cx() - spk_od == spk_gap, "driver edge gap should equal spk_gap");
 
 // Front shell must be deep enough to clear the driver front-to-back.
 assert(front_depth >= spk_depth, "front_depth must clear the driver depth");
