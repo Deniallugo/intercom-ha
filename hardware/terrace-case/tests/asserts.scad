@@ -35,6 +35,14 @@ assert(usb_z + usb_z_half <= front_depth - wall, "USB bottom hole runs to the ba
 assert(usb_z - wall - usb_z_half >= 0 && usb_z - wall + usb_z_half <= mod_d, "cradle USB slot falls outside the module depth — adjust usb_z");
 assert((usb_conn_w + usb_clr)/2 + boss_od/2 <= (outer_w()/2 - boss_inset), "USB bottom hole overlaps a corner lid boss");
 
+// The rear plate is a FLAT lid. The 4 corner M3 bosses live entirely on the
+// front shell and span the full internal depth to the rear plate's inner face;
+// the screws self-tap from the back straight into them. So the assembled depth
+// is just the front shell plus the rear lid's wall — NOT an extra rear_depth of
+// proud "mating bosses" standing off the plate (which would either poke out the
+// back, fouling the flush keyhole wall-mount, or collide with the front bosses).
+assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
+
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);
 linear_extrude(1) grille(spk_cut);

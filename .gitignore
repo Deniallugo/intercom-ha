@@ -2,3 +2,4 @@
 **/secrets-*.yaml
 .esphome/
 *.DS_Store
+*.stl

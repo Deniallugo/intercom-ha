@@ -7,8 +7,14 @@ clr = 0.4;                 // global clearance for inserted parts
 // ---- shell envelope ----
 wall        = 2.4;
 radius      = 6;
-front_depth = 26;          // inner depth of the front shell — clears the 20 mm-deep drivers (min = spk_depth; extra clears wiring)
-rear_depth  = 12;          // depth of the rear plate body
+// Acoustic liner allowance: extra interior space on every lined face (cavity
+// depth + all four margins) so a self-adhesive foam / damping liner can be
+// applied without crowding the drivers, boards or rear plate. The front baffle
+// is the grille face and is NOT lined. Set to 0 for a bare shell.
+sound_iso   = 5;
+front_depth = 26 + sound_iso;  // inner depth: 26 clears the 20 mm drivers + wiring, +sound_iso for the rear-plate liner
+// (no separate rear_depth: the rear plate is a FLAT lid `wall` thick — the
+//  corner M3 bosses are full-depth on the front shell and take the screws.)
 
 // ---- speakers (two 4 cm full-range, side by side, driven by one amp) ----
 spk_od         = 40;       // driver locating-ring dia (cone+surround drops into the ring) [confirm vs hardware]
@@ -36,10 +42,10 @@ spk_boss_h      = spk_seat_depth + 1;  // boss height on the inner baffle
 spk_screw_a0    = 45;      // start angle (deg); 45 dodges the center gap for n=4
 
 // ---- margins / board zone ----
-side_margin   = 6;
-top_margin    = 7;
+side_margin   = 6 + sound_iso;
+top_margin    = 7 + sound_iso;
 board_zone_h  = 30;
-bottom_margin = 8;
+bottom_margin = 8 + sound_iso;
 
 // ---- grille ----
 grille_hole_d    = 3;
@@ -97,7 +103,7 @@ function amp_cx()      = (mod_w + 2*mod_clr)/2 + cradle_wall + amp_gap + amp_w/2
 function board_reach() = amp_cx() + amp_w/2;                  // right-most board extent from center
 function outer_w()     = max(spk_od*2 + spk_gap, 2*board_reach()) + side_margin*2; // wider of the driver pair or the board row
 function outer_h()     = top_margin + spk_od + board_zone_h + bottom_margin;
-function outer_d()     = front_depth + rear_depth;
+function outer_d()     = front_depth + wall;   // front shell + flat rear lid
 function spk_cx()      = spk_od/2 + spk_gap/2;                // half-pitch: drivers sit at ±spk_cx()
 function spk_cy()      = outer_h()/2 - top_margin - spk_od/2;
 function board_cy()    = -outer_h()/2 + bottom_margin + board_zone_h/2;

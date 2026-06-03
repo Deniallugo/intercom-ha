@@ -44,6 +44,14 @@ assert(board_cy() < 0, "board row should be below center");
 assert(mic_y() < board_cy(), "mic cluster should be below the button");
 assert(board_cy() - mic_y() <= mod_w/2, "mic cluster should stay over the module");
 
+// The rear plate is a FLAT lid. The 4 corner M3 bosses live entirely on the
+// front shell and span the full internal depth to the rear plate's inner face;
+// the screws self-tap from the back straight into them. So the assembled depth
+// is just the front shell plus the rear lid's wall — NOT an extra rear_depth of
+// proud "mating bosses" standing off the plate (which would either poke out the
+// back, fouling the flush keyhole wall-mount, or collide with the front bosses).
+assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
+
 // Keyhole slots fit within the (narrower) rear plate.
 assert(keyhole_spacing/2 + keyhole_head_d/2 <= outer_w()/2 - wall, "keyholes must fit within the plate");
 

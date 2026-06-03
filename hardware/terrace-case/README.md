@@ -55,7 +55,7 @@ button cap:
 - 1× M5Stack ATOM Echo S3R (VoiceS3R)
 - 2× MAX98357A breakout
 - 2× 2" full-range driver (~53 mm OD)
-- 4× M3 screws (self-tap into the corner front/rear bosses)
+- 4× M3 screws (from the back, through the flat rear plate, self-tap into the corner front-shell bosses)
 - 8× M2 self-tap screws for the drivers (4 per driver, into the bolt-circle bosses)
 - 8× M2 self-tap screws for the amp boards (4 per board, into the standoffs)
 - 2× foam/EVA gasket rings for the drivers (~45–52 mm, seat in the baffle groove)

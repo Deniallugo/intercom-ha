@@ -7,8 +7,14 @@ clr = 0.4;                 // global clearance for inserted parts
 // ---- shell envelope ----
 wall        = 2.4;
 radius      = 6;
-front_depth = 38;          // inner depth of the front shell — clears the 35 mm-deep driver
-rear_depth  = 12;          // depth of the rear plate body
+// Acoustic liner allowance: extra interior space on every lined face (cavity
+// depth + all four margins) so a self-adhesive foam / damping liner can be
+// applied without crowding the drivers, boards or rear plate. The front baffle
+// is the grille face and is NOT lined. Set to 0 for a bare shell.
+sound_iso   = 5;
+front_depth = 38 + sound_iso;  // inner depth: 38 clears the 35 mm driver, +sound_iso for the rear-plate liner
+// (no separate rear_depth: the rear plate is a FLAT lid `wall` thick — the
+//  corner M3 bosses are full-depth on the front shell and take the screws.)
 
 // ---- speakers (2" full-range) ----
 spk_od         = 53;       // driver face diameter (locating ring ID) — 2" driver
@@ -31,10 +37,10 @@ spk_boss_h      = spk_seat_depth + 1;  // boss height on the inner baffle
 spk_screw_a0    = 45;      // start angle (deg); 45 dodges the center gap for n=4
 
 // ---- margins / board zone ----
-side_margin   = 7;
-top_margin    = 7;
+side_margin   = 7 + sound_iso;
+top_margin    = 7 + sound_iso;
 board_zone_h  = 30;
-bottom_margin = 8;
+bottom_margin = 8 + sound_iso;
 
 // ---- grille ----
 grille_hole_d    = 3;
@@ -89,7 +95,7 @@ boss_inset  = radius + 2;  // corner inset for the 4 screw bosses
 // ---- derived dimensions (functions so tests can assert them) ----
 function outer_w()  = spk_od*2 + spk_gap + side_margin*2;            // 123
 function outer_h()  = top_margin + spk_od + board_zone_h + bottom_margin; // 98
-function outer_d()  = front_depth + rear_depth;                      // 50
+function outer_d()  = front_depth + wall;       // front shell + flat rear lid
 function spk_cx()   = spk_od/2 + spk_gap/2;                          // 28
 function spk_cy()   = outer_h()/2 - top_margin - spk_od/2;
 function board_cy() = -outer_h()/2 + bottom_margin + board_zone_h/2;

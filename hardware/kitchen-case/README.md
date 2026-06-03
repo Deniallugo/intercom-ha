@@ -66,7 +66,7 @@ button cap:
 - 1× M5Stack Atom Echo (classic)
 - 1× MAX98357A breakout
 - 2× 4 cm full-range drivers (~40 mm locating dia, ~20 mm deep)
-- 4× M3 screws (self-tap into the corner front/rear bosses)
+- 4× M3 screws (from the back, through the flat rear plate, self-tap into the corner front-shell bosses)
 - 4× M2 self-tap screws for the amp board (into the standoffs)
 - 2× foam/EVA gasket rings for the drivers (~34–39 mm, seat in the baffle grooves)
 - a dab of glue / foam tape to retain each driver in its locating ring (drivers are friction/glue-mounted, not screwed)
