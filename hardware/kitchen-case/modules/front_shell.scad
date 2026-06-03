@@ -36,9 +36,10 @@ module atom_cradle() {
         translate([0, 0, mod_d/2]) cube([cw + 2*cradle_wall, cw + 2*cradle_wall, mod_d], center = true);
         // pocket, open at back
         translate([0, 0, mod_d/2 + cradle_wall]) cube([cw, cw, mod_d], center = true);
-        // USB-C slot through the bottom (-y) wall, spanning the module depth
+        // USB-C slot through the bottom (-y) wall, spanning the module depth,
+        // wide enough for the connector cross-section + clearance
         translate([0, -(cw/2 + cradle_wall), mod_d/2])
-            cube([mod_usb_w, cradle_wall*3, mod_d + 0.2], center = true);
+            cube([usb_conn_w + usb_clr, cradle_wall*3, mod_d + 0.2], center = true);
         // wire window toward the amp on the +x side
         translate([(cw/2 + cradle_wall), 0, mod_d*0.55])
             cube([cradle_wall*3, mod_w*0.6, mod_d*0.6], center = true);
@@ -49,7 +50,7 @@ module atom_cradle() {
 // under the cradle and spanning the front-shell depth, so the cable leaves
 // straight out the bottom of the case (the bottom wall is otherwise solid).
 module usb_floor_cut() {
-    w = mod_usb_w + usb_floor_clr;
+    w = usb_conn_w + usb_clr;
     translate([cradle_cx(), -outer_h()/2, (wall + front_depth)/2])
         cube([w, wall*3, front_depth - wall + 0.2], center = true);
 }

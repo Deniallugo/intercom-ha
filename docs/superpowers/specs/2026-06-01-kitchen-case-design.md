@@ -239,7 +239,9 @@ README documents which parameters to nudge for a loose/tight fit.
 
 These have sensible defaults but must be confirmed against the actual hardware:
 - Atom Echo cradle dimensions (`mod_w`/`mod_d`/`mod_h`) and **USB-C port
-  position/orientation** — differs from the VoiceS3R.
+  position/orientation** — differs from the VoiceS3R. The USB-C **plug body** is
+  ~10×10 mm cross-section × ~30 mm long (`usb_conn_w`/`usb_conn_t`/`usb_conn_len`);
+  the bottom exit + cradle slot are sized to pass it with `usb_clr` clearance.
 - Mic offset below the button (`mic_below_btn`) to land on the module mic.
 - Exact driver OD, cutout dia, and mounting-hole (bolt-circle) pattern.
 - MAX98357A breakout footprint (clone dimensions vary).

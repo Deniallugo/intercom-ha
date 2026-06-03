@@ -18,6 +18,6 @@ module rear_plate() {
         // USB-C cable notch in the bottom edge, aligned + sized to the front
         // shell's bottom exit so the bottom opening is continuous across the seam
         translate([cradle_cx(), -outer_h()/2, rear_depth/2])
-            cube([mod_usb_w + usb_floor_clr, wall*4, rear_depth + 0.2], center = true);
+            cube([usb_conn_w + usb_clr, wall*4, rear_depth + 0.2], center = true);
     }
 }
