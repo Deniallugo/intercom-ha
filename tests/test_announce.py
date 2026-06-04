@@ -5,6 +5,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "intercom-addon"))
 import announce  # noqa: E402
+from chimes import ChimeMixer  # noqa: E402
+
+# The device speakers (and the whole intercom chain) are built for this format;
+# announcements must be delivered at it, not at the TTS engine's native rate.
+TARGET = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
 
 
 def _make_wav(pcm: bytes, rate: int = 22050, width: int = 2, channels: int = 1) -> bytes:
@@ -31,22 +36,39 @@ def test_parse_tts_wav_returns_none_for_non_wav():
     assert announce.parse_tts_wav(b"ID3\x03not an mp3 really") is None
 
 
-def test_build_announcement_wav_mixes_chime_at_native_rate():
-    pcm = b"\xAA\xBB" * 100  # 200 bytes
+def test_build_announcement_wav_resamples_to_target_rate():
+    # 1 second of 22050 Hz speech must come out at the target 16 kHz so the
+    # Atom Echo's I2S speaker can allocate its (16 kHz-sized) DMA buffers.
+    speech_frames = 22050
+    pcm = b"\x01\x02" * speech_frames
     wav_in = _make_wav(pcm, rate=22050, width=2, channels=1)
-    out, ext, duration = announce.build_announcement_wav(wav_in)
+    out, ext, duration = announce.build_announcement_wav(wav_in, TARGET)
     assert ext == "wav"
     with wave.open(io.BytesIO(out), "rb") as w:
-        assert w.getframerate() == 22050
+        assert w.getframerate() == 16000
+        assert w.getnchannels() == 1
         total_frames = w.getnframes()
-    speech_frames = len(pcm) // 2
-    assert total_frames > speech_frames
-    assert duration > speech_frames / 22050
+    # ~1 s of resampled speech (16000 frames) plus the two chimes.
+    resampled_speech = round(speech_frames * 16000 / 22050)
+    chime_frames = total_frames - resampled_speech
+    assert chime_frames > 0
+    # Real-time duration is preserved across the resample: ~1 s of speech plus
+    # the two chimes (2 * CHIME_MS = 0.24 s).
+    assert abs(duration - 1.24) < 0.05
+
+
+def test_build_announcement_wav_no_resample_when_rate_matches():
+    pcm = b"\x01\x02" * 16000
+    wav_in = _make_wav(pcm, rate=16000, width=2, channels=1)
+    out, ext, duration = announce.build_announcement_wav(wav_in, TARGET)
+    assert ext == "wav"
+    with wave.open(io.BytesIO(out), "rb") as w:
+        assert w.getframerate() == 16000
 
 
 def test_build_announcement_wav_falls_back_for_non_wav():
     raw = b"ID3 this is actually mp3 bytes"
-    out, ext, duration = announce.build_announcement_wav(raw)
+    out, ext, duration = announce.build_announcement_wav(raw, TARGET)
     assert out == raw
     assert ext == "mp3"
     # Unmeasurable audio: a generous floor so ducking/cleanup don't truncate it.
@@ -60,7 +82,7 @@ def test_build_announcement_wav_reports_real_duration_for_non_16bit_wav():
     frames = 5000
     pcm = b"\x00\x00\x00" * frames
     wav_in = _make_wav(pcm, rate=rate, width=width, channels=channels)
-    out, ext, duration = announce.build_announcement_wav(wav_in)
+    out, ext, duration = announce.build_announcement_wav(wav_in, TARGET)
     assert out == wav_in  # raw bytes, no chime
     assert ext == "wav"
     expected = frames / rate

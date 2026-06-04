@@ -190,7 +190,7 @@ async def handle_announce(request: web.Request) -> web.Response:
         log.error("announce: tts_get_audio failed: %s", e)
         return web.json_response({"error": str(e)}, status=502)
 
-    wav, ext, duration = announce.build_announcement_wav(audio)
+    wav, ext, duration = announce.build_announcement_wav(audio, mixer)
     log.info("announce  text=%r  targets=%d", text[:40], len(targets))
     await _play_on_targets(
         wav, ext, duration, targets, name=f"announce-{uuid.uuid4()}"
