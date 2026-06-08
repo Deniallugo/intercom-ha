@@ -92,3 +92,31 @@ halve the impedance — fine for 8 Ω drivers, but 2× 4 Ω → 2 Ω risks overh
 
 Wiring (amp taps + internal-speaker handling) is covered by the louder-amp
 design: [../../docs/superpowers/specs/2026-06-01-kitchen-atom-echo-louder-amp-design.md](../../docs/superpowers/specs/2026-06-01-kitchen-atom-echo-louder-amp-design.md).
+
+## Optional depth spacer
+
+If the header pins / wiring behind the Atom Echo don't fit with the rear plate
+closed, the **spacer** part is a drop-in picture-frame ring (the same part as the
+terrace case) that inserts at the front-shell ↔ rear-plate parting line and adds
+`spacer_t` (default **10 mm**) of clearance — no reprint of the front shell or
+rear plate.
+
+Render/print it like any other part:
+
+    openscad -o stl/spacer.stl -D 'part="spacer"' kitchen-case.scad
+
+Print flat (frame face down), no supports, same settings as the shell.
+
+**Assembly (front shell → spacer → rear plate):**
+
+1. Seat the spacer on the front shell — its spigot lip nests into the shell's
+   rear opening; the 4 corner pads land on the existing front bosses.
+2. Foam/EVA tape on **both** seams (front↔spacer and spacer↔rear) to keep the
+   box sealed.
+3. Fit the rear plate and fasten with **4× M3×20 self-tapping screws** (replacing
+   the short ones) — they span the rear plate + spacer and bite into the front
+   bosses. M3×25 gives a deeper bite.
+
+The USB-C exit and keyhole wall-mount are unchanged; the case simply stands
+`spacer_t` further off the wall. Tune `spacer_t` in `modules/params.scad` and
+reprint just the spacer.

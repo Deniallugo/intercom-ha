@@ -7,6 +7,7 @@ include <modules/params.scad>
 include <modules/lib.scad>
 include <modules/front_shell.scad>
 include <modules/rear_plate.scad>
+include <modules/spacer.scad>
 include <modules/button_cap.scad>
 
 part = "all";   // override on the CLI: -D 'part="front"'
@@ -14,9 +15,11 @@ part = "all";   // override on the CLI: -D 'part="front"'
 if (part == "front")       front_shell();
 else if (part == "rear")   rear_plate();
 else if (part == "button") button_cap();
+else if (part == "spacer") spacer();
 else if (part == "coupon") coupon_render();
 else {  // assembled preview
     front_shell();
-    color("gray")  translate([0, 0, front_depth]) rear_plate();
-    color("red")   translate([cradle_cx(), board_cy(), -3]) button_cap();
+    color("lightblue") translate([0, 0, front_depth]) spacer();
+    color("gray")      translate([0, 0, front_depth + spacer_t]) rear_plate();
+    color("red")       translate([cradle_cx(), board_cy(), -3]) button_cap();
 }

@@ -98,6 +98,13 @@ screw_pilot = 2.6;         // self-tap pilot in the front bosses
 screw_clear = 3.4;         // clearance hole in the rear plate
 boss_inset  = radius + 2;  // corner inset for the 4 screw bosses
 
+// ---- depth spacer (optional insert at the front<->rear parting line) ----
+// A picture-frame ring that adds pin/wiring clearance behind the module without
+// reprinting the front shell or rear plate. Same part as the terrace case.
+spacer_t    = 10;          // added depth = extra clearance for the header pins/wiring
+spigot_h    = 4;           // registration lip height nesting into the front cavity
+spigot_wall = 1.6;         // registration lip thickness
+
 // ---- derived dimensions (functions so tests can assert them) ----
 function amp_cx()      = (mod_w + 2*mod_clr)/2 + cradle_wall + amp_gap + amp_w/2; // amp center x (right of module)
 function board_reach() = amp_cx() + amp_w/2;                  // right-most board extent from center
