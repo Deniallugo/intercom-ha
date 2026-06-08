@@ -75,6 +75,10 @@ assert(outer_w() - 2*wall - 2*clr - 2*spigot_wall > 0, "spigot lip must fit insi
 // spacer body must be shorter than the front boss depth so the existing screws still reach a boss to bite
 assert(spacer_t < front_depth - wall, "spacer_t must be less than the front boss depth (front_depth - wall) so screws still engage");
 
+// ---- button offset (toward the top, over the real dome switch) ----
+assert(btn_above_center >= 0, "btn_above_center must be non-negative");
+assert(btn_above_center + btn_well_d/2 <= mod_w/2 + mod_clr, "button well must stay within the module cradle — reduce btn_above_center");
+
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);
 linear_extrude(1) grille(spk_cut);

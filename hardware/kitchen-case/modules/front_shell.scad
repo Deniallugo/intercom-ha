@@ -59,7 +59,7 @@ module usb_floor_cut() {
 // plunger nub can reach the module's switch. A retaining shoulder the cap's
 // lip catches behind sits at the front-wall inner face.
 module button_well() {
-    translate([cradle_cx(), board_cy(), -0.1]) {
+    translate([cradle_cx(), btn_y(), -0.1]) {
         cylinder(h = wall + cradle_wall + 0.2, d = btn_well_d);          // bore through wall + cradle floor
         translate([0, 0, wall]) cylinder(h = 1.2, d = btn_well_d + 1.6); // shoulder pocket
     }
