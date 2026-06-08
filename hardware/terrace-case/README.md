@@ -74,3 +74,32 @@ Then run the full suite + build and confirm STLs are produced:
 ```bash
 hardware/terrace-case/test.sh && hardware/terrace-case/build.sh && ls -l hardware/terrace-case/stl
 ```
+
+## Optional depth spacer
+
+If the assembled case sounds constrained/boxy with the rear closed, the drivers
+are starved for air (~8 mm behind each cone). The **spacer** part is a drop-in
+picture-frame ring that inserts at the front-shell ↔ rear-plate parting line and
+adds `spacer_t` (default **20 mm**) of sealed air volume behind the drivers — no
+reprint of the front shell or rear plate.
+
+Render/print it like any other part:
+
+    openscad -o stl/spacer.stl -D 'part="spacer"' terrace-case.scad
+
+Print flat (frame face down), no supports, same settings as the shell (0.2 mm
+layers, ≥4 perimeters, 20–30 % infill).
+
+**Assembly (front shell → spacer → rear plate):**
+
+1. Seat the spacer on the front shell — its spigot lip nests into the shell's
+   rear opening; the 4 corner pads land on the existing front bosses.
+2. Foam/EVA tape on **both** seams (front↔spacer and spacer↔rear). Plastic faces
+   are not airtight and this is a sealed box — skipping this re-introduces leaks.
+3. Fit the rear plate and fasten with **4× M3×35 self-tapping screws** (replacing
+   the short ones) — they span the rear plate + spacer and bite into the front
+   bosses. M3×30 also works (~7 mm engagement).
+
+The USB-C exit (front shell bottom wall) and keyhole wall-mount (rear plate) are
+unchanged; the case simply stands `spacer_t` further off the wall. Tune
+`spacer_t` in `modules/params.scad` and reprint just the spacer to taste.

@@ -36,6 +36,11 @@ the same mono mix into a pair of larger drivers (dual mono).
 | Button | Built-in tactile on G41 (active LOW) |
 | Power | USB-C |
 
+> The terrace 3D-printed case accepts an optional **+20 mm depth spacer**
+> (`part="spacer"`) at the rear parting line to give the drivers more sealed air
+> volume; it needs 4× M3×35 screws and foam tape on the two new seams. See
+> `hardware/terrace-case/README.md`.
+
 ---
 
 ## Capabilities
