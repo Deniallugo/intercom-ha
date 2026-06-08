@@ -57,12 +57,19 @@ module usb_floor_cut() {
 
 // well bored through the front wall AND the cradle floor behind it, so the
 // plunger nub can reach the module's switch. A retaining shoulder the cap's
-// lip catches behind sits at the front-wall inner face.
+// lip catches behind sits at the front-wall inner face. The face well stays
+// CENTERED on the module (the visible cap doesn't move); only the contact nub
+// is offset toward the top switch, so the cradle floor gets an extra slotted
+// clearance from center out to btn_y() for that offset nub to pass.
 module button_well() {
-    translate([cradle_cx(), btn_y(), -0.1]) {
-        cylinder(h = wall + cradle_wall + 0.2, d = btn_well_d);          // bore through wall + cradle floor
+    translate([cradle_cx(), board_cy(), -0.1]) {
+        cylinder(h = wall + cradle_wall + 0.2, d = btn_well_d);          // centered bore through wall + cradle floor
         translate([0, 0, wall]) cylinder(h = 1.2, d = btn_well_d + 1.6); // shoulder pocket
     }
+    // nub-clearance slot through the cradle floor, center -> btn_y()
+    hull() for (yy = [board_cy(), btn_y()])
+        translate([cradle_cx(), yy, wall - 0.1])
+            cylinder(h = cradle_wall + 0.3, d = btn_nub_d + 2*clr);
 }
 
 // mic perforation: a small cluster of holes through the front wall AND the

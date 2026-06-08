@@ -71,8 +71,8 @@ btn_well_d = 12.5;         // well bore (cap skirt rides in this)
 btn_cap_d  = 12;           // cap face diameter (slightly proud)
 btn_travel = 2;
 btn_nub_d  = 4;            // nub that contacts the module switch
-btn_above_center = 5;      // button center sits this far ABOVE the module center
-                           // (toward the top, where the real dome switch is) [tune vs hardware]
+btn_above_center = 5;      // contact NUB sits this far above the module center (toward the
+                           // top switch); the cap face stays centered [tune vs hardware]
 
 // ---- microphone (perforation under the button, over the module's mic) ----
 mic_below_btn = 8;         // cluster center, this far below the MODULE center (over the module mic)

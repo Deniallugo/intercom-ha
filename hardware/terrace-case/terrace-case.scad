@@ -21,5 +21,5 @@ else {  // assembled preview
     front_shell();
     color("lightblue") translate([0, 0, front_depth]) spacer();
     color("gray")      translate([0, 0, front_depth + spacer_t]) rear_plate();
-    color("red")       translate([cradle_cx(), btn_y(), -3]) button_cap();
+    color("red")       translate([cradle_cx(), board_cy(), -3]) button_cap();
 }
