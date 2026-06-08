@@ -92,6 +92,13 @@ screw_pilot = 2.6;         // self-tap pilot in the front bosses
 screw_clear = 3.4;         // clearance hole in the rear plate
 boss_inset  = radius + 2;  // corner inset for the 4 screw bosses
 
+// ---- depth spacer (optional insert at the front<->rear parting line) ----
+// A picture-frame ring that adds air behind the drivers without reprinting the
+// front shell or rear plate. See docs/superpowers/specs/2026-06-08-terrace-case-spacer-design.md
+spacer_t    = 20;          // added depth = extra clear air behind the cones
+spigot_h    = 4;           // registration lip height nesting into the front cavity
+spigot_wall = 1.6;         // registration lip thickness
+
 // ---- derived dimensions (functions so tests can assert them) ----
 function outer_w()  = spk_od*2 + spk_gap + side_margin*2;            // 123
 function outer_h()  = top_margin + spk_od + board_zone_h + bottom_margin; // 98

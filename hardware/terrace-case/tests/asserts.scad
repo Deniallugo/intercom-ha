@@ -43,6 +43,15 @@ assert((usb_conn_w + usb_clr)/2 + boss_od/2 <= (outer_w()/2 - boss_inset), "USB 
 // back, fouling the flush keyhole wall-mount, or collide with the front bosses).
 assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
 
+// ---- depth spacer ----
+assert(spacer_t > 0, "spacer_t must be positive");
+assert(spigot_h > 0 && spigot_h < spacer_t, "spigot must be positive and shorter than the spacer body");
+assert(spigot_wall > 0 && spigot_wall <= wall, "spigot wall must be positive and not exceed the shell wall");
+// spigot lip nests inside the front shell's rear opening (with clearance both sides)
+assert(outer_w() - 2*wall - 2*clr - 2*spigot_wall > 0, "spigot lip must fit inside the front cavity");
+// spacer body must be shorter than the front boss depth so the existing screws still reach a boss to bite
+assert(spacer_t < front_depth - wall, "spacer_t must be less than the front boss depth (front_depth - wall) so screws still engage");
+
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);
 linear_extrude(1) grille(spk_cut);
