@@ -70,9 +70,10 @@ cradle_wall = 1.6;
 btn_well_d = 12.5;         // well bore (cap skirt rides in this)
 btn_cap_d  = 12;           // cap face diameter (slightly proud)
 btn_travel = 2;
-btn_nub_d  = 4;            // nub that contacts the module switch
-btn_above_center = 5;      // contact NUB sits this far above the module center (toward the
-                           // top switch); the cap face stays centered [tune vs hardware]
+btn_nub_d  = 5;            // nub that contacts the module switch
+btn_above_center = 3.3;    // contact NUB sits this far above the module center (toward the
+                           // top switch); the cap face stays centered and the nub stays fully
+                           // under the skirt — keep <= (btn_well_d-2*clr)/2 - btn_nub_d/2 [tune vs hardware]
 
 // ---- microphone (perforation under the button, over the module's mic) ----
 mic_below_btn = 8;         // cluster center, this far below the MODULE center (over the module mic)
@@ -118,5 +119,4 @@ function spk_cy()      = outer_h()/2 - top_margin - spk_od/2;
 function board_cy()    = -outer_h()/2 + bottom_margin + board_zone_h/2;
 function cradle_cx()   = 0;                                   // module centered; amp to the right
 function mic_x()       = cradle_cx();                         // centered on the module / button
-function btn_y()       = board_cy() + btn_above_center;       // button center, above the module center
 function mic_y()       = board_cy() - mic_below_btn;          // below the module center (over the module mic)
