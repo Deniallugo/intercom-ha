@@ -103,3 +103,17 @@ layers, ≥4 perimeters, 20–30 % infill).
 The USB-C exit (front shell bottom wall) and keyhole wall-mount (rear plate) are
 unchanged; the case simply stands `spacer_t` further off the wall. Tune
 `spacer_t` in `modules/params.scad` and reprint just the spacer to taste.
+
+## Button: top-switch nub (orient + fix)
+
+The module's tactile switch is toward the **top** of the module, not its center,
+so the cap's contact nub is offset up by `btn_above_center` (`modules/params.scad`)
+while the round face stays centered. The nub stays fully under the skirt (assert
+guards this); tune `btn_above_center` and reprint **only the button cap** to dial
+it in — no front-shell reprint.
+
+Because the well is a plain round bore, the round cap is free to **spin**, which
+would swing the offset nub off the switch. So at assembly, orient the cap **nub
+toward the top** and fix that rotation — a dab of glue/CA on the skirt or a snug
+press-fit. (A spin-proof captive version would need the well keyed, i.e. a
+front-shell reprint.)
