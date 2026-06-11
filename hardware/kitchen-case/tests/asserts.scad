@@ -78,6 +78,7 @@ assert(spacer_t < front_depth - wall, "spacer_t must be less than the front boss
 // ---- button offset (toward the top, over the real dome switch) ----
 assert(btn_above_center >= 0, "btn_above_center must be non-negative");
 assert(btn_above_center + btn_nub_d/2 <= (btn_well_d - 2*clr)/2, "offset nub must stay fully under the cap skirt — reduce btn_above_center (or shrink btn_nub_d / widen btn_well_d)");
+assert(btn_slice > 0 && btn_slice < btn_cap_d/2 - btn_nub_d/2, "btn_slice must be a positive bottom flat that doesn't reach the offset nub side");
 
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);
