@@ -33,7 +33,7 @@ gasket_depth = 1.0;
 // ---- passive radiator (side panel, +x) [confirm vs hardware] ----
 pr_od    = 80;             // PR frame OD
 pr_cut   = 66;             // PR moving-mass cutout through the side wall
-pr_depth = 25;            // PR intrusion into the chamber
+pr_depth  = 25;           // PR intrusion into the chamber
 pr_seat_wall   = 1.6;
 pr_seat_depth  = 4;
 pr_bolt_circle = 72;       // 4 screws on a bolt circle [confirm]
@@ -66,7 +66,8 @@ divider_wire_z = wall + 12;
 // ---- electronics-bay boards (footprints, [confirm vs hardware]) ----
 // Each board placed by (x,y) center on a mounting plane. front-baffle boards
 // stand on standoffs/pockets off the front wall (+z); the TPA mounts on the rear
-// lid inner face (handled in rear_plate). Coordinates are relative to box center.
+// lid inner face (handled in rear_plate). The *_pos placement vectors below are
+// (x,y) offsets relative to board_cy() (the board-zone center), not box center.
 s3_w   = 69; s3_l   = 26;          // ESP32-S3-DevKitC-1
 dac_w  = 27; dac_l  = 27;          // GY-PCM5102
 buck_w = 22; buck_l = 17;          // MP1584
