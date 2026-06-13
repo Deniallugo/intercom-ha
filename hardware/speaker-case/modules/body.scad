@@ -91,6 +91,35 @@ module bay_boards() {
     // mic board mount + front perforation are added in the front-features task
 }
 
+// ---- front-panel breaches --------------------------------------------------
+
+// PTT panel-mount momentary switch bore through the front wall
+module button_bore() {
+    translate([btn_pos[0], board_cy()+btn_pos[1], -0.1]) {
+        cylinder(h = wall + 0.2, d = btn_bore_d);                       // thread bore
+        translate([0, 0, wall]) cylinder(h = 1.5, d = btn_nut_d);       // nut/flat relief inside
+    }
+}
+
+// ICS-43434 mic board: friction pocket + a front perforation cluster over its port
+module mic_mount() {
+    translate([mic_pos[0], board_cy()+mic_pos[1], wall])
+        board_pocket(mic_board_w, mic_board_l, board_standoff_h+1, pocket_wall);
+}
+module mic_perf() {
+    translate([mic_pos[0], board_cy()+mic_pos[1], -0.1]) linear_extrude(wall + 0.2) {
+        circle(d = mic_hole_d);
+        for (i = [0 : mic_ring_n - 1])
+            rotate(i*360/mic_ring_n) translate([mic_ring_r, 0]) circle(d = mic_hole_d);
+    }
+}
+
+// USB-C power IN: bounded hole through the bottom (-y) wall at usb_z
+module usb_floor_cut() {
+    translate([trig_pos[0], -outer_h()/2, usb_z])
+        cube([usb_conn_w + usb_clr, wall*3, usb_conn_t + usb_clr], center = true);
+}
+
 // ---- corners --------------------------------------------------------------
 
 module corner_bosses() {
@@ -110,10 +139,14 @@ module body() {
             pr_screw_bosses();
             corner_bosses();
             bay_boards();
+            mic_mount();
         }
         cone_cut();
         gasket_groove();
         pr_cut_hole();
         pr_gasket_groove();
+        button_bore();
+        mic_perf();
+        usb_floor_cut();
     }
 }
