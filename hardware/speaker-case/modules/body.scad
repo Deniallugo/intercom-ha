@@ -88,7 +88,7 @@ module bay_boards() {
     translate([dac_pos[0],  board_cy()+dac_pos[1],  wall]) board_standoffs(dac_w, dac_l, board_standoff_h, board_standoff_od, board_screw_pilot);
     translate([buck_pos[0], board_cy()+buck_pos[1], wall]) board_standoffs(buck_w, buck_l, board_standoff_h, board_standoff_od, board_screw_pilot);
     translate([trig_pos[0], board_cy()+trig_pos[1], wall]) board_standoffs(trig_w, trig_l, board_standoff_h, board_standoff_od, board_screw_pilot);
-    // mic board mount + front perforation are added in the front-features task
+    mic_mount();   // ICS-43434 friction pocket
 }
 
 // ---- front-panel breaches --------------------------------------------------
@@ -97,7 +97,7 @@ module bay_boards() {
 module button_bore() {
     translate([btn_pos[0], board_cy()+btn_pos[1], -0.1]) {
         cylinder(h = wall + 0.2, d = btn_bore_d);                       // thread bore
-        translate([0, 0, wall]) cylinder(h = 1.5, d = btn_nut_d);       // nut/flat relief inside
+        translate([0, 0, wall]) cylinder(h = 1.5, d = btn_nut_d);   // wrench-flat lead-in on the inner face; switch nut tightens against the outer face
     }
 }
 
@@ -116,6 +116,7 @@ module mic_perf() {
 
 // USB-C power IN: bounded hole through the bottom (-y) wall at usb_z
 module usb_floor_cut() {
+    // x follows trig_pos[0]: the USB-C receptacle is on the CH224K board. wall*3 = oversized to punch cleanly through the bottom wall.
     translate([trig_pos[0], -outer_h()/2, usb_z])
         cube([usb_conn_w + usb_clr, wall*3, usb_conn_t + usb_clr], center = true);
 }
@@ -139,7 +140,6 @@ module body() {
             pr_screw_bosses();
             corner_bosses();
             bay_boards();
-            mic_mount();
         }
         cone_cut();
         gasket_groove();

@@ -73,13 +73,12 @@ assert(cavity_depth >= board_standoff_h + 2 + 16, "cavity too shallow for front 
 // ===== front-panel breaches (bay only — chamber stays sealed) =====
 btn_c = bpos(btn_pos);
 // PTT bore (incl. its nut relief) sits in the bay, below the divider, within width
-assert(btn_c[1] + btn_nut_d/2 < divider_cy() - divider_t/2, "PTT bore breaches the chamber");
-assert(btn_c[0] - btn_nut_d/2 > bay_xmin && btn_c[0] + btn_nut_d/2 < bay_xmax, "PTT bore off bay width");
-// CONTROLLER ENHANCEMENT: the nut relief must clear the S3 pocket and trigger standoffs
+in_bay(btn_pos, btn_nut_d, btn_nut_d, "PTT bore");   // all four bay bounds (top bound = below divider)
+// the nut relief must also clear the S3 pocket and the trigger standoffs
 assert(aabb_clear(btn_c,[btn_nut_d,btn_nut_d], bpos(s3_pos),[s3_w,s3_l]), "PTT bore clashes the S3 pocket");
 assert(aabb_clear(btn_c,[btn_nut_d,btn_nut_d], bpos(trig_pos),[trig_w,trig_l]), "PTT bore clashes the trigger board");
 // mic perforation lands over the mic board, in the bay
-assert(board_cy()+mic_pos[1] < divider_cy() - divider_t/2, "mic perforation breaches the chamber");
+assert(board_cy()+mic_pos[1] < divider_cy() - divider_t/2, "mic perforation breaches the chamber");   // perf is concentric within the mic board, which in_bay already bounds
 // USB-C bottom exit is a bounded hole at the receptacle depth
 usb_z_half = (usb_conn_t + usb_clr)/2;
 assert(usb_z - usb_z_half >= wall, "USB hole runs into the front face — increase usb_z");
