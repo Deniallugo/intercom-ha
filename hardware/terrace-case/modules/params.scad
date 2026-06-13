@@ -98,6 +98,21 @@ screw_pilot = 2.6;         // self-tap pilot in the front bosses
 screw_clear = 3.4;         // clearance hole in the rear plate
 boss_inset  = radius + 2;  // corner inset for the 4 screw bosses
 
+// ---- module retention clamp (collar on the rear lid, presses the module) ----
+// The cradle is open at the back and the module just drops in, so it can slide
+// back / rattle. This optional collar grows forward off the rear plate's inner
+// face and lands on the module's back RIM, preloading it against the cradle
+// floor — a screwless clamp, reprint the rear plate only. It presses the PCB
+// edge (perimeter ring) and leaves the center open so back-side components /
+// antenna / USB are not crushed. NOTE: sized for the NO-spacer build; if you
+// run the depth spacer, raise mod_clamp_squeeze by spacer_t (or use a foam
+// shim instead — the collar can't span the extra spacer_t gap).
+mod_clamp         = true;       // grow the collar on the rear plate
+mod_clamp_wall    = 2.0;        // collar wall thickness
+mod_clamp_foot    = mod_w - 0.5; // collar OUTER footprint — lands on the module rim, still enters the pocket
+mod_clamp_squeeze = 0.3;        // overshoot past the module back face => light preload (no rattle)
+function mod_clamp_h() = front_depth - (wall + mod_d) + mod_clamp_squeeze; // collar reach off the lid
+
 // ---- depth spacer (optional insert at the front<->rear parting line) ----
 // A picture-frame ring that adds air behind the drivers without reprinting the
 // front shell or rear plate. See docs/superpowers/specs/2026-06-08-terrace-case-spacer-design.md

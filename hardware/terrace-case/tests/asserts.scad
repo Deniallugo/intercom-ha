@@ -43,6 +43,13 @@ assert((usb_conn_w + usb_clr)/2 + boss_od/2 <= (outer_w()/2 - boss_inset), "USB 
 // back, fouling the flush keyhole wall-mount, or collide with the front bosses).
 assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
 
+// ---- module retention clamp ----
+// The collar must actually reach the module (positive height), drop into the
+// pocket (footprint < pocket inner), and keep an open center (positive id).
+assert(mod_clamp_h() > 0, "module clamp must have positive reach — front_depth too shallow vs the module depth");
+assert(mod_clamp_foot <= mod_w + 2*mod_clr, "module clamp must fit inside the cradle pocket opening");
+assert(mod_clamp_foot - 2*mod_clamp_wall > 0, "module clamp wall too thick — collar has no open center");
+
 // ---- depth spacer ----
 assert(spacer_t > 0, "spacer_t must be positive");
 assert(spigot_h > 0 && spigot_h < spacer_t, "spigot must be positive and shorter than the spacer body");
