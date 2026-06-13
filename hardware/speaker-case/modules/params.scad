@@ -83,7 +83,7 @@ s3_pos   = [0,   8];               // relative to board_cy(): +y toward divider
 dac_pos  = [-58, 8];
 buck_pos = [58,  8];
 trig_pos = [50, -12];              // low, by the USB-C exit
-mic_pos  = [-50, -13];             // mic board, front baffle, away from button
+mic_pos  = [-50, -13];             // mic board, front baffle, away from the PTT bore
 tpa_pos  = [0,   0];               // on the rear lid, centered in the bay
 btn_pos  = [trig_pos[0]-30, -13]; // PTT panel-mount switch center (bay), clear of S3 pocket + trigger
 
