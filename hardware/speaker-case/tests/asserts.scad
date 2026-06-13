@@ -62,6 +62,7 @@ assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(dac_pos),[dac_w,dac_l]), "S3 ov
 assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(buck_pos),[buck_w,buck_l]), "S3 overlaps buck");
 assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(trig_pos),[trig_w,trig_l]), "S3 overlaps trigger");
 assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(mic_pos),[mic_board_w,mic_board_l]), "S3 overlaps mic");
+// DAC–mic is the tightest pair (~0.5 mm bare-footprint margin); nudge with care
 assert(aabb_clear(bpos(dac_pos),[dac_w,dac_l], bpos(mic_pos),[mic_board_w,mic_board_l]), "DAC overlaps mic");
 assert(aabb_clear(bpos(buck_pos),[buck_w,buck_l], bpos(trig_pos),[trig_w,trig_l]), "buck overlaps trigger");
 assert(aabb_clear(bpos(dac_pos),[dac_w,dac_l], bpos(trig_pos),[trig_w,trig_l]), "DAC overlaps trigger");

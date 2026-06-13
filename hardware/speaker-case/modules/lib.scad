@@ -54,13 +54,14 @@ module screw_circle(n, bc, h, od, pilot) {
             screw_boss(h, od, pilot);
 }
 
-// 4 corner standoffs for a board of footprint w x l, centered at origin, base z=0
-module board_standoffs(w, l, h, od, pilot) {
+// 4 corner standoffs for a board of footprint w x l, centered at origin, base z=0.
+// `inset` = hole center distance from each board edge (M2 default ~2 mm).
+module board_standoffs(w, l, h, od, pilot, inset=2) {
     for (sx = [-1, 1], sy = [-1, 1])
-        translate([sx*(w/2 - 2), sy*(l/2 - 2), 0]) screw_boss(h, od, pilot);
+        translate([sx*(w/2 - inset), sy*(l/2 - inset), 0]) screw_boss(h, od, pilot);
 }
 
-// 3-wall friction pocket (open at +z) for a board w x l, centered at origin
+// friction pocket (floor + 4 walls, open at +z) for a board w x l, centered at origin
 module board_pocket(w, l, h, pw) {
     difference() {
         translate([0, 0, h/2]) cube([w + 2*pw, l + 2*pw, h], center = true);
