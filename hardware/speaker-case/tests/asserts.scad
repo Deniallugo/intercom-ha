@@ -28,6 +28,17 @@ assert(wire_pass_z + wire_pass_d/2 <= front_depth, "wire pass runs off the back 
 // ---- body: assembled depth is front shell + flat lid (rear plate is a flat lid) ----
 assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
 
+// ---- rear plate: gasket groove sits inside the perimeter, doesn't pierce the lid ----
+assert(lid_gasket_depth < wall, "lid gasket groove must not cut through the lid");
+assert(lid_gasket_inset + lid_gasket_w/2 < radius + wall || lid_gasket_inset > radius,
+       "lid gasket groove should sit on a flat perimeter band");
+assert(outer_w() - 2*lid_gasket_inset > 0 && outer_h() - 2*lid_gasket_inset > 0,
+       "lid gasket groove inset too large for the plate");
+
+// ---- rear plate: keyholes fit within the plate width and clear the corner bosses ----
+assert(keyhole_spacing/2 + keyhole_head_d/2 <= outer_w()/2 - wall, "keyholes run off the plate width");
+assert(keyhole_spacing/2 - keyhole_head_d/2 > 0, "keyholes overlap at center — widen keyhole_spacing");
+
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);
 linear_extrude(1) grille(spk_cut);
