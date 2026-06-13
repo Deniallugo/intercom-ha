@@ -4,7 +4,7 @@ OPENSCAD="${OPENSCAD:-$(command -v openscad || echo /Applications/OpenSCAD-2021.
 [ -x "$OPENSCAD" ] || { echo "OpenSCAD not found (set \$OPENSCAD)"; exit 1; }
 cd "$(dirname "$0")"
 mkdir -p stl
-for part in body rear button grille; do
+for part in body rear grille; do
     echo "rendering $part ..."
     "$OPENSCAD" -D "part=\"$part\"" -o "stl/$part.stl" speaker-case.scad
 done

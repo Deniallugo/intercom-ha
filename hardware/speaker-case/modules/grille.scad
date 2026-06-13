@@ -6,7 +6,7 @@ grille_skirt_h = 5;            // skirt depth gripping the seat ring
 grille_skirt_t = 1.6;          // skirt wall
 
 module grille_cover() {
-    for (sx = [-1, 1]) translate([sx*spk_cx(), spk_cy(), 0]) {
+    translate([spk_cx(), spk_cy(), 0]) {
         // perforated face
         difference() {
             cylinder(h = grille_face_t, d = spk_od + 2*seat_wall + 2*grille_skirt_t);
