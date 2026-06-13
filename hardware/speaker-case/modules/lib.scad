@@ -46,3 +46,10 @@ module screw_boss(h, od, pilot) {
         translate([0, 0, -0.1]) cylinder(h = h + 0.2, d = pilot);
     }
 }
+
+// N screw bosses on a bolt CIRCLE of diameter `bc`, base at z=0
+module screw_circle(n, bc, h, od, pilot) {
+    for (i = [0 : n - 1])
+        rotate([0, 0, i*360/n + 45]) translate([bc/2, 0, 0])
+            screw_boss(h, od, pilot);
+}

@@ -1,129 +1,135 @@
-// ===== Speaker case — combined device — parameters =====
-// No geometry here. AIYIMA 2"/53 mm full-range, 4 ohm (TWO identical drivers in
-// one sealed upper chamber). Below them, a vented electronics bay houses the
-// terrace stack: VoiceS3R module + 2x MAX98357A amps + PTT button + mic + USB-C.
+// ===== Speaker case — sound-first PR-loaded device — parameters =====
+// No geometry here. ONE Dayton PS95-8 3.5" full-range on the front baffle, a
+// side-mounted passive radiator, and a vented electronics bay holding the stack:
+// ESP32-S3 devkit + PCM5102A DAC + TPA3116 mono amp + MP1584 buck + CH224K PD
+// trigger + ICS-43434 mic + PTT switch + USB-C power in.
 $fn = 64;
 
 // ---- fit ----
 clr = 0.4;                 // clearance for inserted parts
 
 // ---- shell ----
-wall   = 4;                // walls + lid + divider thickness (rigid, airtight target)
-radius = 8;                // rounded vertical edges (diffraction win at this size)
+wall   = 4;                // walls + lid + divider thickness (airtight chamber)
+radius = 8;                // rounded vertical edges (baffle diffraction)
+inner_w = 150;             // interior width set directly -> outer_w 158
 
-// ---- drivers (measured in-hand; confirm vs your units) ----
-spk_od    = 53;            // frame OD — the locating ring ID
-spk_cut   = 46;            // OPEN cone cutout through the baffle (cone fires through)
-spk_gap   = 20;            // gap between the two driver frame edges
-spk_depth = 28;            // seated depth front->back
-seat_wall = 1.6;           // locating ring wall thickness
-spk_seat_depth = 4;        // locating ring height on the inner baffle
+// ---- driver: Dayton PS95-8 (single, centered) [confirm vs hardware] ----
+spk_od    = 91;            // frame OD — locating-ring ID
+spk_cut   = 76;            // OPEN cone cutout through the baffle
+spk_depth = 45;            // seated depth front->back [confirm]
+seat_wall = 1.6;           // locating-ring wall
+spk_seat_depth = 4;        // locating-ring height on the inner baffle
+spk_bolt_circle = 83;      // 4 screws on an 83 mm bolt CIRCLE [confirm]
+spk_screw_n     = 4;
+spk_screw_pilot = 1.6;     // M2 self-tap
+spk_boss_od     = 5;
+spk_boss_h      = spk_seat_depth + 1;
 
-// ---- driver gasket groove (foam ring seals the flange to the baffle) ----
-gasket_od    = spk_od - 1; // groove OD: just inside the locating ring
-gasket_id    = spk_cut + 1;// groove ID: just outside the open cutout
-gasket_depth = 1.0;        // depth cut into the baffle inner face
+// ---- driver gasket groove ----
+gasket_od    = spk_od - 1;
+gasket_id    = spk_cut + 1;
+gasket_depth = 1.0;
 
-// ---- driver mounting screws: 4 on a 43 mm SQUARE (60 mm diagonal) ----
-spk_screw_square = 43;     // hole-to-hole along a side of the square
-spk_screw_pilot  = 1.6;    // M2 self-tap pilot
-spk_boss_od      = 5;
-spk_boss_h       = spk_seat_depth + 1;
-
-// ---- horizontal layout ----
-side_margin = 10;          // wall-to-driver, left/right interior
+// ---- passive radiator (side panel, +x) [confirm vs hardware] ----
+pr_od    = 80;             // PR frame OD
+pr_cut   = 66;             // PR moving-mass cutout through the side wall
+pr_depth = 25;            // PR intrusion into the chamber
+pr_seat_wall   = 1.6;
+pr_seat_depth  = 4;
+pr_bolt_circle = 72;       // 4 screws on a bolt circle [confirm]
+pr_screw_n     = 4;
+pr_screw_pilot = 1.6;
+pr_boss_od     = 5;
+pr_boss_h      = pr_seat_depth + 1;
+pr_gasket_od   = pr_od - 1;
+pr_gasket_id   = pr_cut + 1;
+pr_gasket_depth = 1.0;
 
 // ---- vertical stack: speaker zone (top) | divider | board zone (bottom) ----
-spk_zone_h   = 62;         // interior height of the sealed speaker chamber
-divider_t    = wall;       // sealing slab between chamber and electronics bay
-board_zone_h = 44;         // interior height of the vented electronics bay (~10 mm wire room around the module)
+spk_zone_h   = 103;        // sealed chamber interior height (fits the 91 mm driver)
+divider_t    = wall;
+board_zone_h = 44;         // vented electronics-bay height
 
-// ---- chamber depth (sets the sealed volume; also the box interior depth) ----
-cavity_depth = 75;         // clear air behind the cones (also front-to-back wire room)
-front_depth  = wall + cavity_depth;   // front-shell extrude = front wall + cavity
+// ---- chamber depth (sets the sealed volume + front-to-back board room) ----
+cavity_depth = 110;
+front_depth  = wall + cavity_depth;   // front wall + cavity = 114
 
 // ---- net-volume target (acoustic floor) ----
-driver_disp = 25000;       // mm^3 displaced by each driver basket (measured estimate)
-vol_target  = 450000;      // mm^3 net floor (~0.45 L); the board zone trims the chamber
+driver_disp = 60000;       // mm^3 displaced by the PS95 basket [confirm]
+pr_disp     = 40000;       // mm^3 displaced by the PR assembly [confirm]
+vol_target  = 1400000;     // 1.4 L net floor
 
-// ---- divider sealed wire passes (one per driver: a 2-conductor pair each) ----
-divider_wire_d = 6;        // grommet bore through the divider, per driver
-divider_wire_z = wall + 10;// hole center depth from the front face
+// ---- divider single sealed wire pass (driver pair: 2 conductors) ----
+divider_wire_d = 6;
+divider_wire_z = wall + 12;
 
-// ---- wall mount: BLIND keyhole bosses on the lid OUTER face (chamber stays sealed) ----
-keyhole_spacing = 100;
+// ---- electronics-bay boards (footprints, [confirm vs hardware]) ----
+// Each board placed by (x,y) center on a mounting plane. front-baffle boards
+// stand on standoffs/pockets off the front wall (+z); the TPA mounts on the rear
+// lid inner face (handled in rear_plate). Coordinates are relative to box center.
+s3_w   = 69; s3_l   = 26;          // ESP32-S3-DevKitC-1
+dac_w  = 27; dac_l  = 27;          // GY-PCM5102
+buck_w = 22; buck_l = 17;          // MP1584
+trig_w = 25; trig_l = 15;          // CH224K
+tpa_w  = 50; tpa_l  = 30;          // TPA3116 mono (mounts on the rear lid)
+board_standoff_h  = 3;
+board_standoff_od = 4.5;
+board_screw_pilot = 1.6;           // M2 self-tap
+pocket_wall = 1.6;                 // friction-pocket wall (boards without holes)
+
+// board placements (x,y centers) — tuned to satisfy the no-overlap asserts
+s3_pos   = [0,   8];               // relative to board_cy(): +y toward divider
+dac_pos  = [-58, 8];
+buck_pos = [58,  8];
+trig_pos = [50, -12];              // low, by the USB-C exit
+mic_pos  = [-50, -12];             // mic board, front baffle, away from button
+tpa_pos  = [0,   0];               // on the rear lid, centered in the bay
+
+// ---- USB-C power IN (CH224K receptacle at the bottom edge) ----
+usb_conn_w   = 10;
+usb_conn_t   = 10;
+usb_clr      = 3;
+usb_z        = wall + 8;           // receptacle center depth from the front face [confirm]
+
+// ---- PTT panel-mount momentary switch (front bore) [confirm vs hardware] ----
+btn_bore_d   = 12.2;               // 12 mm panel-mount thread + clearance
+btn_nut_d    = 14;                 // wrench-flat clearance behind the panel
+
+// ---- microphone (ICS-43434 board + front perforation) ----
+mic_board_w  = 17; mic_board_l = 14;
+mic_hole_d   = 1.5;
+mic_ring_r   = 2.6;
+mic_ring_n   = 6;
+
+// ---- wall mount: BLIND keyhole bosses on the lid OUTER face ----
+keyhole_spacing = 120;             // wider for the bigger/heavier box
 keyhole_slot_w  = 4;
 keyhole_head_d  = 9;
 keyhole_drop    = 8;
-kb_h            = 4;       // keyhole boss height (proud of lid; also screw-head depth)
-kb_pad          = 3.5;     // material around the keyhole in the boss
-function key_cy() = 25;    // keyhole height on the lid (in the speaker-zone region, near top)
+kb_h            = 4;
+kb_pad          = 3.5;
+function key_cy() = 30;            // keyhole height on the lid (upper, chamber region)
 
-// ---- rear-plate perimeter gasket groove (seals the lid) ----
-lid_gasket_inset = wall + 3;   // groove centerline inset from the outer edge
-lid_gasket_w     = 2.0;        // groove width
-lid_gasket_depth = 1.0;        // groove depth into the lid inner face
+// ---- rear-plate perimeter gasket groove ----
+lid_gasket_inset = wall + 3;
+lid_gasket_w     = 2.0;
+lid_gasket_depth = 1.0;
 
 // ---- corner screws (M3) fastening the rear plate ----
 boss_od     = 7;
-screw_pilot = 2.6;             // self-tap pilot in the front bosses
-screw_clear = 3.4;             // clearance hole in the rear plate
-boss_inset  = radius + 3;      // corner inset for the 4 screw bosses
-
-// ---- VoiceS3R module (24x24 footprint, button-forward) ----
-mod_w       = 24;          // module footprint (square)
-mod_d       = 17;          // module depth front-to-back inside the case
-mod_clr     = clr;
-cradle_wall = 1.6;
-
-// ---- USB-C bottom exit (power/data; the device's external connection) ----
-usb_conn_w   = 10;         // connector width — across the case (x)
-usb_conn_t   = 10;         // connector thickness — into the case (z)
-usb_conn_len = 30;         // connector length (protrudes out the bottom; reference)
-usb_clr      = 3;          // clearance around the connector in every opening
-usb_z        = wall + mod_d/2;  // USB-C port center depth from the front face [confirm vs hardware]
-
-// ---- button ----
-btn_well_d = 12.5;         // well bore (cap skirt rides in this)
-btn_cap_d  = 12;           // cap face diameter (slightly proud)
-btn_proud  = 3.0;          // how far the cap face stands proud of the front surface
-btn_slice  = 1.5;          // flat on the -y bottom of the cap (orientation mark + glue gap)
-btn_travel = 2;
-btn_nub_d  = 4;            // nub that contacts the module switch
-btn_above_center = 3.8;    // contact nub sits this far above the module center (toward the
-                           // top switch); cap face stays centered, nub stays under the skirt
-
-// ---- microphone (perforation under the button, over the module's mic) ----
-mic_below_btn = 8;         // cluster center, this far below the MODULE center
-mic_hole_d    = 1.5;
-mic_ring_r    = 2.6;
-mic_ring_n    = 6;
-
-// ---- amp boards (MAX98357A breakout, generic clone) ----
-amp_w = 18;
-amp_l = 16;
-amp_standoff_h = 3;
-amp_standoff_od = 4.5;
-amp_screw_pilot = 1.6;
-
-// ---- module retention clamp (collar on the rear lid, presses the module) ----
-mod_clamp         = true;
-mod_clamp_wall    = 2.0;
-mod_clamp_foot    = mod_w - 0.5;   // collar OUTER footprint (lands on the module rim)
-mod_clamp_squeeze = 0.3;           // overshoot => light preload (no rattle)
-function mod_clamp_h() = front_depth - (wall + mod_d) + mod_clamp_squeeze;
+screw_pilot = 2.6;
+screw_clear = 3.4;
+boss_inset  = radius + 3;
 
 // ---- derived dimensions (functions so tests can assert them) ----
-function outer_w()   = spk_od*2 + spk_gap + side_margin*2;                  // 146
-function outer_h()   = 2*wall + spk_zone_h + divider_t + board_zone_h;      // 106
-function outer_d()   = front_depth + wall;                                  // front shell + flat lid
-function spk_cx()    = spk_od/2 + spk_gap/2;                                // 36.5
-function spk_cy()    = (outer_h()/2 - wall) - spk_zone_h/2;                 // 18  (speaker zone center)
-function divider_cy()= (outer_h()/2 - wall) - spk_zone_h - divider_t/2;     // -15 (divider center)
-function board_cy()  = -outer_h()/2 + wall + board_zone_h/2;                // -33 (board zone center)
-function cradle_cx() = 0;                                                   // module centered; amps flank it
-function mic_x()     = cradle_cx();
-function mic_y()     = board_cy() - mic_below_btn;                          // below the module center
-function amp_off()   = (mod_w + 2*mod_clr)/2 + cradle_wall + 6 + amp_w/2;   // amp center from module center
-function gross_vol() = (outer_w()-2*wall) * spk_zone_h * cavity_depth;      // speaker chamber only
-function net_vol()   = gross_vol() - 2*driver_disp;
+function outer_w()    = inner_w + 2*wall;                                  // 158
+function outer_h()    = 2*wall + spk_zone_h + divider_t + board_zone_h;    // 159
+function outer_d()    = front_depth + wall;                                // 118
+function spk_cx()     = 0;                                                 // driver centered
+function spk_cy()     = (outer_h()/2 - wall) - spk_zone_h/2;               // speaker-zone center
+function divider_cy() = (outer_h()/2 - wall) - spk_zone_h - divider_t/2;   // divider center
+function board_cy()   = -outer_h()/2 + wall + board_zone_h/2;              // board-zone center
+function side_x()     = outer_w()/2 - wall;                                // inner face of the +x side wall
+function pr_cz()      = wall + cavity_depth/2;                             // PR center depth
+function gross_vol()  = (outer_w()-2*wall) * spk_zone_h * cavity_depth;    // chamber only
+function net_vol()    = gross_vol() - driver_disp - pr_disp;
