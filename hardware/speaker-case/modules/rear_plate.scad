@@ -4,7 +4,7 @@
 // gasket groove on the inner face seals the lid to the body rim. Wall mounting
 // uses BLIND keyhole bosses on the OUTER face — cut through the boss only, never
 // through the lid panel, so the sealed speaker chamber behind the lid stays sealed.
-// A module-retention collar on the inner face preloads the module in its cradle.
+// TPA3116 amp standoffs stand off the inner face into the electronics bay.
 
 // blind keyhole bosses on the lid's outer (wall-side) face. The keyhole is cut
 // through the raised boss down to the lid panel surface; the panel stays solid.
@@ -21,7 +21,7 @@ module keyhole_bosses() {
 
 // TPA3116 amp mounts on the lid INNER face (standoffs toward the bay)
 module tpa_mount() {
-    translate([tpa_pos[0], board_cy()+tpa_pos[1], -board_standoff_h])
+    translate([tpa_pos[0], board_cy()+tpa_pos[1], 0])
         mirror([0,0,1])
             board_standoffs(tpa_w, tpa_l, board_standoff_h, board_standoff_od, board_screw_pilot);
 }

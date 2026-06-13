@@ -94,6 +94,7 @@ assert(keyhole_spacing/2 + keyhole_head_d/2 + kb_pad <= outer_w()/2 - wall, "key
 assert(keyhole_spacing/2 - keyhole_head_d/2 - kb_pad > 0, "keyhole bosses overlap at center");
 // TPA on the lid inner face lands inside the bay, doesn't foul the chamber
 assert(board_cy()+tpa_pos[1] + tpa_l/2 < divider_cy() - divider_t/2, "TPA on lid breaches the chamber zone");
+assert(board_cy()+tpa_pos[1] - tpa_l/2 >= board_cy() - board_zone_h/2, "TPA on lid off the plate height (bottom)");
 assert(abs(tpa_pos[0]) + tpa_w/2 <= outer_w()/2 - wall, "TPA on lid off the plate width");
 
 // helper render smoke
