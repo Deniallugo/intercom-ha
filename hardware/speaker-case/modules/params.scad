@@ -33,7 +33,7 @@ gasket_depth = 1.0;
 // ---- passive radiator (side panel, +x) [confirm vs hardware] ----
 pr_od    = 80;             // PR frame OD
 pr_cut   = 66;             // PR moving-mass cutout through the side wall
-pr_depth  = 25;           // PR intrusion into the chamber
+pr_depth = 25;            // PR intrusion into the chamber
 pr_seat_wall   = 1.6;
 pr_seat_depth  = 4;
 pr_bolt_circle = 72;       // 4 screws on a bolt circle [confirm]

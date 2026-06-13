@@ -48,14 +48,16 @@ module pr_cut_hole() {
         linear_extrude(wall + 0.2) circle(d = pr_cut);
 }
 
+// annular gasket groove recessed into the inner side-wall face
 module pr_gasket_groove() {
-    translate([side_x() - pr_gasket_depth, spk_cy(), pr_cz()]) rotate([0, -90, 0])
+    translate([side_x() + pr_gasket_depth, spk_cy(), pr_cz()]) rotate([0, -90, 0])
         difference() {
             cylinder(h = pr_gasket_depth + 0.1, d = pr_gasket_od);
             translate([0, 0, -0.1]) cylinder(h = pr_gasket_depth + 0.3, d = pr_gasket_id);
         }
 }
 
+// 4 mounting bosses on the bolt circle, side-wall plane
 module pr_screw_bosses() {
     translate([side_x(), spk_cy(), pr_cz()]) rotate([0, -90, 0])
         screw_circle(pr_screw_n, pr_bolt_circle, pr_boss_h, pr_boss_od, pr_screw_pilot);
