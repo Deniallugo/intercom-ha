@@ -1,65 +1,73 @@
-# Speaker case — hardware revision: sound-first, intercom-capable (design)
+# Speaker case — hardware revision: sound-first, PR-loaded, intercom-capable (design)
 
 Date: 2026-06-13
-Status: design (approved — Option 2, sound-first), pending implementation plan
-Supersedes the driver / amp / EQ choices in
-`2026-06-13-speaker-case-design.md` (that doc's geometry & structure stand; this
-doc replaces its electronics stack and forces a single-cutout baffle).
+Status: design (approved — sound-first, ~1.5 L passive-radiator box), pending plan
+**Supersedes most of `2026-06-13-speaker-case-design.md`:** that doc's two-driver,
+sealed, 146×118×83 mm box is replaced by a single-driver, **passive-radiator,
+~158×159×118 mm** enclosure. Its structure/print conventions still inform the
+build, but the geometry must be re-derived (new envelope, single cutout, PR cutout,
+no longer a simple sealed box). The geometry spec should be regenerated in the plan.
 
 ## Purpose
 
-Pick the best audio hardware that fits the existing combined-device envelope
-(**~146 × 118 × 83 mm**, wall-mounted, USB-C). Priority order, per the latest
-call: **sound quality / playback first, intercom + voice a provisioned second.**
-One hard constraint: a **bare ESP32-S3** brain (no VoiceS3R "smart-speaker"
-module, no integrated-amp board — those are out of stock / too abstracted).
+Best-sounding wall speaker that fits a still-reasonable envelope, with intercom +
+voice provisioned as a second priority. Constraints: a **bare ESP32-S3** brain;
+mid budget (~$50–90/unit).
 
 ## Why the old acoustic design was wrong (still applies)
 
-1. **Dual 2″ side-by-side mono comb-filters.** Two identical sources ~70 mm apart
-   on the same signal cancel off-axis — first null ~29° off-axis at 5 kHz,
-   worsening to 15 kHz. The speech/"air" band becomes position-dependent. An SPL
-   trick that trades away off-axis quality — wrong for a wall device.
-2. **One 3.5″ beats two 2″ on every axis that matters.** Cone area: one Dayton
-   PS95 ≈ 35 cm² vs two AIYIMA ≈ 24 cm² — ~50 % more air moved, *and* a coherent
-   point source with smooth polar response. Geometry agrees: two 3.5″ won't fit
-   the 138 mm inner width, so single is also the fit.
-3. **MAX98357A is too weak for an 8 Ω driver** (~2 W into 8 Ω at 5 V ≈ 86 dB/1 m)
-   — fine for voice, quiet for music. A sound-first device needs a real rail and a
-   real amp.
+1. **Dual 2″ side-by-side mono comb-filters** off-axis (first null ~29° at 5 kHz,
+   worsening to 15 kHz) — an SPL trick that wrecks the speech/"air" band.
+2. **One 3.5″ beats two 2″:** ~35 cm² vs ~24 cm² cone area, coherent point source,
+   smooth polar response. Two 3.5″ wouldn't fit anyway.
+3. **MAX98357A is too weak for 8 Ω** (~2 W ≈ 86 dB/1 m) — fine for voice, quiet for
+   music. A sound-first device needs a real rail + amp.
+4. **0.6 L sealed chokes the driver** (Vas ≈ 1.1 L): Qtc ≈ 1.1, Fc ≈ 146 Hz —
+   boomy and no low end. More volume + a PR is the fix (below).
 
-## Chosen architecture — bare S3 → I²S DAC → class-D amp
+## Chosen architecture — bare S3 → I²S DAC → class-D amp, PR-loaded box
 
-The standalone TAS5805M (on-amp DSP) only ships bundled with an ESP32 (Louder /
-SmartAmp), and those are out of stock — so on-amp DSP is off the table. Instead,
-a clean split: a good I²S DAC for fidelity, a powerful analog class-D amp for
-output. EQ moves to Music Assistant (server-side); see the EQ section.
+Standalone on-amp DSP (TAS5805M) only ships bundled with an ESP32 and is out of
+stock, so EQ is server-side. Clean split: good I²S DAC for fidelity, powerful
+analog class-D amp for output, into a single full-range in a passive-radiator box.
 
 ```
  USB-C PD charger (15 V, 30 W+)
    └─► CH224K (set 15 V) ─┬─► TPA3116 mono amp (VCC 15 V) ─► PS95-8 (8 Ω)
-                          │        ▲ IN+  ◄── PCM5102 L-out (analog)
-                          └─► MP1584 buck → 5 V ─► ESP32-S3 (onboard LDO → 3V3)
+                          │        ▲ IN+  ◄── PCM5102 L-out (analog)   ║ side panel
+                          └─► MP1584 buck → 5 V ─► ESP32-S3            ╚═► PR (tuned ~75 Hz)
  ESP32-S3 ── I²S out ─► PCM5102A DAC ── analog L ─► TPA3116
           ── I²S in  ◄─ ICS-43434 mic            (intercom — secondary)
           ── GPIO ────► PTT button → GND          (intercom — secondary)
  COMMON STAR GROUND: CH224K / TPA / buck / S3 / DAC / mic grounds all tied.
 ```
 
-## Bill of materials (per unit, ~$68 — mid budget)
+## Bill of materials (per unit, ~$83 — mid budget)
 
 | Block | Part | Role / why | ~$ |
 |---|---|---|---|
-| **Driver** | **1× Dayton Audio PS95-8** — 3.5″ point-source full-range, 8 Ω, Fs ≈ 87 Hz | Coherent point source, smooth response, more cone area than dual-2″; built for small sealed satellites. (TB W3-1364SA is a fidelity alternative.) | 22 |
-| **Brain** | **bare ESP32-S3** (DevKitC-1 / WROOM-1 **N16R8**, octal PSRAM) | Hard requirement; PSRAM needed for the audio buffers (see `speaker-s3.yaml`). I²S out → DAC, second I²S in ← mic. | 16 |
-| **DAC** | **GY-PCM5102 (PCM5102A) I²S DAC** | Cleaner SNR/THD than an integrated-DAC amp; self-generates MCLK (SCK→GND). | 6 |
-| **Amp** | **TPA3116 mono class-D board** (12–24 V) | Real power headroom (~20 W into 8 Ω at 15 V) for music. Run gently — see notes. | 10 |
-| **Power** | **CH224K USB-C PD trigger (15 V)** + **MP1584 buck (15→5 V)** | Single USB-C in: CH224K makes the 15 V amp rail, MP1584 drops it to 5 V for the S3. | 5 |
-| **Mic** (secondary) | **ICS-43434 I²S MEMS**, gasket-isolated, front baffle | Intercom / voice capability; SEL→GND (left). | 6 |
-| **Misc** | PTT button, foam gasket, wire, M2–M3 self-tap screws | — | 5 |
+| **Driver** | **1× Dayton Audio PS95-8** — 3.5″ point-source full-range, 8 Ω, Fs ≈ 87 Hz | Coherent, smooth, more cone area than dual-2″. (TB W3-1364SA = fidelity alt.) | 22 |
+| **Passive radiator** | **1× 3–4″ PR, Sd ≥ driver (~35–50 cm²), adjustable tuning mass** — side-mounted | Extends usable output to ~75–80 Hz in ~1.5 L; the only in-box bass lever | 15 |
+| **Brain** | **bare ESP32-S3** (DevKitC-1 / WROOM-1 **N16R8**, octal PSRAM) | Hard requirement; PSRAM for audio buffers (`speaker-s3.yaml`) | 16 |
+| **DAC** | **GY-PCM5102 (PCM5102A) I²S DAC** | Cleaner SNR/THD; self-generates MCLK (SCK→GND) | 6 |
+| **Amp** | **TPA3116 mono class-D board** (12–24 V) | ~20 W into 8 Ω at 15 V; run gently (see notes) | 10 |
+| **Power** | **CH224K PD trigger (15 V)** + **MP1584 buck (15→5 V)** | One USB-C in → 15 V amp rail + 5 V logic | 5 |
+| **Mic** (2nd) | **ICS-43434 I²S MEMS**, gasket-isolated, front baffle, SEL→GND | Intercom / voice | 6 |
+| **Misc** | PTT button, foam gaskets (driver, PR, lid), wire, M2–M3 screws | — | 6 |
 
-Total ≈ **$66–70/unit**, excluding a PD wall charger (reuse one that exposes a
-15 V PDO; 12 V is not a guaranteed PD voltage, 15 V is).
+Total ≈ **$83/unit**, excluding a 15 V-capable PD wall charger.
+
+## Geometry (sound-first, ~1.5 L PR box)
+
+- **External ≈ 158 W × 159 H × 118 D mm** (balanced growth from 146×118×83).
+- Inner chamber ≈ **150 W × 103 H × 110 D = 1.70 L gross → ~1.5 L net** (after the
+  PS95 basket, the PR, and polyfill). Assert `vol_target` ≈ **1.4 L** net floor.
+- Vertical stack (inner): top wall 4 + **speaker/PR zone 103** + divider 4 + **board
+  zone 44** + bottom wall 4 = 159.
+- Sealed-equivalent at 1.5 L: Qtc ≈ 0.9, Fc ≈ 114 Hz; **PR tuned ~75 Hz** drops
+  system F3 to ~75–80 Hz with a damped roll-off. Past ~2.5 L is diminishing returns.
+- The PS95's 92 mm frame fills the front baffle → the **PR mounts on a side panel**
+  (omnidirectional at LF; fixed panel, not the removable lid).
 
 ## Pin map (ESP32-S3 — aligns with `devices/speaker-s3.yaml`)
 
@@ -76,70 +84,59 @@ Total ≈ **$66–70/unit**, excluding a PD wall charger (reuse one that exposes
 | 5V | ← | MP1584 5.0 V out | board power |
 | GND | — | common star ground | all grounds tie here |
 
-Pins 5/6/7 are the existing DAC bus; 15/16/18/40 are free, non-strapping, and
-clear of the octal-PSRAM pins (avoid GPIO 26–37, 0/3/45/46, USB 19/20).
+Pins 5/6/7 = existing DAC bus; 15/16/18/40 free, non-strapping, clear of octal-PSRAM
+pins (avoid GPIO 26–37, 0/3/45/46, USB 19/20).
 
 ## Wiring notes that bite if skipped
 
-- **PCM5102 jumpers:** SCK→GND (PLL-generated MCLK), FMT→GND (I²S), XSMT→3V3
-  (un-mute). No MCLK pin declared — correct.
-- **Mono to the amp:** PCM5102 is a stereo DAC; set ESPHome `channel: mono`, wire
-  **only L-out** to the TPA3116 IN+, leave R unconnected. No summing resistors.
-- **TPA3116 gain:** set the **lowest gain (~20 dB)** jumper; the 100 W rating is
-  far beyond a PS95-8. At 15 V you still have ~20 W — more than the driver wants.
+- **PCM5102 jumpers:** SCK→GND, FMT→GND (I²S), XSMT→3V3 (un-mute). No MCLK pin.
+- **Mono to the amp:** ESPHome `channel: mono`; wire **only L-out** → TPA3116 IN+.
+- **TPA3116 gain:** lowest (~20 dB) jumper; ~20 W at 15 V is already more than the
+  PS95 wants. **Hard volume ceiling** in firmware/MA (see EQ).
 - **One common star ground** at the CH224K output, or expect hum.
-- **ICS-43434 SEL → GND** so it lands on the channel ESPHome reads.
+- **PR tuning is empirical:** add/remove mass, measure, target Fb ~75 Hz; the PR's
+  excursion limit, not the driver's, often sets max clean SPL — check both.
 
 ## EQ / driver protection — server-side (Music Assistant)
 
-No on-amp DSP in this build, so EQ and excursion protection live in **Music
-Assistant per-player Audio DSP** on the speaker's media player:
+No on-amp DSP; EQ + protection live in MA per-player Audio DSP:
 
 | Stage | Type | Freq | Q / slope | Gain |
 |---|---|---|---|---|
-| Protect excursion | High-pass | ~90 Hz | 12 dB/oct (Q≈0.7) | — |
-| Tame sealed hump | Peaking | ~Fc (≈140–150 Hz) | Q≈1.5 | −2 to −4 dB |
-| Warmth (optional) | Low shelf | ~200 Hz | — | +2 to +3 dB |
+| Protect excursion | High-pass | ~Fb (≈75–80 Hz) | 12–24 dB/oct | — |
+| Gentle shape (if needed) | Peaking | ~110–120 Hz | Q≈1 | −1 to −2 dB |
 
-**Caveat — TTS/wake bypass MA DSP.** With ~20 W on tap and no hardware high-pass,
-set a **conservative max-volume ceiling** in firmware/MA so bypassed TTS can't
-over-excurse the driver. The sealed box itself limits sub-Fc excursion, which
-helps. (This bypass hole is the one real cost of losing on-amp DSP.)
+The 1.5 L + PR alignment is fairly flat, so little corrective EQ is needed (vs the
+boomy 0.6 L sealed box). **Caveat:** TTS/wake **bypass** MA DSP and there's no
+hardware high-pass — below Fb a PR lets cone excursion run away, so the **HPF at Fb
++ a conservative max-volume ceiling are mandatory**, not optional.
 
-## Acoustic notes (sealed box)
+## Case implications (feeds the regenerated geometry spec)
 
-- Keep **sealed** (predictable). Single driver reclaims one basket of volume —
-  maximize the sealed chamber within the envelope.
-- PS95 (Vas ≈ 1.1 L, Qts ≈ 0.69) in ~0.6 L → Qtc ≈ 1.1, Fc ≈ 146 Hz: a mild
-  midbass hump then rolloff, flattened by the "tame sealed hump" biquad.
-- **Optional bass extension (sound-first stretch):** a 3″ passive radiator tuned
-  ~75 Hz adds real perceived midbass — the only way to buy low end in this volume.
-  Costs sealed-box predictability; decide at build time.
-- Light polyfill in the chamber.
-
-## Case implications (feeds the geometry spec / `params.scad`)
-
-- **One driver cutout**, centered, sized to the PS95-8 (cutout / screw pattern /
-  seated depth **[confirm vs hardware]**), replacing the two 46 mm cutouts.
-- **Electronics bay** now mounts more, smaller boards: S3, PCM5102 DAC, TPA3116,
-  MP1584 buck, CH224K trigger. Plan standoffs / a sled; it's the densest zone.
-  The freed second-driver baffle area helps the bay breathe.
-- **Divider:** one sealed wire pass (single driver → single 2-conductor pass).
-- **Mic** (secondary): gasket-isolated, front baffle, far from the driver to limit
-  mechanical feedback. **PTT button** through the front. **USB-C** bottom exit.
+- **New external envelope ~158 × 159 × 118 mm**; re-derive all `params.scad`.
+- **One driver cutout** (PS95-8: cutout / screw pattern / seated depth **[confirm]**),
+  centered, taller speaker zone (103 mm) for the 92 mm frame.
+- **PR cutout + gasket + screw bosses on one side panel.**
+- **Electronics bay** mounts five small boards (S3, DAC, TPA3116, buck, PD trigger)
+  + button + mic + USB-C exit — plan a sled/standoffs.
+- **Divider:** one sealed wire pass (single driver). Box airtight except through the
+  PR; PR perimeter gasketed.
+- **Heavier, deeper box → stronger wall mount** (keyhole/bracket sized for the mass
+  and tip-out moment).
 
 ## Out of scope (YAGNI)
 
-- On-amp DSP (no in-stock standalone TAS5805M; EQ is server-side).
-- Stereo (mono shared chamber; can't image at this size).
-- Ported box (geometry-limited; passive radiator is the only bass lever).
-- Far-field dual-mic array + AEC (intercom is secondary; single mic + PTT).
+- On-amp DSP (no in-stock standalone TAS5805M).
+- Stereo (mono shared chamber).
+- Active 2-way / in-box woofer (no volume for it — a separate sub is the answer for
+  deeper bass).
+- Far-field dual-mic array + AEC (intercom secondary; single mic + PTT).
 
 ## Open / confirm before build
 
-- PS95-8 cutout diameter / screw pattern / seated depth vs the baffle and 75 mm
-  cavity (the limiting fit).
-- USB-C source exposes a **15 V** PD profile (charger choice).
-- Electronics-bay layout fits five small boards + button + mic + USB-C exit.
-- Final sealed volume / Qtc after the single-driver baffle rework.
-- Whether to add the optional passive radiator now or leave it sealed.
+- PS95-8 cutout / screw pattern / seated depth vs the baffle.
+- PR part choice + side-panel location + tuning mass for Fb ~75 Hz.
+- USB-C source exposes a **15 V** PD profile.
+- Electronics-bay layout fits five boards + button + mic + USB-C exit.
+- Final net volume / Qtc / Fb after the rework; set `vol_target`.
+- Wall-mount rating for the larger/heavier box.
