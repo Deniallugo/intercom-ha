@@ -39,6 +39,9 @@ assert(outer_w() - 2*lid_gasket_inset > 0 && outer_h() - 2*lid_gasket_inset > 0,
 assert(keyhole_spacing/2 + keyhole_head_d/2 <= outer_w()/2 - wall, "keyholes run off the plate width");
 assert(keyhole_spacing/2 - keyhole_head_d/2 > 0, "keyholes overlap at center — widen keyhole_spacing");
 
+// ---- grille: perforation field stays within the driver frame ----
+assert(spk_cut <= spk_od, "grille field must stay within the driver frame");
+
 // helper render smoke — these must produce geometry without warnings
 linear_extrude(1) rounded_rect(20, 10, 2);
 linear_extrude(1) grille(spk_cut);
