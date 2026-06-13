@@ -29,9 +29,11 @@ assert(spk_cy() - spk_screw_square/2 > divider_cy() + divider_t/2, "driver screw
 
 // Divider sits between the two zones.
 assert(divider_cy() < spk_cy() && divider_cy() > board_cy(), "divider must sit between speaker and board zones");
-// Wire pass is a BOUNDED (sealed) hole within the cavity depth.
+// Wire passes are BOUNDED (sealed) holes within the cavity depth, one under each
+// driver, fitting within the divider width.
 assert(divider_wire_z - divider_wire_d/2 >= wall, "divider wire pass runs into the front face — raise divider_wire_z");
 assert(divider_wire_z + divider_wire_d/2 <= front_depth, "divider wire pass runs off the back edge — lower divider_wire_z");
+assert(spk_cx() + divider_wire_d/2 <= outer_w()/2 - wall, "divider wire passes run off the divider width");
 
 // ===== electronics bay (lower, vented) =====
 

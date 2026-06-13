@@ -46,8 +46,8 @@ front_depth  = wall + cavity_depth;   // front-shell extrude = front wall + cavi
 driver_disp = 25000;       // mm^3 displaced by each driver basket (measured estimate)
 vol_target  = 450000;      // mm^3 net floor (~0.45 L); the board zone trims the chamber
 
-// ---- divider sealed wire pass (4 speaker conductors up to the drivers) ----
-divider_wire_d = 8;        // grommet bore through the divider
+// ---- divider sealed wire passes (one per driver: a 2-conductor pair each) ----
+divider_wire_d = 6;        // grommet bore through the divider, per driver
 divider_wire_z = wall + 10;// hole center depth from the front face
 
 // ---- wall mount: BLIND keyhole bosses on the lid OUTER face (chamber stays sealed) ----

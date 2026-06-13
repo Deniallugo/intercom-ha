@@ -32,8 +32,9 @@ internal divider. Design rationale, measured driver T/S, and layout:
 - Module drops into the cradle (clamped by the rear-lid collar); amps screw to
   their standoffs; button cap is captive in its well.
 - **Wiring:** USB-C exits the bottom (power/data). Speaker wires run from the amps
-  up through the **divider grommet pass** (seal with silicone) to the drivers —
-  4 conductors, 2 per driver. Feed L → one driver, R → the other.
+  up through **two divider grommet passes — one per driver** (seal each with
+  silicone), each carrying that driver's 2-wire pair. Feed L → one driver, R → the
+  other.
 - Loosely add polyfill in the **speaker chamber only**.
 
 ## Wall mount

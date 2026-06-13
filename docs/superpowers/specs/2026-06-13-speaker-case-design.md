@@ -75,8 +75,10 @@ internal divider:
   seam, and a sealed wire pass through the divider.
 - **Divider.** A horizontal slab (`wall` thick) spanning the full inner width and
   full cavity depth, forming the chamber floor. It butts against the rear lid
-  (apply foam tape on its back edge for the seam). One **sealed wire pass** (4
-  speaker conductors, grommet) goes up through it from the amps to the drivers.
+  (apply foam tape on its back edge for the seam). **Two sealed wire passes — one
+  directly under each driver** (grommet each, 2 conductors per pass) go up through
+  it from the amps to the drivers. Multiple sealed passes don't harm the chamber —
+  each only leaks if not sealed — and they keep the two pairs from crossing.
 - **Bottom — electronics bay (vented).** Ported from terrace-case:
   - VoiceS3R module cradle (24×24, button-forward, open at the back)
   - 2× MAX98357A amp mounts flanking the module
@@ -89,8 +91,8 @@ internal divider:
 
 ### Wiring
 - **External:** a single USB-C exits the bottom (power + data), exactly as terrace.
-- **Internal:** amp speaker outputs run up through the divider's sealed grommet
-  pass into the speaker chamber to the two drivers. Feed L → one driver, R → other.
+- **Internal:** amp speaker outputs run up through the divider's two sealed grommet
+  passes (one per driver) into the speaker chamber. Feed L → one driver, R → other.
 
 ## Geometry (all parametric)
 

@@ -43,12 +43,13 @@ module speaker_screw_bosses() {
 
 // ---- divider (sealing floor of the speaker chamber) ------------------------
 
-// sealed wire pass: a bounded vertical hole through the divider slab for the 4
-// speaker conductors going up from the amps to the drivers (grommet + silicone).
+// sealed wire passes: one bounded hole per driver, directly below it, so each
+// driver's 2-wire pair runs straight up from the amps (grommet + silicone each).
 module divider_wire_cut() {
-    translate([0, divider_cy(), divider_wire_z])
-        rotate([90, 0, 0])
-            cylinder(h = divider_t*3, d = divider_wire_d, center = true);
+    for (sx = [-1, 1])
+        translate([sx*spk_cx(), divider_cy(), divider_wire_z])
+            rotate([90, 0, 0])
+                cylinder(h = divider_t*3, d = divider_wire_d, center = true);
 }
 
 // horizontal slab spanning the full inner width and full cavity depth; butts the
