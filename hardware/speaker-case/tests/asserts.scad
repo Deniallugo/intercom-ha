@@ -26,6 +26,19 @@ assert(divider_cy() < spk_cy() && divider_cy() > board_cy(), "divider must sit b
 assert(divider_wire_z - divider_wire_d/2 >= wall, "wire pass runs into the front face — raise divider_wire_z");
 assert(divider_wire_z + divider_wire_d/2 <= front_depth, "wire pass runs off the back edge — lower divider_wire_z");
 
+// ===== passive radiator (side panel, +x) =====
+assert(pr_cut < pr_od, "PR cutout must be smaller than the PR frame");
+assert(pr_gasket_id < pr_gasket_od, "PR gasket groove must have id < od");
+assert(pr_gasket_id >= pr_cut && pr_gasket_od <= pr_od, "PR gasket must sit on the flange land");
+assert(pr_gasket_depth < wall, "PR gasket groove must not cut through the side wall");
+// PR disc fits the side panel's chamber region in y (height) and z (depth)
+assert(spk_cy() + pr_od/2 <= (outer_h()/2 - wall), "PR runs off the top of the chamber");
+assert(spk_cy() - pr_od/2 >= divider_cy() + divider_t/2, "PR dips below the divider");
+assert(pr_cz() - pr_od/2 >= wall, "PR runs into the front face");
+assert(pr_cz() + pr_od/2 <= front_depth, "PR runs off the back edge");
+// PR intrusion clears the driver basket on the centerline
+assert(side_x() - pr_depth > spk_cx() + spk_od/2, "PR intrudes into the driver basket");
+
 // ===== rear lid / shell =====
 assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
 

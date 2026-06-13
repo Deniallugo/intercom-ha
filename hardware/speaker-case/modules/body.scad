@@ -31,6 +31,36 @@ module speaker_screw_bosses() {
         screw_circle(spk_screw_n, spk_bolt_circle, spk_boss_h, spk_boss_od, spk_screw_pilot);
 }
 
+// ---- passive radiator (mounted on the +x side wall, fires sideways) --------
+
+// locating ring on the INNER side-wall face
+module pr_seat() {
+    translate([side_x(), spk_cy(), pr_cz()]) rotate([0, -90, 0])
+        difference() {
+            cylinder(h = pr_seat_depth, d = pr_od + 2*pr_seat_wall);
+            translate([0, 0, -0.1]) cylinder(h = pr_seat_depth + 0.2, d = pr_od + 2*clr);
+        }
+}
+
+// open cutout through the +x side wall
+module pr_cut_hole() {
+    translate([outer_w()/2 - wall - 0.1, spk_cy(), pr_cz()]) rotate([0, 90, 0])
+        linear_extrude(wall + 0.2) circle(d = pr_cut);
+}
+
+module pr_gasket_groove() {
+    translate([side_x() - pr_gasket_depth, spk_cy(), pr_cz()]) rotate([0, -90, 0])
+        difference() {
+            cylinder(h = pr_gasket_depth + 0.1, d = pr_gasket_od);
+            translate([0, 0, -0.1]) cylinder(h = pr_gasket_depth + 0.3, d = pr_gasket_id);
+        }
+}
+
+module pr_screw_bosses() {
+    translate([side_x(), spk_cy(), pr_cz()]) rotate([0, -90, 0])
+        screw_circle(pr_screw_n, pr_bolt_circle, pr_boss_h, pr_boss_od, pr_screw_pilot);
+}
+
 // ---- divider (sealing floor) -----------------------------------------------
 
 // single sealed wire pass, centered under the driver
@@ -63,9 +93,13 @@ module body() {
             divider();
             speaker_seat();
             speaker_screw_bosses();
+            pr_seat();
+            pr_screw_bosses();
             corner_bosses();
         }
         cone_cut();
         gasket_groove();
+        pr_cut_hole();
+        pr_gasket_groove();
     }
 }
