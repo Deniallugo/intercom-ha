@@ -80,6 +80,16 @@ module divider() {
     }
 }
 
+// ---- electronics bay (front-baffle board mounts) ---------------------------
+module bay_boards() {
+    // S3 devkit: friction pocket (no reliable mount holes)
+    translate([s3_pos[0], board_cy()+s3_pos[1], wall]) board_pocket(s3_w, s3_l, board_standoff_h+2, pocket_wall);
+    // boards with holes: corner standoffs
+    translate([dac_pos[0],  board_cy()+dac_pos[1],  wall]) board_standoffs(dac_w, dac_l, board_standoff_h, board_standoff_od, board_screw_pilot);
+    translate([buck_pos[0], board_cy()+buck_pos[1], wall]) board_standoffs(buck_w, buck_l, board_standoff_h, board_standoff_od, board_screw_pilot);
+    translate([trig_pos[0], board_cy()+trig_pos[1], wall]) board_standoffs(trig_w, trig_l, board_standoff_h, board_standoff_od, board_screw_pilot);
+}
+
 // ---- corners --------------------------------------------------------------
 
 module corner_bosses() {
@@ -98,6 +108,7 @@ module body() {
             pr_seat();
             pr_screw_bosses();
             corner_bosses();
+            bay_boards();
         }
         cone_cut();
         gasket_groove();

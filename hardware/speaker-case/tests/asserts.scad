@@ -39,6 +39,36 @@ assert(pr_cz() + pr_od/2 <= front_depth, "PR runs off the back edge");
 // PR intrusion clears the driver basket on the centerline
 assert(side_x() - pr_depth > spk_cx() + spk_od/2, "PR intrudes into the driver basket");
 
+// ===== electronics bay (front-baffle boards) =====
+// absolute board centers in the bay (board_cy() + per-board offset)
+function bpos(p) = [p[0], board_cy() + p[1]];
+bay_xmin = -(outer_w()/2 - wall); bay_xmax = outer_w()/2 - wall;
+bay_ymin = board_cy() - board_zone_h/2; bay_ymax = divider_cy() - divider_t/2;
+
+// each front-baffle board stays inside the bay rectangle
+module in_bay(p, w, l, name) {
+    c = bpos(p);
+    assert(c[0]-w/2 >= bay_xmin && c[0]+w/2 <= bay_xmax, str(name, " off bay width"));
+    assert(c[1]-l/2 >= bay_ymin && c[1]+l/2 <= bay_ymax, str(name, " off bay height"));
+}
+in_bay(s3_pos,   s3_w,  s3_l,  "S3");
+in_bay(dac_pos,  dac_w, dac_l, "DAC");
+in_bay(buck_pos, buck_w, buck_l, "buck");
+in_bay(trig_pos, trig_w, trig_l, "trigger");
+in_bay(mic_pos,  mic_board_w, mic_board_l, "mic");
+
+// front-baffle boards do not overlap each other (pairwise)
+assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(dac_pos),[dac_w,dac_l]), "S3 overlaps DAC");
+assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(buck_pos),[buck_w,buck_l]), "S3 overlaps buck");
+assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(trig_pos),[trig_w,trig_l]), "S3 overlaps trigger");
+assert(aabb_clear(bpos(s3_pos),[s3_w,s3_l], bpos(mic_pos),[mic_board_w,mic_board_l]), "S3 overlaps mic");
+assert(aabb_clear(bpos(dac_pos),[dac_w,dac_l], bpos(mic_pos),[mic_board_w,mic_board_l]), "DAC overlaps mic");
+assert(aabb_clear(bpos(buck_pos),[buck_w,buck_l], bpos(trig_pos),[trig_w,trig_l]), "buck overlaps trigger");
+assert(aabb_clear(bpos(dac_pos),[dac_w,dac_l], bpos(trig_pos),[trig_w,trig_l]), "DAC overlaps trigger");
+assert(aabb_clear(bpos(buck_pos),[buck_w,buck_l], bpos(mic_pos),[mic_board_w,mic_board_l]), "buck overlaps mic");
+// TPA mounts on the rear lid; cavity must clear front standoff + board + TPA stack
+assert(cavity_depth >= board_standoff_h + 2 + 16, "cavity too shallow for front + rear board stack");
+
 // ===== rear lid / shell =====
 assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
 

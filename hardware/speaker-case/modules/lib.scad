@@ -53,3 +53,21 @@ module screw_circle(n, bc, h, od, pilot) {
         rotate([0, 0, i*360/n + 45]) translate([bc/2, 0, 0])
             screw_boss(h, od, pilot);
 }
+
+// 4 corner standoffs for a board of footprint w x l, centered at origin, base z=0
+module board_standoffs(w, l, h, od, pilot) {
+    for (sx = [-1, 1], sy = [-1, 1])
+        translate([sx*(w/2 - 2), sy*(l/2 - 2), 0]) screw_boss(h, od, pilot);
+}
+
+// 3-wall friction pocket (open at +z) for a board w x l, centered at origin
+module board_pocket(w, l, h, pw) {
+    difference() {
+        translate([0, 0, h/2]) cube([w + 2*pw, l + 2*pw, h], center = true);
+        translate([0, 0, h/2 + pw]) cube([w, l, h], center = true);
+    }
+}
+
+// boolean helper: do two centered AABBs (at p1/p2, sizes s1/s2) clear each other?
+function aabb_clear(p1, s1, p2, s2) =
+    (abs(p1[0]-p2[0]) >= (s1[0]+s2[0])/2) || (abs(p1[1]-p2[1]) >= (s1[1]+s2[1])/2);
