@@ -6,7 +6,10 @@
 // keyhole wall-mount) or collide with the front bosses at the same corners.
 module rear_plate() {
     difference() {
-        linear_extrude(wall) rounded_rect(outer_w(), outer_h(), radius);       // flat plate
+        union() {
+            linear_extrude(wall) rounded_rect(outer_w(), outer_h(), radius);   // flat plate
+            if (mod_clamp) module_clamp();                                     // retention collar (inner face)
+        }
         // screw clearance holes (rear -> into front bosses)
         for (sx = [-1, 1], sy = [-1, 1])
             translate([sx*(outer_w()/2 - boss_inset), sy*(outer_h()/2 - boss_inset), -0.1])
@@ -18,4 +21,20 @@ module rear_plate() {
         // (no USB notch — the USB-C exit is a bounded hole in the front shell's
         //  bottom wall, so the rear plate's bottom edge stays solid)
     }
+}
+
+// Screwless module clamp: a square perimeter collar grown off the plate's INNER
+// face (local -z, toward the module) and centered on the cradle. Its leading
+// rim lands on the module's back edge and preloads it forward into the cradle
+// floor. Hollow center clears back-side components; OUTER footprint is < the
+// pocket inner so the collar drops into the pocket at assembly.
+module module_clamp() {
+    o = mod_clamp_foot;                 // collar outer
+    i = o - 2*mod_clamp_wall;           // collar inner (open center)
+    translate([cradle_cx(), board_cy(), -mod_clamp_h()])
+        linear_extrude(mod_clamp_h())
+            difference() {
+                square(o, center = true);
+                square(i, center = true);
+            }
 }
