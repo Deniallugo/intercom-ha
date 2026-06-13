@@ -1,39 +1,51 @@
-# Speaker case — sealed twin-driver wall enclosure
+# Speaker case — combined device (sealed speaker chamber + electronics bay)
 
-Sealed, mono, wall-mounted enclosure for **two AIYIMA 2"/53 mm full-range drivers
-(4 Ω)**, driven by the terrace device's 2× MAX98357A amps. Design rationale and
-measured driver T/S: `docs/superpowers/specs/2026-06-13-speaker-case-design.md`.
+Wall-mounted enclosure that is **both** the acoustic box for **two AIYIMA 2"/53 mm
+full-range drivers (4 Ω)** and the housing for the full terrace electronics stack
+(M5Stack VoiceS3R + 2× MAX98357A amps + PTT button + mic). A vertical stack: a
+**sealed speaker chamber** on top, a **vented electronics bay** below, split by an
+internal divider. Design rationale, measured driver T/S, and layout:
+`docs/superpowers/specs/2026-06-13-speaker-case-design.md`.
 
 ## Parts
-- `body` — sealed shell + flat baffle (both drivers), bottom wire pass
-- `rear` — flat gasketed lid + keyhole wall mount
+- `body` — shell with the sealed speaker chamber (two drivers on a flat baffle), the
+  sealing divider + wire pass, and the electronics bay (module cradle, 2 amp mounts,
+  button well, mic perf, USB-C exit)
+- `rear` — flat gasketed lid with blind keyhole wall-mount bosses + module clamp
+- `button` — captive PTT button cap
 - `grille` — optional snap-on protective covers
 
 ## Build
 ```bash
-./build.sh          # renders stl/body.stl, stl/rear.stl, stl/grille.stl
+./build.sh          # renders stl/{body,rear,button,grille}.stl
 ./test.sh           # asserts + render smoke checks
 ```
 
 ## Print & assembly
-- Orient **back-down**: flat baffle, no overhangs, no supports.
-- Print **airtight**: ≥4 perimeters / high wall count, then a thin interior seal
-  coat (epoxy or shellac wash) on the shell before assembly. FDM PLA leaks through
-  layer lines, not just joints — sealing is the whole game for a sealed box.
-- Foam gasket ring under each driver flange (groove provided); M2 self-tap the
-  flanges to the 4 bosses (43 mm square) per driver.
-- Foam strip in the rear-plate perimeter groove; M3 self-tap the lid to the 4
-  corner bosses.
-- Single wire bundle (4 conductors, 2 per driver) exits the bottom through a
-  grommet — seal with a dab of silicone. Feed L → one driver, R → the other.
-- Loosely add polyfill; do not pack.
+- Orient **back-down**: flat baffle + open back, no supports.
+- Print the **speaker chamber airtight** (≥4 perimeters + a thin interior seal coat
+  of epoxy/shellac); the electronics bay needn't be airtight.
+- Foam gasket ring under each driver flange (groove provided); M2 self-tap each
+  flange to its 4 bosses (43 mm square).
+- Foam strip in the lid perimeter groove; **foam tape on the divider's back edge**
+  for the chamber-to-lid seam; M3 self-tap the lid to the 4 corner bosses.
+- Module drops into the cradle (clamped by the rear-lid collar); amps screw to
+  their standoffs; button cap is captive in its well.
+- **Wiring:** USB-C exits the bottom (power/data). Speaker wires run from the amps
+  up through the **divider grommet pass** (seal with silicone) to the drivers —
+  4 conductors, 2 per driver. Feed L → one driver, R → the other.
+- Loosely add polyfill in the **speaker chamber only**.
+
+## Wall mount
+Two blind keyhole bosses on the lid's outer face (near the top, over the speaker
+zone) hang the box on two screws. They are cut through the boss only — the lid
+panel behind stays solid, so the speaker chamber stays sealed.
 
 ## Bass / EQ — apply server-side in Music Assistant
-This driver's free-air resonance is **Fs ≈ 145 Hz**: there is no usable output
-below ~120 Hz from any enclosure, and a sealed box trims rather than extends the
-low end. The bass/warmth lever is **Music Assistant's per-player Audio DSP**
-(the MAX98357A and the ESPHome pipeline cannot filter). On
-`media_player.intercom_s3_player`, start from — then tune by ear:
+Driver Fs ≈ 145 Hz: no usable output below ~120 Hz from any enclosure, and a sealed
+box trims rather than extends the low end. The bass/warmth lever is **Music
+Assistant's per-player Audio DSP** (the MAX98357A and the ESPHome pipeline cannot
+filter). On `media_player.intercom_s3_player`, start from — then tune by ear:
 
 | Stage | Type | Freq | Q / slope | Gain |
 |---|---|---|---|---|
@@ -46,4 +58,7 @@ announcements bypass it — fine, those are speech.
 
 ## Confirm before printing
 - Driver cutout (46 mm), screw square (43 mm), seated depth (28 mm) vs your units.
-- Net sealed volume floor is enforced by `tests/asserts.scad` (`vol_target`).
+- VoiceS3R footprint, USB-C port depth, amp board size vs hardware (carried from
+  terrace's `[confirm vs hardware]` notes).
+- Speaker-chamber net volume floor enforced by `tests/asserts.scad` (`vol_target`).
+- Box height (~106 mm) acceptable for the wall location.
