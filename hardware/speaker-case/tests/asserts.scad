@@ -87,6 +87,14 @@ assert((usb_conn_w + usb_clr)/2 + boss_od/2 <= (outer_w()/2 - boss_inset), "USB 
 
 // ===== rear lid / shell =====
 assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
+assert(lid_gasket_depth < wall, "lid gasket groove must not cut through the lid");
+assert(outer_w() - 2*lid_gasket_inset > 0 && outer_h() - 2*lid_gasket_inset > 0, "lid gasket inset too large");
+// keyholes fit the wider plate
+assert(keyhole_spacing/2 + keyhole_head_d/2 + kb_pad <= outer_w()/2 - wall, "keyhole bosses run off the plate width");
+assert(keyhole_spacing/2 - keyhole_head_d/2 - kb_pad > 0, "keyhole bosses overlap at center");
+// TPA on the lid inner face lands inside the bay, doesn't foul the chamber
+assert(board_cy()+tpa_pos[1] + tpa_l/2 < divider_cy() - divider_t/2, "TPA on lid breaches the chamber zone");
+assert(abs(tpa_pos[0]) + tpa_w/2 <= outer_w()/2 - wall, "TPA on lid off the plate width");
 
 // helper render smoke
 linear_extrude(1) rounded_rect(20, 10, 2);

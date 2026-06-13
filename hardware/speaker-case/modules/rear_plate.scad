@@ -19,26 +19,19 @@ module keyhole_bosses() {
             }
 }
 
-// screwless module clamp: a square perimeter collar grown off the plate's INNER
-// face (toward the module) and centered on the cradle. Its rim lands on the
-// module's back edge and preloads it forward into the cradle floor.
-module module_clamp() {
-    o = mod_clamp_foot;                 // collar outer
-    i = o - 2*mod_clamp_wall;           // collar inner (open center)
-    translate([cradle_cx(), board_cy(), -mod_clamp_h()])
-        linear_extrude(mod_clamp_h())
-            difference() {
-                square(o, center = true);
-                square(i, center = true);
-            }
+// TPA3116 amp mounts on the lid INNER face (standoffs toward the bay)
+module tpa_mount() {
+    translate([tpa_pos[0], board_cy()+tpa_pos[1], -board_standoff_h])
+        mirror([0,0,1])
+            board_standoffs(tpa_w, tpa_l, board_standoff_h, board_standoff_od, board_screw_pilot);
 }
 
 module rear_plate() {
     difference() {
         union() {
-            linear_extrude(wall) rounded_rect(outer_w(), outer_h(), radius);   // flat plate
-            keyhole_bosses();                                                  // wall mount (outer face)
-            if (mod_clamp) module_clamp();                                     // retention collar (inner face)
+            linear_extrude(wall) rounded_rect(outer_w(), outer_h(), radius);
+            keyhole_bosses();
+            tpa_mount();
         }
         // perimeter gasket groove on the inner (z=0) face
         translate([0, 0, -0.1])
