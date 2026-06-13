@@ -36,10 +36,10 @@ side_margin = 10;          // wall-to-driver, left/right interior
 // ---- vertical stack: speaker zone (top) | divider | board zone (bottom) ----
 spk_zone_h   = 62;         // interior height of the sealed speaker chamber
 divider_t    = wall;       // sealing slab between chamber and electronics bay
-board_zone_h = 32;         // interior height of the vented electronics bay
+board_zone_h = 44;         // interior height of the vented electronics bay (~10 mm wire room around the module)
 
 // ---- chamber depth (sets the sealed volume; also the box interior depth) ----
-cavity_depth = 62;         // clear air behind the cones
+cavity_depth = 75;         // clear air behind the cones (also front-to-back wire room)
 front_depth  = wall + cavity_depth;   // front-shell extrude = front wall + cavity
 
 // ---- net-volume target (acoustic floor) ----

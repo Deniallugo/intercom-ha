@@ -62,4 +62,4 @@ announcements bypass it — fine, those are speech.
 - VoiceS3R footprint, USB-C port depth, amp board size vs hardware (carried from
   terrace's `[confirm vs hardware]` notes).
 - Speaker-chamber net volume floor enforced by `tests/asserts.scad` (`vol_target`).
-- Box height (~106 mm) acceptable for the wall location.
+- Box size (~146 × 118 × 83 mm) acceptable for the wall location.

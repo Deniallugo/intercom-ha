@@ -98,14 +98,16 @@ internal divider:
 
 Approximate; final values in `params.scad` as derived functions.
 
-- **External ≈ 146 W × 106 H × 70 D mm.** Taller than the passive box (added board
-  zone), shallower (depth traded down — electronics need a board zone, not air).
+- **External ≈ 146 W × 118 H × 83 D mm.** Sized for wire room: a tall electronics
+  bay and a deep cavity give clearance around the module/amps and front-to-back
+  for connectors.
 - Vertical stack (inner): top wall 4 + **speaker zone 62** + divider 4 + **board
-  zone 32** + bottom wall 4 = 106.
-- Speaker chamber net volume ≈ **0.48–0.52 L** (inner width 138 × zone 62 × cavity
-  62, minus two driver baskets). Floor enforced by assert `vol_target` (≈0.45 L).
-  Lower than the passive box's 0.6 L because the board zone claims height — and at
-  Fs = 145 Hz the volume delta is acoustically negligible.
+  zone 44** + bottom wall 4 = 118. The 44 mm bay leaves ~10 mm above and below the
+  24.8 mm module for wire routing.
+- Speaker chamber net volume ≈ **0.59 L** (inner width 138 × zone 62 × cavity 75,
+  minus two driver baskets). Floor enforced by assert `vol_target` (≈0.45 L).
+  At Fs = 145 Hz the exact volume is acoustically near-irrelevant; the deep cavity
+  is chosen for wire room as much as volume.
 - **Walls/divider 4 mm.** Rounded vertical edges (`radius`) for baffle diffraction.
 - Drivers vertically centered in the speaker zone; module + amps + button + mic
   centered in the board zone (terrace coordinates, re-derived for the new height).
@@ -196,4 +198,4 @@ MA DSP shapes music routed through Music Assistant; TTS / wake-word bypass it (f
 - VoiceS3R module footprint, USB-C port depth, amp board size vs hardware
   (carried over from terrace's `[confirm vs hardware]` notes).
 - Speaker-chamber net volume floor (assert `vol_target`).
-- Box height (~106 mm) acceptable for the wall location.
+- Box size (~146 × 118 × 83 mm) acceptable for the wall location.
