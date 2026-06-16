@@ -45,6 +45,22 @@ async def test_restore_resumes_playing(fake_ha):
     fake_ha.play.assert_awaited_once_with("media_player.x")
 
 
+async def test_restore_repauses_paused_target(fake_ha):
+    """A target paused before the broadcast auto-resumes when we inject a
+    one-shot media_url, so restore must re-pause it to leave it as we found it.
+    No pause at snapshot time — it's already paused."""
+    fake_ha.get_state.return_value = {
+        "state": "paused",
+        "attributes": {"volume_level": 0.5},
+    }
+    d = Ducker(fake_ha)
+    await d.snapshot_and_pause(["media_player.x"])
+    fake_ha.pause.assert_not_called()
+    await d.restore("media_player.x")
+    fake_ha.pause.assert_awaited_once_with("media_player.x")
+    fake_ha.play.assert_not_called()
+
+
 async def test_restore_idle_is_noop(fake_ha):
     fake_ha.get_state.return_value = {"state": "idle", "attributes": {}}
     d = Ducker(fake_ha)
