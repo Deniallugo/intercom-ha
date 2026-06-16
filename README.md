@@ -138,8 +138,7 @@ See [docs/DEVICES.md → Announcements](docs/DEVICES.md) for details.
 The add-on logic is plain Python with a pytest suite:
 
 ```bash
-cd tests
-pip install -r requirements.txt
+pip install -r tests/requirements.txt
 pytest
 ```
 

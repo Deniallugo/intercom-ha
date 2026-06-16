@@ -15,7 +15,8 @@ class Snapshot:
 
 class Ducker:
     """Snapshots target media_player state, pauses playing ones for the
-    duration of a broadcast, and restores them.
+    duration of a broadcast, and restores them. A target found paused is left
+    paused on restore (the broadcast un-pauses it), so it stays as we found it.
 
     Concurrent broadcasts to the same target: keep the FIRST snapshot; later
     calls only extend the restore deadline. Exactly one in-flight restore
@@ -90,5 +91,14 @@ class Ducker:
             try:
                 await self._ha.play(target)
                 log.info("restored  %s  state=playing", target)
+            except Exception as e:
+                log.warning("ducking restore failed for %s: %s", target, e)
+        elif snap.state == "paused":
+            # Injecting a one-shot media_url un-pauses a paused player — it
+            # auto-resumes the queue when the broadcast ends. Re-pause to leave
+            # it as we found it.
+            try:
+                await self._ha.pause(target)
+                log.info("restored  %s  state=paused", target)
             except Exception as e:
                 log.warning("ducking restore failed for %s: %s", target, e)

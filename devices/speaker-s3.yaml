@@ -1,0 +1,84 @@
+substitutions:
+  name: speaker-s3
+  friendly_name: Speaker S3
+
+packages:
+  secrets: !include secrets-speaker.yaml
+  base: !include ../packages/base.yaml
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2026.1.0
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB           # N16R8
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    # Octal PSRAM REQUIRES the 64-byte data cache line.
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+
+# 8 MB embedded octal PSRAM. CONFIRMED on the healthy board: octal @ 40 MHz →
+# "Available: YES, 8192 KB". 80 MHz boot-loops; do NOT raise it. No ECC (booted clean
+# without it). Audio needs this — without PSRAM the speaker task can't allocate buffers.
+psram:
+  mode: octal
+  speed: 40MHz
+
+# Bare devkit: no UART header broken out. Log over the always-on USB-Serial-JTAG —
+# on this board it's more reliable than USB_CDC, which re-enumerates on app boot and
+# hides early-boot output.
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+# ── I²S → PCM5102 (stereo line-out / 3.5 mm jack) ────────────────────────────
+# Free pins G5/G6/G7 (same bus as intercom-s3's i2s_bus_ext). The PCM5102 makes
+# its own MCLK from an internal PLL, so SCK on the board must be tied to GND and
+# NO mclk pin is declared here. Wiring: BCK→G5, LCK→G6, DIN→G7, SCK→GND.
+i2s_audio:
+  - id: i2s_bus
+    i2s_lrclk_pin: GPIO6
+    i2s_bclk_pin: GPIO5
+
+speaker:
+  - platform: i2s_audio
+    id: pcm5102_speaker
+    i2s_audio_id: i2s_bus
+    i2s_dout_pin: GPIO7
+    dac_type: external           # PCM5102 is an external DAC (no I²C control bus)
+    bits_per_sample: 16bit
+    sample_rate: 48000
+    channel: stereo              # real stereo DAC → both channels out the jack
+
+  # Two virtual sources so TTS/announcements and music can share the one DAC —
+  # ESPHome requires both pipelines and rejects the same speaker on both.
+  - platform: mixer
+    id: speaker_mixer
+    output_speaker: pcm5102_speaker
+    source_speakers:
+      - id: announcement_src
+      - id: media_src
+
+# ── Media player (Music Assistant / HA playback) ─────────────────────────────
+media_player:
+  - platform: speaker
+    id: speaker_player
+    name: "${friendly_name} Player"
+    volume_min: 0.0
+    volume_max: 1.0
+    buffer_size: 1000000         # 1 MB PSRAM buffer for music streaming
+    media_pipeline:
+      speaker: media_src
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 2
+    announcement_pipeline:
+      speaker: announcement_src
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 2
