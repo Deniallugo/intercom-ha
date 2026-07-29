@@ -6,27 +6,27 @@ module rounded_rect(w, h, r) {
         translate([sx*(w/2 - r), sy*(h/2 - r)]) circle(r);
 }
 
-// hollow shell body: outer rounded box, open at the +z (back) face,
-// leaving a `wall`-thick front face at z in [0, wall].
+// hollow shell body: outer rounded box with a 45 deg CHAMFERED front edge, open at
+// the +z (back) face, leaving a `wall`-thick front face at z in [0, wall].
+//
+// The chamfer is the diffraction control. An 8 mm radius on a 158 mm baffle did
+// nothing (the baffle step sits near lambda ~ W, and smearing it needs r >~ 15 mm);
+// a 6 mm chamfer on a 74 mm front face is a real transition. It is a chamfer rather
+// than a true fillet on purpose: printed back-down the baffle is on top, and a
+// tangent fillet starts horizontal there — a local 90 deg overhang. A chamfer is
+// support-free.
 module shell_body(depth) {
     difference() {
-        linear_extrude(depth) rounded_rect(outer_w(), outer_h(), radius);
+        hull() {
+            linear_extrude(0.01)
+                rounded_rect(flat_w(), flat_h(), max(0.5, radius - chamfer));
+            translate([0, 0, chamfer])
+                linear_extrude(depth - chamfer)
+                    rounded_rect(outer_w(), outer_h(), radius);
+        }
         translate([0, 0, wall])
             linear_extrude(depth)
                 rounded_rect(outer_w() - 2*wall, outer_h() - 2*wall, max(0.5, radius - wall));
-    }
-}
-
-// 2D concentric-ring perforation field within diameter `cut_d`
-module grille(cut_d) {
-    grille_hole_d = 3;
-    grille_ring_step = 6;
-    for (r = [0 : grille_ring_step : cut_d/2 - grille_hole_d]) {
-        if (r == 0) circle(d = grille_hole_d);
-        else {
-            n = max(1, floor(2*PI*r / (grille_hole_d*1.8)));
-            for (i = [0 : n-1]) rotate(i*360/n) translate([r, 0]) circle(d = grille_hole_d);
-        }
     }
 }
 
@@ -39,7 +39,7 @@ module keyhole(slot_w, head_d, drop) {
     }
 }
 
-// screw boss with self-tap pilot, base at z=0
+// screw boss with a self-tap pilot (or a heat-set insert bore), base at z=0
 module screw_boss(h, od, pilot) {
     difference() {
         cylinder(h = h, d = od);
@@ -47,11 +47,11 @@ module screw_boss(h, od, pilot) {
     }
 }
 
-// N screw bosses on a bolt CIRCLE of diameter `bc`, base at z=0
-module screw_circle(n, bc, h, od, pilot) {
+// place children at N points on a bolt CIRCLE of diameter `bc`. The 45 deg offset
+// puts 4 points on a square, which is how small-driver flanges are drilled.
+module on_bolt_circle(n, bc) {
     for (i = [0 : n - 1])
-        rotate([0, 0, i*360/n + 45]) translate([bc/2, 0, 0])
-            screw_boss(h, od, pilot);
+        rotate([0, 0, i*360/n + 45]) translate([bc/2, 0, 0]) children();
 }
 
 // 4 corner standoffs for a board of footprint w x l, centered at origin, base z=0.

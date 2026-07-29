@@ -1,114 +1,85 @@
-// ===== sound-first PR-loaded shell body (no top-level geometry) =====
-// Open-back box. A horizontal divider seals the upper SPEAKER CHAMBER (one
-// PS95-8 on the front baffle, a passive radiator on the +x side wall) off from
-// the lower vented ELECTRONICS BAY. Driver wires run up through one sealed pass
-// in the divider. PR/bay geometry is added in later tasks.
+// ===== 53 mm vertical-pair ported shell body (no top-level geometry) =====
+// Open-back box. A horizontal divider seals the upper SPEAKER CHAMBER (TWO 53 mm
+// drivers stacked vertically on the front baffle, tuned port on the +x side wall)
+// off from the lower vented ELECTRONICS BAY. Driver wires cross the divider through
+// four SEALED TERMINAL BOLTS, not a wire pass.
 
 // ---- speaker zone (upper, sealed) -----------------------------------------
 
-module speaker_seat() {
-    translate([spk_cx(), spk_cy(), wall])
-        difference() {
-            cylinder(h = spk_seat_depth, d = spk_od + 2*seat_wall);
-            translate([0, 0, -0.1]) cylinder(h = spk_seat_depth + 0.2, d = spk_od + 2*clr);
+// Shallow full-circle recess on the OUTER baffle face: locates the frame and lands a
+// punched foam gasket ring. There is no annular groove and no raised boss — a 53 mm
+// frame leaves only a 3.5 mm annulus between the cutout and the frame edge, and a
+// boss at the bolt circle would overlap both.
+module driver_recess(i) {
+    translate([spk_cx(), spk_cy(i), -0.1])
+        cylinder(h = spk_recess_depth + 0.1, d = spk_recess_d);
+}
+
+// the cutout must pierce the baffle AND the local pad behind it
+module cone_cut(i) {
+    translate([spk_cx(), spk_cy(i), -0.1]) cylinder(h = wall + spk_pad_t + 0.2, d = spk_cut);
+}
+
+// local baffle pad on the INNER face: material for the blind pilots to bite, and
+// stiffness where the driver's reaction force lands
+module driver_pad(i) {
+    translate([spk_cx(), spk_cy(i), wall]) cylinder(h = spk_pad_t, d = spk_pad_d);
+}
+
+// 4 BLIND M2 pilots into the baffle, drilled from the recess floor. Blind is the
+// point: a through-hole at the bolt circle would vent the chamber.
+module driver_pilots(i) {
+    translate([spk_cx(), spk_cy(i), spk_recess_depth])
+        on_bolt_circle(spk_screw_n, spk_bolt_circle)
+            translate([0, 0, -0.1]) cylinder(h = spk_pilot_depth + 0.1, d = spk_screw_pilot);
+}
+
+// ---- tuned port (+x side wall) ---------------------------------------------
+
+// Bore for the separate printed port tube, plus a flange register on the outer face
+// so the flange sits flush. Keeping the tube a separate part is what makes Fb
+// tunable: print another length instead of reprinting the box.
+module port_bore() {
+    translate([side_x(), spk_zone_cy(), port_cz]) rotate([0, 90, 0]) {
+        translate([0, 0, -0.1]) cylinder(h = wall + 0.2, d = port_od() + clr);
+        // flange register, recessed into the OUTER face
+        translate([0, 0, wall - port_flange_t])
+            cylinder(h = port_flange_t + 0.1, d = port_flange_od + clr);
+    }
+}
+
+// ---- divider (sealing floor) + sealed terminal bolts -----------------------
+
+// One M3 clearance bore per conductor, each with an O-ring seat on the CHAMBER side.
+// Four, not two: dual mono on a BTL amp gives no common return.
+module divider_terminals() {
+    for (i = [0 : term_n - 1]) {
+        tx = (i - (term_n-1)/2) * term_pitch;
+        translate([tx, divider_cy(), term_cz]) {
+            rotate([90, 0, 0]) cylinder(h = divider_t*3, d = term_d, center = true);
+            // O-ring seat on the chamber side (+y face of the divider)
+            translate([0, divider_t/2 - term_oring_depth, 0]) rotate([-90, 0, 0])
+                cylinder(h = term_oring_depth + 0.1, d = term_oring_od);
         }
-}
-
-module cone_cut() {
-    translate([spk_cx(), spk_cy(), -0.1]) linear_extrude(wall + 0.2) circle(d = spk_cut);
-}
-
-// The gasket ring straddles the screw bolt circle, so the groove would slice the
-// speaker screw bosses free of the baffle. Notch it at each boss (screw clearance
-// in the gasket) so a baffle pillar stays under each boss.
-module gasket_groove() {
-    translate([spk_cx(), spk_cy(), wall - gasket_depth])
-        difference() {
-            difference() {
-                cylinder(h = gasket_depth + 0.1, d = gasket_od);
-                translate([0, 0, -0.1]) cylinder(h = gasket_depth + 0.3, d = gasket_id);
-            }
-            for (i = [0 : spk_screw_n - 1])
-                rotate([0, 0, i*360/spk_screw_n + 45])
-                    translate([spk_bolt_circle/2, 0, -0.2])
-                        cylinder(h = gasket_depth + 0.5, d = spk_boss_od + 2*clr);
-        }
-}
-
-module speaker_screw_bosses() {
-    translate([spk_cx(), spk_cy(), wall])
-        screw_circle(spk_screw_n, spk_bolt_circle, spk_boss_h, spk_boss_od, spk_screw_pilot);
-}
-
-// ---- passive radiator (mounted on the +x side wall, fires sideways) --------
-
-// locating ring on the INNER side-wall face
-module pr_seat() {
-    translate([side_x(), spk_cy(), pr_cz()]) rotate([0, -90, 0])
-        difference() {
-            cylinder(h = pr_seat_depth, d = pr_od + 2*pr_seat_wall);
-            translate([0, 0, -0.1]) cylinder(h = pr_seat_depth + 0.2, d = pr_od + 2*clr);
-        }
-}
-
-// open cutout through the +x side wall
-module pr_cut_hole() {
-    translate([outer_w()/2 - wall - 0.1, spk_cy(), pr_cz()]) rotate([0, 90, 0])
-        linear_extrude(wall + 0.2) circle(d = pr_cut);
-}
-
-// annular gasket groove recessed into the inner side-wall face. Same as the
-// driver: the ring straddles the PR bolt circle, so notch it at each boss to keep
-// a wall pillar under the PR screw bosses.
-module pr_gasket_groove() {
-    translate([side_x() + pr_gasket_depth, spk_cy(), pr_cz()]) rotate([0, -90, 0])
-        difference() {
-            difference() {
-                cylinder(h = pr_gasket_depth + 0.1, d = pr_gasket_od);
-                translate([0, 0, -0.1]) cylinder(h = pr_gasket_depth + 0.3, d = pr_gasket_id);
-            }
-            for (i = [0 : pr_screw_n - 1])
-                rotate([0, 0, i*360/pr_screw_n + 45])
-                    translate([pr_bolt_circle/2, 0, -0.2])
-                        cylinder(h = pr_gasket_depth + 0.5, d = pr_boss_od + 2*clr);
-        }
-}
-
-// 4 mounting bosses on the bolt circle, side-wall plane
-module pr_screw_bosses() {
-    translate([side_x(), spk_cy(), pr_cz()]) rotate([0, -90, 0])
-        screw_circle(pr_screw_n, pr_bolt_circle, pr_boss_h, pr_boss_od, pr_screw_pilot);
-}
-
-// ---- divider (sealing floor) -----------------------------------------------
-
-// single sealed wire pass, centered under the driver
-module divider_wire_cut() {
-    translate([spk_cx(), divider_cy(), divider_wire_z])
-        rotate([90, 0, 0])
-            cylinder(h = divider_t*3, d = divider_wire_d, center = true);
+    }
 }
 
 module divider() {
     difference() {
         translate([0, divider_cy(), wall + cavity_depth/2])
             cube([outer_w() - 2*wall, divider_t, cavity_depth], center = true);
-        divider_wire_cut();
+        divider_terminals();
     }
 }
 
-// ---- electronics bay (front-baffle board mounts) ---------------------------
-module bay_boards() {
-    // S3 devkit: friction pocket (no reliable mount holes)
-    translate([s3_pos[0], board_cy()+s3_pos[1], wall]) board_pocket(s3_w, s3_l, board_standoff_h+2, pocket_wall);
-    // boards with holes: corner standoffs
-    translate([dac_pos[0],  board_cy()+dac_pos[1],  wall]) board_standoffs(dac_w, dac_l, board_standoff_h, board_standoff_od, board_screw_pilot);
-    translate([buck_pos[0], board_cy()+buck_pos[1], wall]) board_standoffs(buck_w, buck_l, board_standoff_h, board_standoff_od, board_screw_pilot);
-    translate([trig_pos[0], board_cy()+trig_pos[1], wall]) board_standoffs(trig_w, trig_l, board_standoff_h, board_standoff_od, board_screw_pilot);
-    mic_mount();   // ICS-43434 friction pocket
-}
+// ---- electronics bay: front wall ------------------------------------------
 
-// ---- front-panel breaches --------------------------------------------------
+module bay_boards() {
+    // S3 devkit: friction pocket (no reliable mount holes). Rides high in the bay so
+    // the bottom strip is free for the PTT counterbore.
+    translate([s3_pos[0], board_cy()+s3_pos[1], wall])
+        board_pocket(s3_w, s3_l, board_standoff_h+2, pocket_wall);
+}
 
 // PTT panel-mount momentary switch, bottom-center of the front baffle.
 // The bore runs through a LOCALLY THINNED panel (btn_panel_t) so a switch rated
@@ -129,27 +100,62 @@ module button_bore() {
     }
 }
 
-// ICS-43434 mic board: friction pocket + a front perforation cluster over its port
-module mic_mount() {
-    translate([mic_pos[0], board_cy()+mic_pos[1], wall])
-        board_pocket(mic_board_w, mic_board_l, board_standoff_h+1, pocket_wall);
-}
-// perforation must pierce the front wall AND the friction-pocket floor behind
-// it (pocket sits at z=wall with a pocket_wall-thick floor), or the bottom-
-// ported ICS-43434 resting on that floor is sealed off from the outside.
-module mic_perf() {
-    translate([mic_pos[0], board_cy()+mic_pos[1], -0.1]) linear_extrude(wall + pocket_wall + 0.2) {
-        circle(d = mic_hole_d);
-        for (i = [0 : mic_ring_n - 1])
-            rotate(i*360/mic_ring_n) translate([mic_ring_r, 0]) circle(d = mic_hole_d);
+// ---- electronics bay: bottom wall ------------------------------------------
+// mic / USB-C / sub-jack all live on the bottom wall. The mic is here rather than on
+// the front baffle so the drivers shake it as little as the box allows, and so its
+// port faces down. Placements are (x, z): z = depth from the front face.
+
+// The mic seat is the acoustic design, not just a mount: a board-locating recess, a
+// gasket seat inside it, and ONE short hole. Pressing the ICS-43434's port onto the
+// gasket leaves near-zero front volume, putting the port resonance ~15 kHz instead of
+// the ~5.7 kHz the old 7-hole cluster produced.
+module mic_seat() {
+    translate([mic_pos[0], -outer_h()/2, mic_pos[1]]) rotate([-90, 0, 0]) {
+        // board-locating recess in the inner face
+        translate([0, 0, wall - mic_seat_depth])
+            linear_extrude(mic_seat_depth + 0.1)
+                square([mic_board_w + 2*clr, mic_board_l + 2*clr], center = true);
+        // gasket seat, deeper still
+        translate([0, 0, wall - mic_seat_depth - mic_gasket_depth])
+            cylinder(h = mic_gasket_depth + 0.01, d = mic_gasket_d);
+        // the single port, through whatever wall is left
+        translate([0, 0, -0.1])
+            cylinder(h = wall - mic_seat_depth - mic_gasket_depth + 0.2, d = mic_hole_d);
     }
 }
 
-// USB-C power IN: bounded hole through the bottom (-y) wall at usb_z
-module usb_floor_cut() {
-    // x follows trig_pos[0]: the USB-C receptacle is on the CH224K board. wall*3 = oversized to punch cleanly through the bottom wall.
-    translate([trig_pos[0], -outer_h()/2, usb_z])
-        cube([usb_conn_w + usb_clr, wall*3, usb_conn_t + usb_clr], center = true);
+// two M2 posts flanking the mic seat, on FULL-THICKNESS wall (never in the thinned
+// zone): screw the board down and the gasket compression makes the seal
+module mic_posts() {
+    for (sx = [-1, 1])
+        translate([mic_pos[0] + sx*mic_post_pitch/2, -outer_h()/2 + wall, mic_pos[1]])
+            rotate([-90, 0, 0]) screw_boss(mic_post_h, mic_post_od, board_screw_pilot);
+}
+
+// USB-C 5 V breakout: lies flat on the bottom wall, connector facing -x so the cable
+// exits the -x side wall clear of the rounded corners
+module usbc_mount() {
+    translate([usbc_pos[0], -outer_h()/2 + wall, usbc_pos[1]]) rotate([-90, 0, 0])
+        board_standoffs(usbc_w, usbc_l, board_standoff_h, board_standoff_od, board_screw_pilot);
+}
+
+module usb_exit_slot() {
+    translate([-outer_w()/2, -outer_h()/2 + wall + usb_slot_y, usbc_pos[1]])
+        cube([wall*3, usb_slot_h, usb_slot_w], center = true);
+}
+
+// 3.5 mm sub line-out (PCM5102 R channel) through the bottom wall
+module jack_bore() {
+    translate([jack_pos[0], -outer_h()/2 - 0.1, jack_pos[1]]) rotate([-90, 0, 0])
+        cylinder(h = wall + 0.2, d = jack_bore_d);
+}
+
+// ---- electronics bay: +x side wall ----------------------------------------
+// service opening over the devkit's own USB-C ports (first flash, serial logs).
+// Breaches the BAY only — the chamber is above the divider.
+module s3_service_slot() {
+    translate([outer_w()/2, board_cy()+s3_pos[1], s3_usb_z()])
+        cube([wall*3, s3_usb_w, s3_usb_h], center = true);
 }
 
 // ---- corners --------------------------------------------------------------
@@ -157,7 +163,7 @@ module usb_floor_cut() {
 module corner_bosses() {
     for (sx = [-1, 1], sy = [-1, 1])
         translate([sx*(outer_w()/2 - boss_inset), sy*(outer_h()/2 - boss_inset), wall])
-            screw_boss(front_depth - wall, boss_od, screw_pilot);
+            screw_boss(front_depth - wall, boss_od, insert_m3_d);
 }
 
 module body() {
@@ -165,19 +171,22 @@ module body() {
         union() {
             shell_body(front_depth);
             divider();
-            speaker_seat();
-            speaker_screw_bosses();
-            pr_seat();
-            pr_screw_bosses();
             corner_bosses();
             bay_boards();
+            mic_posts();
+            usbc_mount();
+            for (i = [0 : spk_n - 1]) driver_pad(i);
         }
-        cone_cut();
-        gasket_groove();
-        pr_cut_hole();
-        pr_gasket_groove();
+        for (i = [0 : spk_n - 1]) {
+            cone_cut(i);
+            driver_recess(i);
+            driver_pilots(i);
+        }
+        port_bore();
         button_bore();
-        mic_perf();
-        usb_floor_cut();
+        mic_seat();
+        usb_exit_slot();
+        jack_bore();
+        s3_service_slot();
     }
 }
