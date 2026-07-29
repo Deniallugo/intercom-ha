@@ -128,9 +128,12 @@ backstop.
 
 ## Wall mount
 
-Two blind keyhole bosses on the lid's outer face (upper, over the chamber zone, 120 mm
-apart) hang the box on two wall screws. The bosses are cut through the boss only — the
-lid panel behind stays solid, keeping the chamber sealed.
+Two recessed keyhole bosses on the lid's outer face (upper, over the chamber zone, 120 mm
+apart) hang the box on two wall screws. Each boss has a wall-side retaining plate with the
+keyhole cut through it, backing onto a head-clearance cavity floored by the solid lid panel
+— so the screw head is captured behind the plate while the panel stays solid and the chamber
+sealed. The head-circle sits at the bottom: pass the screw heads through, then let the box
+settle so the shanks ride up into the slots and the plate lips take the weight.
 
 ---
 

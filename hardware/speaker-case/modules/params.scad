@@ -46,9 +46,13 @@ pr_gasket_id   = pr_cut + 1;
 pr_gasket_depth = 1.0;
 
 // ---- vertical stack: speaker zone (top) | divider | board zone (bottom) ----
-spk_zone_h   = 103;        // sealed chamber interior height (fits the 91 mm driver)
+// The chamber height is set by the driver's SEAT RING OD (94.2), not by volume:
+// 97 leaves 1.4 mm of ring clearance top and bottom and still nets 1.5 L, above
+// the vol_target floor. The 6 mm freed vs. the old 103 goes to the bay, which
+// needs the height for a real PTT nut pocket (see btn_* below).
+spk_zone_h   = 97;         // sealed chamber interior height (ring-limited, not volume-limited)
 divider_t    = wall;
-board_zone_h = 44;         // vented electronics-bay height
+board_zone_h = 56;         // vented electronics-bay height (boards + PTT nut pocket)
 
 // ---- chamber depth (sets the sealed volume + front-to-back board room) ----
 cavity_depth = 110;
@@ -79,13 +83,15 @@ board_screw_pilot = 1.6;           // M2 self-tap
 pocket_wall = 1.6;                 // friction-pocket wall (boards without holes)
 
 // board placements (x,y centers) — tuned to satisfy the no-overlap asserts
-s3_pos   = [0,   8];               // relative to board_cy(): +y toward divider
+s3_pos   = [0,   10];              // relative to board_cy(): +y toward divider. Rides high so
+                                   // the bottom strip stays free for the PTT nut pocket.
 dac_pos  = [-58, 8];
 buck_pos = [58,  8];
-trig_pos = [50, -12];              // low, by the USB-C exit
-mic_pos  = [-50, -13];             // mic board, front baffle, away from the PTT bore
+trig_pos = [50, -18];              // low: puts its USB-C receptacle 2.5 mm off the bay floor
+mic_pos  = [-50, -15];             // mic board, front baffle, away from the PTT bore
 tpa_pos  = [0,   0];               // on the rear lid, centered in the bay
-btn_pos  = [trig_pos[0]-30, -13]; // PTT panel-mount switch center (bay), clear of S3 pocket + trigger
+btn_pos  = [0,  -16];              // PTT switch center: bottom-CENTER of the front baffle, in the
+                                   // free strip between the S3 pocket and the bay floor (~2 mm each side)
 
 // ---- USB-C power IN (CH224K receptacle at the bottom edge) ----
 usb_conn_w   = 10;
@@ -93,9 +99,25 @@ usb_conn_t   = 10;
 usb_clr      = 3;
 usb_z        = wall + 8;           // receptacle center depth from the front face [confirm]
 
-// ---- PTT panel-mount momentary switch (front bore) [confirm vs hardware] ----
-btn_bore_d   = 12.2;               // 12 mm panel-mount thread + clearance
-btn_nut_d    = 14;                 // wrench-flat clearance behind the panel
+// ---- PTT panel-mount momentary switch (front baffle) [confirm vs hardware] ----
+// Sized for a 12 mm (M12x1) panel-mount MOMENTARY switch. One geometry serves
+// both mount styles: the baffle is locally THINNED to btn_panel_t behind the
+// bore (short-thread switches are rated for 1-3 mm panels, not our 4 mm wall),
+// and the counterbore behind it is either the NUT SEAT (metal anti-vandal
+// switch: bezel in front, nut behind) or the body-shoulder relief (plastic
+// switch: body behind, nut in front). Both clamp on flats, so the counterbore
+// floor and the outer face are left flat — no boss, no rib, nothing to rock on.
+btn_thread_d  = 12;                // switch thread nominal
+btn_bore_d    = btn_thread_d + 0.4;// thread bore (12.4)
+btn_panel_t   = 2.5;               // local baffle thickness at the bore
+btn_nut_af    = 16.5;              // switch nut across flats
+btn_pocket_d  = 20;                // counterbore: clears the nut across corners + running clearance
+btn_lead_in   = 0.4;               // outer-face chamfer so the bezel/nut can't ride the bore edge
+btn_body_l    = 30;                // switch length behind the panel incl. terminals
+// tactile/visual halo ring on the OUTER face so the PTT is findable by touch
+btn_halo_id    = 21;               // >= btn_pocket_d: never thins the panel over the counterbore
+btn_halo_od    = 24;
+btn_halo_depth = 0.6;
 
 // ---- microphone (ICS-43434 board + front perforation) ----
 mic_board_w  = 17; mic_board_l = 14;
@@ -103,13 +125,19 @@ mic_hole_d   = 1.5;
 mic_ring_r   = 2.6;
 mic_ring_n   = 6;
 
-// ---- wall mount: BLIND keyhole bosses on the lid OUTER face ----
+// ---- wall mount: BLIND recessed keyhole bosses on the lid OUTER face ----
+// Raised bosses hold a wall-side retaining plate (kb_lip) with a keyhole cut,
+// backed by a head-clearance cavity floored by the SOLID lid panel. The head
+// enters the circle, the box drops, the shank rides up the slot and the head is
+// trapped behind the plate lip. Panel never breaches -> chamber stays sealed.
 keyhole_spacing = 120;             // wider for the bigger/heavier box
 keyhole_slot_w  = 4;
 keyhole_head_d  = 9;
 keyhole_drop    = 8;
-kb_h            = 4;
-kb_pad          = 3.5;
+kb_h            = 6;               // boss height: retaining plate + head cavity
+kb_pad          = 5;               // boss wall around the widened head cavity
+kb_lip          = 1.4;            // wall-side retaining plate thickness (traps the head)
+kb_clr          = 0.6;            // head sliding clearance inside the cavity
 function key_cy() = 30;            // keyhole height on the lid (upper, chamber region)
 
 // ---- rear-plate perimeter gasket groove ----
@@ -135,3 +163,4 @@ function side_x()     = outer_w()/2 - wall;                                // in
 function pr_cz()      = wall + cavity_depth/2;                             // PR center depth
 function gross_vol()  = (outer_w()-2*wall) * spk_zone_h * cavity_depth;    // chamber only
 function net_vol()    = gross_vol() - driver_disp - pr_disp;
+function btn_nut_ac() = btn_nut_af * 2/sqrt(3);                            // nut across corners (~19.05)

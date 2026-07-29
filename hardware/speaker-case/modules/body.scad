@@ -18,11 +18,20 @@ module cone_cut() {
     translate([spk_cx(), spk_cy(), -0.1]) linear_extrude(wall + 0.2) circle(d = spk_cut);
 }
 
+// The gasket ring straddles the screw bolt circle, so the groove would slice the
+// speaker screw bosses free of the baffle. Notch it at each boss (screw clearance
+// in the gasket) so a baffle pillar stays under each boss.
 module gasket_groove() {
     translate([spk_cx(), spk_cy(), wall - gasket_depth])
         difference() {
-            cylinder(h = gasket_depth + 0.1, d = gasket_od);
-            translate([0, 0, -0.1]) cylinder(h = gasket_depth + 0.3, d = gasket_id);
+            difference() {
+                cylinder(h = gasket_depth + 0.1, d = gasket_od);
+                translate([0, 0, -0.1]) cylinder(h = gasket_depth + 0.3, d = gasket_id);
+            }
+            for (i = [0 : spk_screw_n - 1])
+                rotate([0, 0, i*360/spk_screw_n + 45])
+                    translate([spk_bolt_circle/2, 0, -0.2])
+                        cylinder(h = gasket_depth + 0.5, d = spk_boss_od + 2*clr);
         }
 }
 
@@ -48,12 +57,20 @@ module pr_cut_hole() {
         linear_extrude(wall + 0.2) circle(d = pr_cut);
 }
 
-// annular gasket groove recessed into the inner side-wall face
+// annular gasket groove recessed into the inner side-wall face. Same as the
+// driver: the ring straddles the PR bolt circle, so notch it at each boss to keep
+// a wall pillar under the PR screw bosses.
 module pr_gasket_groove() {
     translate([side_x() + pr_gasket_depth, spk_cy(), pr_cz()]) rotate([0, -90, 0])
         difference() {
-            cylinder(h = pr_gasket_depth + 0.1, d = pr_gasket_od);
-            translate([0, 0, -0.1]) cylinder(h = pr_gasket_depth + 0.3, d = pr_gasket_id);
+            difference() {
+                cylinder(h = pr_gasket_depth + 0.1, d = pr_gasket_od);
+                translate([0, 0, -0.1]) cylinder(h = pr_gasket_depth + 0.3, d = pr_gasket_id);
+            }
+            for (i = [0 : pr_screw_n - 1])
+                rotate([0, 0, i*360/pr_screw_n + 45])
+                    translate([pr_bolt_circle/2, 0, -0.2])
+                        cylinder(h = pr_gasket_depth + 0.5, d = pr_boss_od + 2*clr);
         }
 }
 
@@ -93,11 +110,22 @@ module bay_boards() {
 
 // ---- front-panel breaches --------------------------------------------------
 
-// PTT panel-mount momentary switch bore through the front wall
+// PTT panel-mount momentary switch, bottom-center of the front baffle.
+// The bore runs through a LOCALLY THINNED panel (btn_panel_t) so a switch rated
+// for a 1-3 mm panel still gets enough thread for its nut; behind it a flat
+// counterbore takes the nut (bezel-in-front switch) or the body shoulder
+// (nut-in-front switch). Flat land on both faces = the switch clamps solid and
+// the actuator can't rock, which is the whole point of the thinning.
 module button_bore() {
-    translate([btn_pos[0], board_cy()+btn_pos[1], -0.1]) {
-        cylinder(h = wall + 0.2, d = btn_bore_d);                       // thread bore
-        translate([0, 0, wall]) cylinder(h = 1.5, d = btn_nut_d);   // wrench-flat lead-in on the inner face; switch nut tightens against the outer face
+    translate([btn_pos[0], board_cy()+btn_pos[1], 0]) {
+        translate([0, 0, -0.1]) cylinder(h = btn_panel_t + 0.1, d = btn_bore_d);
+        cylinder(h = btn_lead_in, d1 = btn_bore_d + 2*btn_lead_in, d2 = btn_bore_d);
+        translate([0, 0, btn_panel_t])
+            cylinder(h = wall - btn_panel_t + 0.1, d = btn_pocket_d);
+        translate([0, 0, -0.1]) difference() {                  // tactile halo, outer face
+            cylinder(h = btn_halo_depth + 0.1, d = btn_halo_od);
+            translate([0, 0, -0.1]) cylinder(h = btn_halo_depth + 0.3, d = btn_halo_id);
+        }
     }
 }
 
@@ -106,8 +134,11 @@ module mic_mount() {
     translate([mic_pos[0], board_cy()+mic_pos[1], wall])
         board_pocket(mic_board_w, mic_board_l, board_standoff_h+1, pocket_wall);
 }
+// perforation must pierce the front wall AND the friction-pocket floor behind
+// it (pocket sits at z=wall with a pocket_wall-thick floor), or the bottom-
+// ported ICS-43434 resting on that floor is sealed off from the outside.
 module mic_perf() {
-    translate([mic_pos[0], board_cy()+mic_pos[1], -0.1]) linear_extrude(wall + 0.2) {
+    translate([mic_pos[0], board_cy()+mic_pos[1], -0.1]) linear_extrude(wall + pocket_wall + 0.2) {
         circle(d = mic_hole_d);
         for (i = [0 : mic_ring_n - 1])
             rotate(i*360/mic_ring_n) translate([mic_ring_r, 0]) circle(d = mic_hole_d);
