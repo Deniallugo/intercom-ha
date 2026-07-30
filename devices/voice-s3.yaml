@@ -1,0 +1,374 @@
+# Voice S3 — bare ESP32-S3 + PCM5102A line-out + INMP441 mic + one button.
+#
+# Role: a Music Assistant player that is also a full Assist satellite.
+#   • music / TTS  → PCM5102A → 3.5 mm jack → your amp or powered speakers
+#   • "okay nabu"  → hands-free Assist
+#   • tap button   → Assist without the wake word
+#   • hold button  → whole-home intercom broadcast (intercom-addon)
+#
+# The one structural difference from intercom-s3: mic and speaker sit on TWO
+# SEPARATE I²S peripherals (the S3 has two), not on one shared full-duplex codec.
+# So capture and playback run at the same time — no "stop the wake word before
+# playback / wait for the bus" dance, and barge-in over music works.
+
+substitutions:
+  name: voice-s3
+  friendly_name: Voice S3
+  intercom_url: "http://homeassistant.local:9999/intercom"
+
+packages:
+  secrets: !include secrets-voice.yaml
+  base: !include ../packages/base.yaml
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2026.1.0
+  includes:
+    - ../include/recorder.h
+    - ../include/uploader.h
+  on_boot:
+    - priority: 600.0
+      then:
+        - lambda: |-
+            // No recorder_set_gain() call: measured, this mic delivers speech at
+            // −15.7 dBFS with no gain anywhere, so the intercom path runs at unity.
+            // If broadcasts ever sound faint, recorder_set_gain(2, 1) is +6 dB.
+            recorder_init();
+
+    # Raw mic tap for the intercom recorder. micro_wake_word / voice_assistant
+    # consume the mic through microphone sources (which convert for us); this
+    # callback gets the mic's NATIVE frames, so convert here. The INMP441 is
+    # 24-bit left-justified in a 32-bit slot, so the sample sits in the top bits.
+    # recorder.h and the add-on both expect 16 kHz / 16-bit / mono.
+    - priority: 200.0
+      then:
+        - lambda: |-
+            id(inmp441_mic).add_data_callback([](const std::vector<uint8_t> &data) {
+              if (!recorder_is_active()) return;      // cheap gate, avoids the copy
+              static std::vector<uint8_t> pcm16;
+              const size_t frames = data.size() / 4;
+              pcm16.resize(frames * 2);
+              const int32_t *in = reinterpret_cast<const int32_t *>(data.data());
+              int16_t *out = reinterpret_cast<int16_t *>(pcm16.data());
+              // Straight 32→16 bit scaling. Saturating rather than truncating, so
+              // a loud transient clips cleanly instead of wrapping to full-scale
+              // opposite sign — which sounds like a gunshot in the broadcast.
+              for (size_t i = 0; i < frames; i++) {
+                int32_t s = in[i] >> 16;
+                if (s > INT16_MAX) s = INT16_MAX;
+                else if (s < INT16_MIN) s = INT16_MIN;
+                out[i] = static_cast<int16_t>(s);
+              }
+              recorder_on_data(pcm16.data(), pcm16.size());
+            });
+
+    # mww doesn't auto-start in ESPHome 2026.x — without this it never listens.
+    # It also owns the mic's run state: starting it starts the mic.
+    - priority: 100.0
+      then:
+        - micro_wake_word.start
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB           # N16R8
+  cpu_frequency: 240MHz
+  framework:
+    type: esp-idf
+    # Octal PSRAM REQUIRES the 64-byte data cache line.
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+
+# 8 MB embedded octal PSRAM. 40 MHz is the proven-stable speed on these bare
+# boards — 80 MHz boot-loops. Audio needs this: no PSRAM → no media buffer and
+# no room for the wake-word model.
+psram:
+  mode: octal
+  speed: 40MHz
+
+# Bare devkit: no UART header broken out. Log over the always-on USB-Serial-JTAG —
+# more reliable than USB_CDC, which re-enumerates on app boot and hides early output.
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+# ── I²S buses ────────────────────────────────────────────────────────────────
+# Two independent buses on the two S3 I²S peripherals. Keep them separate even
+# though the pins would allow sharing: full duplex on one bus would force the
+# mic and the DAC to the same clock, and re-create the busy-bus problem.
+
+i2s_audio:
+  # Bus 0 — PCM5102A DAC → 3.5 mm jack. The PCM5102 makes its own MCLK from an
+  # internal PLL, so its SCK pin is tied to GND and no mclk pin is declared here.
+  - id: i2s_out
+    i2s_lrclk_pin: GPIO6     # → LCK
+    i2s_bclk_pin: GPIO5      # → BCK
+
+  # Bus 1 — INMP441 MEMS mic (capture only).
+  - id: i2s_in
+    i2s_lrclk_pin: GPIO11    # → WS
+    i2s_bclk_pin: GPIO10     # → SCK
+
+# ── Microphone ───────────────────────────────────────────────────────────────
+# INMP441 with L/R tied to GND → it drives the LEFT slot, per the datasheet.
+# Reading the wrong slot is not silent: the part goes high-Z outside its own
+# slot, so the ESP latches a floating line at the MSB and you get ±32768 spikes
+# on top of crosstalk from the driven half. Symptom to recognise — a peak pinned
+# near 32768 while the mean stays near zero.
+# 32-bit slots are the part's native framing (24-bit data, left-justified);
+# ESPHome's microphone sources down-convert to the 16-bit that the wake word and
+# Assist require.
+
+microphone:
+  - platform: i2s_audio
+    id: inmp441_mic
+    i2s_audio_id: i2s_in
+    i2s_din_pin: GPIO12      # ← SD
+    adc_type: external
+    channel: left
+    bits_per_sample: 32bit
+    sample_rate: 16000
+    # NB: the APLL is shared silicon between the two I²S peripherals, so setting
+    # use_apll here is not free — it can disturb the DAC on the other bus. It was
+    # tried as a hiss fix, gave no measured benefit, and was removed.
+    correct_dc_offset: true  # INMP441 has a real DC bias; leaving it hurts the wake word
+
+# ── Speaker chain ────────────────────────────────────────────────────────────
+
+speaker:
+  - platform: i2s_audio
+    id: pcm5102_speaker
+    i2s_audio_id: i2s_out
+    i2s_dout_pin: GPIO7      # → DIN
+    dac_type: external       # PCM5102 is an external DAC (no I²C control bus)
+    bits_per_sample: 16bit
+    sample_rate: 48000
+    channel: stereo          # real stereo DAC → both channels out the jack
+
+  # Two virtual sources so TTS/announcements and music can share the one DAC —
+  # ESPHome requires both pipelines and rejects the same speaker on both.
+  - platform: mixer
+    id: speaker_mixer
+    output_speaker: pcm5102_speaker
+    source_speakers:
+      - id: announcement_src
+      - id: media_src
+
+# ── Media player (Music Assistant / HA playback) ─────────────────────────────
+
+media_player:
+  - platform: speaker
+    id: voice_player
+    name: "${friendly_name} Player"
+    volume_min: 0.0
+    volume_max: 1.0
+    buffer_size: 1000000     # 1 MB PSRAM buffer for music streaming
+    media_pipeline:
+      speaker: media_src
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 2
+    announcement_pipeline:
+      speaker: announcement_src
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 2
+    # No on_announcement / on_idle wake-word juggling here: the mic is on its own
+    # I²S peripheral, so it keeps listening straight through playback.
+
+# ── Mic diagnostics ──────────────────────────────────────────────────────────
+# Records 5 s and ships it down the intercom path, with no button wired and no
+# hold timing to get right. Diagnostic category, so it stays out of the way in
+# Home Assistant.
+#
+# To capture it as a WAV instead of broadcasting it, run `tools/mic-capture.py`
+# on a machine on the LAN and point ${intercom_url} at it — that prints level,
+# clipping, zero-crossing and SNR statistics, which is how the mic on this board
+# was characterised. See docs/DEVICES.md → "how this mic fails".
+button:
+  - platform: template
+    id: record_test
+    name: "Mic test recording"
+    entity_category: diagnostic
+    on_press:
+      - if:
+          condition:
+            lambda: 'return uploader_is_uploading();'
+          then:
+            - logger.log: "mic test ignored — upload in progress"
+          else:
+            - micro_wake_word.stop:
+            - lambda: |-
+                id(inmp441_mic).start();   // take our own listener slot
+                recorder_start();
+                uploader_start("${intercom_url}", App.get_name().c_str());
+            - logger.log: "mic test recording started"
+            - delay: 5s
+            - lambda: recorder_stop();
+            - wait_until:
+                condition:
+                  lambda: 'return !uploader_is_uploading();'
+                timeout: 15s
+            - logger.log: "mic test recording uploaded"
+            - micro_wake_word.start:       # re-arm before releasing our slot
+            - lambda: id(inmp441_mic).stop();
+
+# ── Wake word ────────────────────────────────────────────────────────────────
+
+micro_wake_word:
+  id: mww
+  microphone:
+    microphone: inmp441_mic
+    channels: 0              # the mic emits one (left) channel
+    # Measured from a real capture: speech peaks at 5404/32767 = −15.7 dBFS with
+    # no gain at all, so this mic needs none. (An earlier 64 here came from a
+    # −60 dBFS reading taken while the wiring was faulty; it clipped everything.)
+    gain_factor: 1
+  models:
+    - model: okay_nabu
+      id: okay_nabu
+      probability_cutoff: 0.7  # default 0.97 is too strict at this gain
+  on_wake_word_detected:
+    # Ducking lives in voice_assistant.on_start so the button path gets it too.
+    # The chime is configured HA-side — an on-device chime fails ("Incompatible
+    # audio streams") because external audio must go through the media pipeline.
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
+
+# ── HA Voice Assistant satellite ─────────────────────────────────────────────
+
+voice_assistant:
+  id: va
+  microphone:
+    microphone: inmp441_mic
+    channels: 0
+    gain_factor: 1           # see the note on the wake word's source above
+  media_player: voice_player
+  noise_suppression_level: 2
+  auto_gain: 31dBFS
+  volume_multiplier: 2.0
+  on_start:
+    # Duck music ~20 dB with a short ramp; restored when the answer finishes.
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 20
+        duration: 0.3s
+  on_end:
+    # Re-arm the wake word — VA stops it while a pipeline runs.
+    - micro_wake_word.start:
+    # Keep music ducked until the answer finishes playing. on_end fires before the
+    # TTS plays, so wait for the announcement to start, then end, then restore.
+    # Timeouts cover the no-answer case (first times out, second passes through).
+    - wait_until:
+        condition:
+          lambda: 'return id(voice_player)->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+        timeout: 1500ms
+    - wait_until:
+        condition:
+          lambda: 'return id(voice_player)->state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+        timeout: 30s
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 0
+        duration: 0.5s
+  # No answer coming — restore music and re-arm.
+  on_error:
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 0
+        duration: 0.5s
+    - micro_wake_word.start:
+
+# ── Button: tap = Assist, hold = intercom ────────────────────────────────────
+# One button, two jobs, split by hold time:
+#   tap (< 1.2 s)   → talk to Assist, same as saying "okay nabu"
+#   hold (≥ 1.2 s)  → record while held and broadcast to the other devices
+#
+# Wire: GPIO4 → button → GND (internal pull-up, active LOW).
+
+globals:
+  - id: intercom_recording
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+script:
+  # Started on press, cancelled on release. If it survives the hold threshold,
+  # this press was a hold, not a tap.
+  - id: hold_watch
+    mode: restart
+    then:
+      - delay: 1200ms
+      - if:
+          condition:
+            lambda: 'return uploader_is_uploading();'
+          then:
+            - logger.log: "intercom busy — hold ignored"
+          else:
+            # Stop the wake word first: it would otherwise fire on your own PTT
+            # speech. The mic is reference-counted by listener (start/stop calls),
+            # so take our own listener slot here — that keeps the mic running once
+            # mww releases its slot. Released again on button release.
+            - micro_wake_word.stop:
+            - voice_assistant.stop:
+            - lambda: |-
+                id(inmp441_mic).start();
+                id(intercom_recording) = true;
+                recorder_start();
+                uploader_start("${intercom_url}", App.get_name().c_str());
+            - logger.log: "intercom: recording"
+
+binary_sensor:
+  - platform: gpio
+    id: ptt_button
+    name: "Button"
+    pin:
+      number: GPIO4
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    filters:
+      - delayed_on: 25ms      # debounce
+      - delayed_off: 25ms
+    on_press:
+      - script.execute: hold_watch
+    on_release:
+      # Still counting down → released before the threshold → it was a tap.
+      # Asking the script (rather than a flag) also means a hold that couldn't
+      # record — upload still in flight — quietly does nothing, instead of
+      # falling through and starting Assist.
+      - if:
+          condition:
+            script.is_running: hold_watch
+          # ── tap: talk to Assist (second tap cancels) ──
+          then:
+            - script.stop: hold_watch
+            - if:
+                condition:
+                  voice_assistant.is_running:
+                then:
+                  - voice_assistant.stop:
+                else:
+                  - micro_wake_word.stop:
+                  - voice_assistant.start:
+          # ── hold released: close out the broadcast ──
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(intercom_recording);'
+                then:
+                  - delay: 500ms    # tail, so the last word isn't clipped
+                  - lambda: |-
+                      recorder_stop();
+                      id(intercom_recording) = false;
+                  - wait_until:
+                      condition:
+                        lambda: 'return !uploader_is_uploading();'
+                      timeout: 10s
+                  # Re-arm mww (takes its listener slot) BEFORE releasing ours,
+                  # so the mic never drops to zero listeners and tears down its
+                  # I²S driver between the two.
+                  - micro_wake_word.start:
+                  - lambda: id(inmp441_mic).stop();

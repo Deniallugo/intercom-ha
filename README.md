@@ -23,6 +23,7 @@ The project has two halves:
 |---|---|---|
 | **Kitchen** — M5Stack Atom Echo + 1× MAX98357A | ESP32 (no PSRAM) | Button-PTT intercom, TTS announcements, DMA watchdog auto-reboot |
 | **Terrace** — M5Stack VoiceS3R + 2× MAX98357A (dual mono) | ESP32-S3 (8 MB PSRAM) | PTT intercom, wake word (`okay nabu`) + HA Assist, Spotify via Music Assistant, TTS announcements |
+| **Voice S3** — bare ESP32-S3 + PCM5102A + INMP441 + button | ESP32-S3 N16R8 (8 MB PSRAM) | Stereo Music Assistant player on a 3.5 mm line-out, wake word + HA Assist, tap-to-talk / hold-to-intercom. Mic and DAC on separate I²S peripherals, so it keeps listening while playing |
 
 See **[docs/DEVICES.md](docs/DEVICES.md)** for the full hardware reference:
 wiring diagrams, GPIO maps, the audio pipeline, and the key technical decisions
@@ -53,12 +54,15 @@ intercom/
 │   ├── atom-echo.yaml         # Kitchen Atom Echo
 │   ├── intercom-s3.yaml       # Terrace VoiceS3R
 │   ├── intercom-s3-minimal.yaml
+│   ├── speaker-s3.yaml        # Bare S3 + PCM5102A, playback only
+│   ├── voice-s3.yaml          # Bare S3 + PCM5102A + INMP441 + button
 │   └── listen_and_answer.yaml
 ├── include/              # Shared C++ — recorder.h (PCM ring + gain), uploader.h (chunked POST)
 ├── packages/base.yaml    # Shared logger/api/ota/wifi/captive_portal
 ├── intercom-addon/       # HA add-on (aiohttp): relay, chimes, ducking, talkback, announce
 ├── tests/                # pytest suite for the add-on
 ├── hardware/             # 3D-printable enclosures (kitchen, terrace)
+├── tools/mic-capture.py  # Bench tool — catch a device's mic upload as a WAV + verdict
 ├── docs/DEVICES.md       # Full hardware + wiring reference
 └── flash.sh              # ./flash.sh <device> — flash helper
 ```
