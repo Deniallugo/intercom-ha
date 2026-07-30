@@ -61,7 +61,7 @@ intercom/
 ├── packages/base.yaml    # Shared logger/api/ota/wifi/captive_portal
 ├── intercom-addon/       # HA add-on (aiohttp): relay, chimes, ducking, talkback, announce
 ├── tests/                # pytest suite for the add-on
-├── hardware/             # 3D-printable enclosures (kitchen, terrace)
+├── hardware/             # 3D-printable enclosures (kitchen, terrace, speaker, voice puck)
 ├── tools/mic-capture.py  # Bench tool — catch a device's mic upload as a WAV + verdict
 ├── docs/DEVICES.md       # Full hardware + wiring reference
 └── flash.sh              # ./flash.sh <device> — flash helper
