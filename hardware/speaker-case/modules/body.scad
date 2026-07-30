@@ -132,16 +132,18 @@ module mic_posts() {
             rotate([-90, 0, 0]) screw_boss(mic_post_h, mic_post_od, board_screw_pilot);
 }
 
-// USB-C 5 V breakout: lies flat on the bottom wall, connector facing -x so the cable
-// exits the -x side wall clear of the rounded corners
-module usbc_mount() {
-    translate([usbc_pos[0], -outer_h()/2 + wall, usbc_pos[1]]) rotate([-90, 0, 0])
-        board_standoffs(usbc_w, usbc_l, board_standoff_h, board_standoff_od, board_screw_pilot);
-}
-
-module usb_exit_slot() {
-    translate([-outer_w()/2, -outer_h()/2 + wall + usb_slot_y, usbc_pos[1]])
-        cube([wall*3, usb_slot_h, usb_slot_w], center = true);
+// USB-C 5 V panel-mount socket through the bottom wall: a body cutout plus two blind
+// M2 pilots. Cable exits straight down. (A flat breakout facing the side wall put its
+// receptacle 2.8 mm inside a corner lid boss — see params.)
+module usbc_panel() {
+    // body cutout, centred
+    translate([usbc_pos[0], -outer_h()/2 - 0.1, usbc_pos[1]])
+        translate([-usbc_cut_w/2, 0, -usbc_cut_l/2])
+            cube([usbc_cut_w, wall + 0.2, usbc_cut_l]);
+    // two blind mounting pilots, drilled from the OUTER face
+    for (sx = [-1, 1])
+        translate([usbc_pos[0] + sx*usbc_screw_pitch/2, -outer_h()/2 - 0.1, usbc_pos[1]])
+            rotate([-90, 0, 0]) cylinder(h = usbc_pilot_depth + 0.1, d = board_screw_pilot);
 }
 
 // 3.5 mm sub line-out (PCM5102 R channel) through the bottom wall
@@ -174,7 +176,6 @@ module body() {
             corner_bosses();
             bay_boards();
             mic_posts();
-            usbc_mount();
             for (i = [0 : spk_n - 1]) driver_pad(i);
         }
         for (i = [0 : spk_n - 1]) {
@@ -185,7 +186,7 @@ module body() {
         port_bore();
         button_bore();
         mic_seat();
-        usb_exit_slot();
+        usbc_panel();
         jack_bore();
         s3_service_slot();
     }

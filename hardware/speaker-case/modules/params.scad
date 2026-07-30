@@ -104,7 +104,17 @@ term_oring_depth  = 1.0;
 s3_w   = 69; s3_l   = 26;          // ESP32-S3-DevKitC-1 (N16R8)  -- front wall
 dac_w  = 27; dac_l  = 27;          // GY-PCM5102A                 -- rear lid
 amp_w  = 24; amp_l  = 16;          // PAM8406 5 V stereo class-D  -- rear lid
-usbc_w = 15; usbc_l = 13;          // USB-C 5 V breakout (5.1k CC) -- bottom wall
+// Power entry is a PANEL-MOUNT USB-C socket, not a breakout board. A flat breakout
+// with its connector facing the side wall has to sit at x ~ -30 to reach it, which is
+// exactly where a corner lid boss runs: the receptacle ended up 2.8 mm INSIDE the boss.
+// A panel-mount socket lives in the boss-free window, anchors to the case rather than
+// to a 15 mm PCB, and sends the cable straight down — the natural exit for a
+// wall-mounted box. [confirm vs hardware: these vary a lot between modules]
+usbc_cut_w      = 9.5;             // receptacle body through the wall (x)
+usbc_cut_l      = 4.5;             // ... and in z
+usbc_screw_pitch = 20;             // 2 x M2 blind pilots flanking
+usbc_pilot_depth = 2.5;
+usbc_body_h      = 10;             // how far the socket body reaches into the bay
 board_standoff_h  = 3;
 board_standoff_od = 4.5;
 board_screw_pilot = 1.6;           // M2 self-tap
@@ -118,13 +128,8 @@ dac_pos = [-20, 0];
 amp_pos = [ 16, 0];
 // bottom-wall placements — these are (x, z): z = depth from the front face
 mic_pos  = [ -6, 30];              // offset -x so its +x post clears the sub jack
-usbc_pos = [-30, 20];              // connector faces -x, exits the -x side wall
-jack_pos = [ 18, 30];
-
-// ---- USB-C 5 V power exit (-x side wall, at the breakout's connector) ----
-usb_slot_w = 12;                   // along z
-usb_slot_h = 8;                    // along y
-usb_slot_y = 5;                    // slot centre above the bay floor
+usbc_pos = [-12, 16];              // panel-mount socket; cable exits straight down
+jack_pos = [ 18, 20];
 
 // ---- S3 service slot (+x side wall, over the devkit's own USB-C ports) ----
 // Exposes both devkit ports for the first flash and serial logs. Breaches the BAY
@@ -141,6 +146,7 @@ function s3_usb_z() = wall + board_standoff_h + 1.6 + 3;
 // the crossover. This is the ONLY route to output below ~120 Hz; see the review doc.
 jack_bore_d = 6.2;
 jack_nut_d  = 11;
+jack_body_h = 12;                  // how far the jack barrel reaches into the bay
 
 // ---- PTT panel-mount momentary switch (front baffle) [confirm vs hardware] ----
 // Sized for a 12 mm (M12x1) panel-mount MOMENTARY switch. One geometry serves
@@ -193,7 +199,12 @@ kb_lip          = 1.4;             // wall-side retaining plate thickness (traps
 kb_clr          = 0.6;             // head sliding clearance inside the cavity
 
 // ---- rear-plate perimeter gasket groove ----
-lid_gasket_inset = wall + 3;
+// Must land ON the shell rim. The rim is just the wall cross-section at the rear face:
+// 0 to `wall` (4 mm) inboard of the outer edge. The old `wall + 3` = 7 mm put the
+// groove centreline 3 mm INBOARD of the rim's inner face, i.e. hanging over the open
+// cavity — the gasket compressed against nothing and the chamber never sealed.
+// Centre it on the rim instead, and keep it well outboard of the corner bosses.
+lid_gasket_inset = wall/2;         // 2 mm: groove spans 1-3 mm from the edge
 lid_gasket_w     = 2.0;
 lid_gasket_depth = 1.0;
 

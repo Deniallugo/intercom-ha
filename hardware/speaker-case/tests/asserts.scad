@@ -76,10 +76,34 @@ module in_bay(p, w, l, name) {
     assert(c[0]-w/2 >= bay_xmin && c[0]+w/2 <= bay_xmax, str(name, " off bay width"));
     assert(c[1]-l/2 >= bay_ymin && c[1]+l/2 <= bay_ymax, str(name, " off bay height"));
 }
+// ---- corner-boss exclusion --------------------------------------------------
+// The four lid bosses are FULL-DEPTH free-standing pillars standing ~5 mm off the
+// walls, so they are obstacles on EVERY plane in the bay, not just at the rear face.
+// Nothing asserted this, and a USB-C breakout's receptacle ended up 2.8 mm inside one.
+boss_cs = [for (sx = [-1,1], sy = [-1,1])
+              [sx*(outer_w()/2 - boss_inset), sy*(outer_h()/2 - boss_inset)]];
+// clear height under a boss, measured from the bay floor
+function boss_floor_gap() = boss_inset - boss_od/2 - wall;
+// x half-window that is free of any boss shadow
+function boss_x_free() = outer_w()/2 - boss_inset - boss_od/2;
+
+// features mounted on the FRONT wall or the LID are checked in (x,y)
+module clears_bosses(c, sz, name) {
+    for (cb = boss_cs)
+        assert(aabb_clear(c, sz, cb, [boss_od, boss_od]), str(name, " clashes a corner lid boss"));
+}
+// features on the BOTTOM wall live in (x,z) and the bosses span all z, so the test is:
+// anything taller than the under-boss gap must fit inside the x window
+module bottom_clears_bosses(x, w, h, name) {
+    assert(h <= boss_floor_gap() || abs(x) + w/2 <= boss_x_free(),
+           str(name, " reaches into a corner lid boss — keep |x|+w/2 <= ", boss_x_free()));
+}
+
 // front wall: the S3 pocket, at its OUTER size (walls included), must clear the divider
 in_bay(s3_pos, s3_w, s3_l, "S3");
 assert(bpos(s3_pos)[1] + s3_l/2 + pocket_wall <= bay_ymax, "S3 pocket runs into the divider — lower s3_pos");
 assert(abs(s3_pos[0]) + s3_w/2 + pocket_wall <= bay_xmax, "S3 pocket wider than the bay");
+clears_bosses(bpos(s3_pos), [s3_w + 2*pocket_wall, s3_l + 2*pocket_wall], "S3 pocket");
 // rear lid: DAC + amp share the inner face
 in_bay(dac_pos, dac_w, dac_l, "DAC");
 in_bay(amp_pos, amp_w, amp_l, "amp");
@@ -107,9 +131,7 @@ assert(btn_halo_od > btn_halo_id && btn_halo_depth < wall - btn_panel_t, "PTT ha
 // the counterbore sits in the bay, below the divider, within width
 in_bay(btn_pos, btn_pocket_d, btn_pocket_d, "PTT counterbore");
 assert(aabb_clear(btn_c, btn_sq, bpos(s3_pos), s3_pocket_sz), "PTT counterbore clashes the S3 pocket");
-for (sx = [-1, 1])
-    assert(aabb_clear(btn_c, btn_sq, [sx*(outer_w()/2 - boss_inset), -(outer_h()/2 - boss_inset)], [boss_od, boss_od]),
-           "PTT counterbore clashes a corner lid boss");
+clears_bosses(btn_c, btn_sq, "PTT counterbore");
 // the halo ring must stay on the FLAT front face — the chamfer, not the outer edge,
 // is the real bound now
 assert(abs(btn_pos[0]) + btn_halo_od/2 <= flat_w()/2, "PTT halo runs onto the front chamfer (width)");
@@ -125,30 +147,24 @@ assert(mic_gasket_d <= mic_board_l, "mic gasket seat wider than the board it sea
 assert(mic_post_pitch/2 - mic_post_od/2 >= (mic_board_w + 2*clr)/2, "mic posts intrude into the board recess");
 // the mic entry uses the COMBINED seat + flanking-post footprint, so the pairwise
 // check below covers the posts too (they are what actually reach toward the jack)
-bw = [[mic_pos,  mic_post_pitch + mic_post_od, max(mic_board_l + 2*clr, mic_post_od), "mic seat+posts"],
-      [usbc_pos, usbc_w,                       usbc_l,                                "USB-C board"],
-      [jack_pos, jack_nut_d,                   jack_nut_d,                            "sub jack"]];
+bw = [[mic_pos,  mic_post_pitch + mic_post_od,   max(mic_board_l + 2*clr, mic_post_od), mic_post_h,   "mic seat+posts"],
+      [usbc_pos, usbc_screw_pitch + mic_post_od, usbc_cut_l,                            usbc_body_h,  "USB-C socket"],
+      [jack_pos, jack_nut_d,                     jack_nut_d,                            jack_body_h,  "sub jack"]];
 for (f = bw) {
     p = f[0];
-    assert(p[0] - f[1]/2 >= bay_xmin && p[0] + f[1]/2 <= bay_xmax, str(f[3], " off bay width"));
-    assert(p[1] - f[2]/2 >= wall && p[1] + f[2]/2 <= front_depth, str(f[3], " off cavity depth"));
+    assert(p[0] - f[1]/2 >= bay_xmin && p[0] + f[1]/2 <= bay_xmax, str(f[4], " off bay width"));
+    assert(p[1] - f[2]/2 >= wall && p[1] + f[2]/2 <= front_depth, str(f[4], " off cavity depth"));
+    bottom_clears_bosses(p[0], f[1], f[3], f[4]);
 }
 // ...and they clear each other (they share one wall)
 for (a = [0 : len(bw)-2]) for (b = [a+1 : len(bw)-1])
     assert(aabb_clear([bw[a][0][0], bw[a][0][1]], [bw[a][1], bw[a][2]],
                       [bw[b][0][0], bw[b][0][1]], [bw[b][1], bw[b][2]]),
-           str(bw[a][3], " overlaps ", bw[b][3], " on the bottom wall"));
-// the mic posts must also clear their neighbours
-assert(abs(mic_pos[0]) + mic_post_pitch/2 + mic_post_od/2 <= bay_xmax, "mic posts off bay width");
-// the sub jack's barrel reaches up past the bottom corner bosses
-for (sx = [-1, 1])
-    assert(abs(jack_pos[0] - sx*(outer_w()/2 - boss_inset)) >= (jack_nut_d + boss_od)/2,
-           "sub jack barrel clashes a bottom corner boss");
-// USB-C exit slot: bounded, in the -x side wall, inside the bay
-assert(usb_slot_y - usb_slot_h/2 >= 0, "USB exit slot dips below the bay floor");
-assert(usb_slot_y + usb_slot_h/2 <= board_zone_h, "USB exit slot runs above the bay");
-assert(usbc_pos[1] - usb_slot_w/2 >= wall && usbc_pos[1] + usb_slot_w/2 <= front_depth,
-       "USB exit slot off the cavity depth");
+           str(bw[a][4], " overlaps ", bw[b][4], " on the bottom wall"));
+// USB-C panel-mount socket: blind pilots, body cutout bounded by the wall
+assert(usbc_pilot_depth < wall, "USB-C mounting pilots must stay blind");
+assert(usbc_cut_w > 0 && usbc_cut_l > 0, "USB-C body cutout geometry");
+assert(usbc_screw_pitch/2 - board_screw_pilot/2 > usbc_cut_w/2, "USB-C pilots fall inside the body cutout");
 // S3 service slot: in the BAY only, never the chamber, and at the devkit's port height
 assert(board_cy() + s3_pos[1] + s3_usb_w/2 <= bay_ymax, "S3 service slot breaches the chamber");
 assert(board_cy() + s3_pos[1] - s3_usb_w/2 >= bay_ymin, "S3 service slot off the bay floor");
@@ -163,6 +179,14 @@ assert(abs((board_cy() + s3_pos[1]) - spk_zone_cy()) >= (s3_usb_w + port_flange_
 assert(outer_d() == front_depth + wall, "rear plate must be a flat lid: outer depth = front_depth + wall");
 assert(lid_gasket_depth < wall, "lid gasket groove must not cut through the lid");
 assert(outer_w() - 2*lid_gasket_inset > 0 && outer_h() - 2*lid_gasket_inset > 0, "lid gasket inset too large");
+// the groove must land ON the shell rim (0..wall inboard of the edge), not over the
+// open cavity. wall+3 put it 3 mm past the rim and the chamber never sealed.
+assert(lid_gasket_inset + lid_gasket_w/2 <= wall,
+       "lid gasket groove hangs over the cavity — it seals against nothing");
+assert(lid_gasket_inset - lid_gasket_w/2 > 0, "lid gasket groove runs off the outer edge");
+// ...and stay well outboard of the corner screws it must not intersect
+assert(boss_inset - screw_clear/2 > lid_gasket_inset + lid_gasket_w/2,
+       "corner screws sit in the lid gasket groove");
 assert(boss_od >= insert_m3_d + 3, "corner boss too thin around the heat-set insert");
 assert(insert_m3_d > screw_clear, "heat-set bore must be wider than the screw clearance");
 // keyhole bosses fit the narrow lid, are vertically separated, and bear over the chamber
