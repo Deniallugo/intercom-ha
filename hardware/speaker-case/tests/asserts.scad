@@ -148,7 +148,7 @@ assert(mic_post_pitch/2 - mic_post_od/2 >= (mic_board_w + 2*clr)/2, "mic posts i
 // the mic entry uses the COMBINED seat + flanking-post footprint, so the pairwise
 // check below covers the posts too (they are what actually reach toward the jack)
 bw = [[mic_pos,  mic_post_pitch + mic_post_od,   max(mic_board_l + 2*clr, mic_post_od), mic_post_h,   "mic seat+posts"],
-      [usbc_pos, usbc_screw_pitch + mic_post_od, usbc_cut_l,                            usbc_body_h,  "USB-C socket"],
+      [usbc_pos, usbc_screw_pitch + 5,           usbc_cut_l,                            usbc_body_h,  "USB-C socket"],
       [jack_pos, jack_nut_d,                     jack_nut_d,                            jack_body_h,  "sub jack"]];
 for (f = bw) {
     p = f[0];
