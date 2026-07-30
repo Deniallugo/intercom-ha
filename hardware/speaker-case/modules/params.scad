@@ -72,10 +72,12 @@ port_cz        = 50;       // axis depth from the front face: clear behind the b
 // plus clearance to the divider and the chamber top.
 spk_zone_h   = 120;
 divider_t    = wall;
-// The bay height is set by the front-baffle feature stack, not by the boards:
-// S3 pocket (26 + 2*1.6 = 29.2) + PTT counterbore (20) + the halo's clearance to the
-// chamfered front face. Needs >= 55.2 + 3*margin; 62 gives ~2 mm all round.
-board_zone_h = 62;
+// The bay height is set by the front-baffle feature stack, not by the boards: the
+// S3 pocket (26 + 2*1.6 = 29.2), the PTT counterbore (20) and halo, the mic pocket
+// (18), and the halo's clearance to the chamfered front face. At 62 the mic squeezed
+// in with 0.4 mm to the corner-boss notch; 70 puts every margin at 1.4-7 mm.
+// Costs 8 mm of height and nothing else — the chamber and Fb are untouched.
+board_zone_h = 70;
 
 // ---- chamber depth (sets the sealed volume + front-to-back board room) ----
 cavity_depth = 80;
@@ -121,13 +123,18 @@ board_screw_pilot = 1.6;           // M2 self-tap
 pocket_wall = 1.6;                 // friction-pocket wall (boards without holes)
 
 // front-wall placements (x,y) relative to board_cy()
-s3_pos  = [0,  13];                // rides high; frees the bottom strip for the PTT
-btn_pos = [0, -14];                // PTT switch, bottom-centre
+s3_pos  = [  0,  19];              // rides high; frees the bottom strip for PTT + mic
+btn_pos = [  0, -19];              // PTT switch, bottom-centre
+mic_pos = [-24,  -7];              // mic pocket, LEFT OF THE PTT on the front baffle —
+                                   // you talk to the front of an intercom. Isolation
+                                   // barely differs: the bay is at the bottom either
+                                   // way, so this is ~80 mm from the lower driver vs
+                                   // ~90 mm on the bottom wall. The gasket is what
+                                   // actually decouples it.
 // rear-lid inner-face placements (x,y) relative to board_cy()
 dac_pos = [-20, 0];
 amp_pos = [ 16, 0];
 // bottom-wall placements — these are (x, z): z = depth from the front face
-mic_pos  = [ -6, 30];              // offset -x so its +x post clears the sub jack
 usbc_pos = [-12, 16];              // panel-mount socket; cable exits straight down
 jack_pos = [ 18, 20];
 
@@ -168,19 +175,16 @@ btn_halo_id    = 21;               // >= btn_pocket_d: never thins the panel ove
 btn_halo_od    = 24;
 btn_halo_depth = 0.6;
 
-// ---- microphone (ICS-43434, bottom wall, gasket-sealed single port) ----
-// The old 7 x 1.5 mm cluster through wall + pocket floor was a ~5.7 kHz Helmholtz
-// resonator sitting on top of speech. ONE short hole with the mic port pressed to a
-// gasket (near-zero front volume) puts the resonance at ~15 kHz instead. Bottom wall,
-// not the driver baffle, so the drivers shake it as little as the box allows.
+// ---- microphone (ICS-43434, front baffle, gasket-sealed single port) ----
+// The old 7 x 1.5 mm cluster was a ~5.7 kHz Helmholtz resonator sitting on top of
+// speech. ONE short hole with the mic port pressed onto a gasket (near-zero front
+// volume) puts the resonance at ~14 kHz instead.
+// A friction pocket, not flanking screw posts: posts at any workable pitch collided
+// with either the PTT halo or the bay edge.
 mic_board_w  = 17; mic_board_l = 14;
-mic_seat_depth   = 1.0;            // board-locating recess in the inner face
-mic_gasket_d     = 12;
-mic_gasket_depth = 0.8;
-mic_hole_d       = 2.0;            // single port, as short as the wall allows
-mic_post_pitch   = 24;             // 2 x M2 posts flanking the seat (full-thickness wall)
-mic_post_od      = 5;
-mic_post_h       = 4;
+mic_gasket_d     = 12;             // gasket seat, recessed into the pocket floor
+mic_gasket_depth = 0.8;            // < pocket_wall, so floor + wall still carry the port
+mic_hole_d       = 2.0;            // single port: wall + pocket floor - gasket = 4.8 mm
 
 // ---- wall mount: BLIND recessed keyhole bosses on the lid OUTER face ----
 // Raised bosses hold a wall-side retaining plate (kb_lip) with a keyhole cut,
@@ -219,7 +223,7 @@ boss_inset   = radius + 3;
 
 // ---- derived dimensions (functions so tests can assert them) ----
 function outer_w()    = inner_w + 2*wall;                                  // 86
-function outer_h()    = 2*wall + spk_zone_h + divider_t + board_zone_h;    // 194
+function outer_h()    = 2*wall + spk_zone_h + divider_t + board_zone_h;    // 202
 function outer_d()    = front_depth + wall;                                // 88
 function spk_cx()     = 0;                                                 // drivers centred
 function spk_zone_cy()= (outer_h()/2 - wall) - spk_zone_h/2;               // chamber centre

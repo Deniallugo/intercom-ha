@@ -6,7 +6,7 @@ vertically** on the front baffle, dual mono (one amp channel each), in a **porte
 on top, a vented electronics bay below, split by a divider crossed by four sealed
 terminal bolts. Intercom (mic + PTT) is a secondary role; music playback is primary.
 
-External size: **86 × 194 × 88 mm** (W × H × D).
+External size: **86 × 202 × 88 mm** (W × H × D).
 Net chamber volume: **0.7015 L** (≥ the 0.65 L `vol_target` floor in the asserts).
 
 Design rationale, the acoustic arithmetic, and the honest performance limits:
@@ -33,8 +33,8 @@ subwoofer on the line-out for anything below 120 Hz.
 
 - `body` — shell with the ported chamber (two drivers on the front baffle with local
   stiffening pads, tuned port on the +x side wall), the sealing divider + four sealed
-  terminal bolts, and the electronics bay (S3 friction pocket, PTT bore, bottom-wall
-  mic seat / USB-C breakout / sub jack, +x service slot)
+  terminal bolts, and the electronics bay (S3 friction pocket, PTT bore and mic pocket
+  on the front baffle, bottom-wall USB-C socket / sub jack, +x service slot)
 - `rear` — flat gasketed lid with recessed keyhole wall-mount bosses + inner DAC and
   amp standoffs
 - `port` — the tuned port tube, printed separately **so Fb is tunable**
@@ -93,21 +93,24 @@ That deletes the CH224K, the MP1584 and the TPA3116: five boards down to three.
 | ESP32-S3 DevKitC-1 (N16R8) | friction pocket (no screw holes) | front baffle, bay |
 | GY-PCM5102A I²S DAC | 4 M2 standoffs | **rear-lid inner face**, left |
 | PAM8406 5 V stereo class-D | 4 M2 standoffs | **rear-lid inner face**, right |
-| USB-C 5 V breakout (5.1 kΩ CC) | 4 M2 standoffs | bay **bottom wall** |
+| ICS-43434 I²S MEMS mic | friction pocket + gasket seat | front baffle, left of the PTT |
 
-Bottom-wall features (all in the bay):
-- **ICS-43434 I²S MEMS mic** — board-locating recess + gasket seat + **one 2 mm port**.
-  Press the mic's port onto the gasket: near-zero front volume puts the port resonance
-  at ~15 kHz. (The superseded 7 × 1.5 mm cluster was a ~5.7 kHz resonator sitting on
-  top of speech.) Two M2 posts flank the seat; gasket compression makes the seal.
-- **USB-C 5 V power IN** — breakout lies flat, connector facing −x, cable exits a slot
-  in the −x side wall.
+Front-baffle features (all in the bay):
+- **PTT panel-mount momentary switch** — 12.4 mm bore through a locally thinned
+  (2.5 mm) panel, bottom-center, with a nut counterbore behind and a tactile halo ring
+  on the outer face.
+- **ICS-43434 I²S MEMS mic** — friction pocket + gasket seat + **one 2 mm port**, left
+  of the PTT. You talk to the front of an intercom. Press the mic's port onto the
+  gasket: near-zero front volume puts the port resonance at ~14 kHz. (The superseded
+  7 × 1.5 mm cluster was a ~5.7 kHz resonator sitting on top of speech.)
+
+Bottom wall — **cable exits point straight down**:
+- **USB-C 5 V power IN** — a **panel-mount socket**, not a breakout board. A flat
+  breakout facing the side wall has to sit at x ≈ −30 to reach it, which is exactly
+  where a corner lid boss runs: the receptacle ended up 2.8 mm *inside* the boss.
 - **3.5 mm sub line-out** — see below.
 
-Other breaches:
-- **PTT panel-mount momentary switch** — 12.4 mm bore through a locally thinned
-  (2.5 mm) panel, bottom-center of the front baffle, with a nut counterbore behind and
-  a tactile halo ring on the outer face.
+Also:
 - **+x side-wall service slot** — exposes the devkit's own USB-C ports for the first
   flash and serial logs.
 
@@ -115,8 +118,8 @@ Other breaches:
 
 ```
 USB-C 5 V charger (2 A+)
-  └─► USB-C breakout ─┬─► PAM8406 VCC
-                      └─► ESP32-S3 5V pin
+  └─► panel-mount USB-C ─┬─► PAM8406 VCC
+                         └─► ESP32-S3 5V pin
 
 ESP32-S3 ── I²S out ─► PCM5102A ─┬─ L ─┐
                                  └─ R ─┤ 2x 10k passive sum
@@ -138,7 +141,7 @@ PAM8406 OUT B ── 330 uF ──► divider terminals ──► driver 2 (lowe
    fixed ~24 dB gain would ask for 33 V from a 5 V rail and clip continuously. Use the
    module's onboard pot or a 10 kΩ/1.2 kΩ divider (≈ −19 dB).
 3. **Do not power the amp through the devkit's USB port.** Peak draw is ~2 A; that path
-   goes through the devkit's Schottky and a thin trace. Feed both from the breakout.
+   goes through the devkit's Schottky and a thin trace. Feed both from the USB-C socket.
 
 Passive L+R summing means **`devices/speaker-s3.yaml` needs no change** — it stays
 `channel: stereo`, and both drivers and the sub get a true mono mix instead of one
@@ -182,6 +185,9 @@ terminal.
   joint opened repeatedly for wiring and polyfill; self-tap would strip. The drivers
   keep self-tap pilots because the *port*, not the driver, is the tuning element here.
 - Foam strip in the lid perimeter gasket groove; foam tape on the divider's back edge.
+  The groove is centred on the 4 mm shell rim (`lid_gasket_inset = wall/2`). It used to
+  sit at `wall + 3`, which put it 3 mm inboard of the rim — hanging over the open cavity,
+  compressing against nothing. If you change it, the assert will tell you.
 
 **Polyfill:** loosely in the speaker chamber only, and keep it clear of the port's inner
 mouth.
@@ -223,7 +229,8 @@ and keep ≥ 30 mm clear on the **+x port side**.
 - **Xmax and Vas** — never measured. Vas picks the box volume; Xmax sets every max-SPL
   number above. Measure both (added-mass or closed-box delta-Fs) before trusting them.
 - Driver cutout (46 mm), frame OD (53 mm), seated depth (28 mm)
-- Board footprints: S3 devkit (69 × 26), PCM5102 (27 × 27), PAM8406 (24 × 16),
-  USB-C breakout (15 × 13)
+- Board footprints: S3 devkit (69 × 26), PCM5102 (27 × 27), PAM8406 (24 × 16)
+- **Panel-mount USB-C socket**: body cutout (9.5 × 4.5 mm) and screw pitch (20 mm) vary
+  a lot between modules — measure yours
 - PTT panel-mount switch thread (12 mm → 12.4 mm bore) and nut across flats (16.5 mm)
 - Wall-mount screw head diameter vs the keyhole geometry

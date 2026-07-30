@@ -3,7 +3,7 @@ include <../modules/lib.scad>
 
 // ===== shell / envelope =====
 assert(outer_w() == 86,  "outer width drifted from 86");
-assert(outer_h() == 194, "outer height drifted from 194");
+assert(outer_h() == 202, "outer height drifted from 202");
 assert(outer_d() == 88,  "outer depth drifted from 88");
 assert(chamfer < radius, "front chamfer must be smaller than the corner radius");
 assert(chamfer > 0 && chamfer < front_depth, "front chamfer out of range");
@@ -140,16 +140,22 @@ assert(board_cy() + btn_pos[1] - btn_halo_od/2 >= -flat_h()/2, "PTT halo runs on
 assert(btn_panel_t + btn_body_l + board_standoff_h + 1.6 <= front_depth,
        "switch body + lid board stack deeper than the cavity");
 
-// ===== bottom-wall features (mic / USB-C / sub jack). Placements are (x, z) =====
-assert(mic_seat_depth + mic_gasket_depth < wall, "mic seat + gasket seat cut through the bottom wall");
+// ===== mic (front baffle, left of the PTT) =====
+mic_pocket_sz = [mic_board_w + 2*clr + 2*pocket_wall, mic_board_l + 2*clr + 2*pocket_wall];
+assert(mic_gasket_depth < pocket_wall, "mic gasket seat cuts through the pocket floor");
 assert(mic_gasket_d > mic_hole_d, "mic gasket seat must be wider than the port");
 assert(mic_gasket_d <= mic_board_l, "mic gasket seat wider than the board it seals against");
-assert(mic_post_pitch/2 - mic_post_od/2 >= (mic_board_w + 2*clr)/2, "mic posts intrude into the board recess");
-// the mic entry uses the COMBINED seat + flanking-post footprint, so the pairwise
-// check below covers the posts too (they are what actually reach toward the jack)
-bw = [[mic_pos,  mic_post_pitch + mic_post_od,   max(mic_board_l + 2*clr, mic_post_od), mic_post_h,   "mic seat+posts"],
-      [usbc_pos, usbc_screw_pitch + 5,           usbc_cut_l,                            usbc_body_h,  "USB-C socket"],
-      [jack_pos, jack_nut_d,                     jack_nut_d,                            jack_body_h,  "sub jack"]];
+in_bay(mic_pos, mic_pocket_sz[0], mic_pocket_sz[1], "mic pocket");
+clears_bosses(bpos(mic_pos), mic_pocket_sz, "mic pocket");
+assert(aabb_clear(bpos(mic_pos), mic_pocket_sz, bpos(s3_pos), s3_pocket_sz), "mic pocket clashes the S3 pocket");
+// clears the PTT at its widest feature (the halo ring), not just the counterbore
+assert(aabb_clear(bpos(mic_pos), mic_pocket_sz, btn_c, [btn_halo_od, btn_halo_od]), "mic pocket clashes the PTT halo");
+// the port pierces the FLAT front face, not the chamfer
+assert(abs(mic_pos[0]) + mic_pocket_sz[0]/2 <= flat_w()/2, "mic pocket runs onto the front chamfer (width)");
+
+// ===== bottom-wall features (USB-C / sub jack). Placements are (x, z) =====
+bw = [[usbc_pos, usbc_screw_pitch + 5, usbc_cut_l, usbc_body_h, "USB-C socket"],
+      [jack_pos, jack_nut_d,           jack_nut_d, jack_body_h, "sub jack"]];
 for (f = bw) {
     p = f[0];
     assert(p[0] - f[1]/2 >= bay_xmin && p[0] + f[1]/2 <= bay_xmax, str(f[4], " off bay width"));

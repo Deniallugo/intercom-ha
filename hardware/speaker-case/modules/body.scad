@@ -100,37 +100,34 @@ module button_bore() {
     }
 }
 
-// ---- electronics bay: bottom wall ------------------------------------------
-// mic / USB-C / sub-jack all live on the bottom wall. The mic is here rather than on
-// the front baffle so the drivers shake it as little as the box allows, and so its
-// port faces down. Placements are (x, z): z = depth from the front face.
+// ---- electronics bay: mic on the front baffle ------------------------------
+// Left of the PTT: you talk to the front of an intercom. Isolation barely differs from
+// the bottom wall — the bay is at the bottom either way — and the gasket is what
+// actually decouples the mic from the shell.
 
-// The mic seat is the acoustic design, not just a mount: a board-locating recess, a
-// gasket seat inside it, and ONE short hole. Pressing the ICS-43434's port onto the
-// gasket leaves near-zero front volume, putting the port resonance ~15 kHz instead of
-// the ~5.7 kHz the old 7-hole cluster produced.
-module mic_seat() {
-    translate([mic_pos[0], -outer_h()/2, mic_pos[1]]) rotate([-90, 0, 0]) {
-        // board-locating recess in the inner face
-        translate([0, 0, wall - mic_seat_depth])
-            linear_extrude(mic_seat_depth + 0.1)
-                square([mic_board_w + 2*clr, mic_board_l + 2*clr], center = true);
-        // gasket seat, deeper still
-        translate([0, 0, wall - mic_seat_depth - mic_gasket_depth])
+// friction pocket holding the ICS-43434 board, port facing the front wall
+module mic_mount() {
+    translate([mic_pos[0], board_cy()+mic_pos[1], wall])
+        board_pocket(mic_board_w, mic_board_l, board_standoff_h + 1, pocket_wall);
+}
+
+// The port is the acoustic design, not just a hole: a gasket seat recessed into the
+// pocket floor, then ONE short bore. Pressing the mic's port onto the gasket leaves
+// near-zero front volume, putting the resonance at ~14 kHz instead of the ~5.7 kHz the
+// old 7-hole cluster produced.
+module mic_port() {
+    translate([mic_pos[0], board_cy()+mic_pos[1], 0]) {
+        // gasket seat, recessed into the pocket floor's upper face
+        translate([0, 0, wall + pocket_wall - mic_gasket_depth])
             cylinder(h = mic_gasket_depth + 0.01, d = mic_gasket_d);
-        // the single port, through whatever wall is left
+        // the single port: front face -> gasket seat (4.8 mm of material)
         translate([0, 0, -0.1])
-            cylinder(h = wall - mic_seat_depth - mic_gasket_depth + 0.2, d = mic_hole_d);
+            cylinder(h = wall + pocket_wall - mic_gasket_depth + 0.2, d = mic_hole_d);
     }
 }
 
-// two M2 posts flanking the mic seat, on FULL-THICKNESS wall (never in the thinned
-// zone): screw the board down and the gasket compression makes the seal
-module mic_posts() {
-    for (sx = [-1, 1])
-        translate([mic_pos[0] + sx*mic_post_pitch/2, -outer_h()/2 + wall, mic_pos[1]])
-            rotate([-90, 0, 0]) screw_boss(mic_post_h, mic_post_od, board_screw_pilot);
-}
+// ---- electronics bay: bottom wall ------------------------------------------
+// USB-C and the sub jack. Placements are (x, z): z = depth from the front face.
 
 // USB-C 5 V panel-mount socket through the bottom wall: a body cutout plus two blind
 // M2 pilots. Cable exits straight down. (A flat breakout facing the side wall put its
@@ -175,7 +172,7 @@ module body() {
             divider();
             corner_bosses();
             bay_boards();
-            mic_posts();
+            mic_mount();
             for (i = [0 : spk_n - 1]) driver_pad(i);
         }
         for (i = [0 : spk_n - 1]) {
@@ -185,7 +182,7 @@ module body() {
         }
         port_bore();
         button_bore();
-        mic_seat();
+        mic_port();
         usbc_panel();
         jack_bore();
         s3_service_slot();
