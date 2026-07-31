@@ -6,11 +6,6 @@ module rounded_rect(w, h, r) {
         translate([sx*(w/2 - r), sy*(h/2 - r)]) circle(r);
 }
 
-// 2D slot: a rectangle with semicircular ends (prints cleaner than square corners)
-module slot(w, l) {
-    hull() for (sy = [-1, 1]) translate([0, sy*(l/2 - w/2)]) circle(d = w);
-}
-
 // hollow shell body: outer rounded box with a 45 deg CHAMFERED TOP edge, open at the
 // +z (base) face, leaving a `wall`-thick top face at z in [0, wall].
 //
@@ -38,13 +33,6 @@ module screw_boss(h, od, pilot) {
         cylinder(h = h, d = od);
         translate([0, 0, -0.1]) cylinder(h = h + 0.2, d = pilot);
     }
-}
-
-// 4 corner standoffs for a board of footprint w x l, centered at origin, base z=0.
-// `inset` = hole center distance from each board edge (M2 default ~2 mm).
-module board_standoffs(w, l, h, od, pilot, inset=2) {
-    for (sx = [-1, 1], sy = [-1, 1])
-        translate([sx*(w/2 - inset), sy*(l/2 - inset), 0]) screw_boss(h, od, pilot);
 }
 
 // boolean helper: do two centered AABBs (at p1/p2, sizes s1/s2) clear each other?

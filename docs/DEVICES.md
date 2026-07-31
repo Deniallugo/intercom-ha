@@ -63,13 +63,15 @@ The button does two jobs, split by hold time — tap (< 1.2 s) starts Assist
 without the wake word, hold (≥ 1.2 s) records and broadcasts over the intercom
 for as long as you hold it.
 
-> The 3D-printed enclosure is a **desk puck**, 90 × 90 × 29 mm, shaped like the
-> Home Assistant Voice PE but with the driver and grille replaced by the 3.5 mm
-> line-out — button and mic port on top, the devkit's USB-C out the back, and the
+> The 3D-printed enclosure is a **desk puck**, 96 × 96 × 34 mm — modelled on the Home
+> Assistant Voice PE, slightly broader because a 64 mm-deep devkit has to sit centred
+> between four full-depth corner bosses. Driver and grille are replaced by the
+> 3.5 mm line-out — button and mic port on top, the devkit's USB-C out the back, and the
 > PCM5102A board's **own 3.5 mm socket** used straight through the side wall (so
-> `LROUT`/`RROUT` need no wiring and there is no panel-mount jack). The devkit and
-> the DAC are stacked rather than side by side, because the four full-depth corner
-> bosses leave no plan arrangement that fits both.
+> `LROUT`/`RROUT` need no wiring and there is no panel-mount jack). The wall is
+> locally thinned to 1.2 mm behind that socket, or a plug loses too much of its
+> 14 mm barrel to the wall to seat. Both boards sit in friction pockets on the base
+> plate — the DAC has no mounting holes.
 > See `hardware/voice-case/README.md`.
 
 ---

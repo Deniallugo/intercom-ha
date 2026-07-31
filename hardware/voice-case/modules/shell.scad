@@ -4,14 +4,16 @@
 // the 3.5 mm jack. The devkit itself is on the base plate, underneath all of this.
 
 // ---- top face: button ------------------------------------------------------
-// Three concentric cuts in the top wall: a shallow recess the cap face sits in, the
-// bore its skirt rides in, and a halo groove outboard of both so the button can be
-// found by touch. The halo ID stays outside the recess so it never thins the land
-// the cap's lip catches on.
+// All the shell contributes to the button is a plain bore, a shallow recess for the cap
+// face, a cosmetic halo, and two blind pilots for the holder. Everything mechanical —
+// the switch pocket, the plunger aperture, the cap's catch — is in `button_holder`, so
+// tuning the mechanism never costs a shell reprint.
 module button_cut() {
     translate(btn_pos) {
-        translate([0, 0, -0.1]) cylinder(h = wall + 0.2, d = btn_well_d);
+        translate([0, 0, -0.1]) cylinder(h = wall + 0.2, d = btn_bore_d);
         translate([0, 0, -0.1]) cylinder(h = btn_recess_depth + 0.1, d = btn_recess_d);
+        // halo groove: stays outboard of the recess so it never thins the land the cap
+        // face sits on, and inboard of the pilots so it never opens one up
         translate([0, 0, -0.1]) difference() {
             cylinder(h = btn_halo_depth + 0.1, d = btn_halo_od);
             translate([0, 0, -0.1]) cylinder(h = btn_halo_depth + 0.3, d = btn_halo_id);
@@ -19,26 +21,12 @@ module button_cut() {
     }
 }
 
-// Seat for the 6x6 tactile switch, standing off the top wall's inner face directly
-// under the bore. The switch is pushed in from the cavity side, plunger first, until
-// its body top lands on the ledge; a dab of glue retains it. The legs leave through
-// slots in the +-x walls. The block's diagonal stays inside the bore's shadow, so it
-// never fouls the annular land that the cap's lip lands on.
-module switch_seat() {
-    translate([btn_pos[0], btn_pos[1], wall]) difference() {
-        translate([0, 0, sw_seat_h()/2])
-            cube([sw_seat_od(), sw_seat_od(), sw_seat_h()], center = true);
-        // switch body pocket, open toward the cavity
-        translate([0, 0, sw_gap + sw_plunger_h + (sw_body_h + 0.2)/2])
-            cube([sw_body + 2*clr, sw_body + 2*clr, sw_body_h + 0.2], center = true);
-        // plunger bore up to the top wall — also the channel the cap's post runs in
-        translate([0, 0, -0.1])
-            cylinder(h = sw_gap + sw_plunger_h + 0.2, d = sw_plunger_d + 2*clr);
-        // leg slots out both +-x walls
-        for (sx = [-1, 1])
-            translate([sx*sw_seat_od()/2, 0, sw_gap + sw_plunger_h + sw_body_h - sw_leg_slot_h/2])
-                cube([sw_seat_wall*3, sw_leg_slot_w, sw_leg_slot_h], center = true);
-    }
+// Two BLIND M2 pilots in the top wall, drilled from the inner face. Blind is the point:
+// a through-hole here would be two visible dots either side of the button.
+module button_pilots() {
+    for (sy = [-1, 1])
+        translate([btn_pos[0], btn_pos[1] + sy*btn_pilot_pitch/2, wall - btn_pilot_depth])
+            cylinder(h = btn_pilot_depth + 0.1, d = board_screw_pilot);
 }
 
 // ---- top face: microphone --------------------------------------------------
@@ -65,30 +53,59 @@ module mic_posts() {
             screw_boss(mic_post_h, mic_post_od, board_screw_pilot);
 }
 
-// ---- top face: DAC ---------------------------------------------------------
-// The PCM5102A hangs off the top face on standoffs, in the +x strip beside the
-// devkit column rather than above it — the analog leads then run straight down the
-// side wall to the jack instead of across the digital board.
-module dac_mounts() {
-    translate([dac_pos[0], dac_pos[1], wall])
-        board_standoffs(dac_w, dac_l, board_standoff_h, board_standoff_od, board_screw_pilot);
-}
-
 // ---- rear wall -------------------------------------------------------------
 // Window over the devkit's own two USB-C ports: power, first flash and serial log all
 // come through here, which is why there is no separate panel-mount USB socket. It is
 // a BOUNDED hole — material is left below it so the rim that meets the base plate
 // stays continuous.
 module usb_window() {
-    translate([s3_pos[0], -outer_h()/2, s3_usb_cz()])
-        cube([s3_usb_w, wall*3, s3_usb_h], center = true);
+    translate([s3_pos_x, -outer_h()/2, s3_usb_cz()])
+        cube([s3_usb_w(), wall*3, s3_usb_h], center = true);
 }
 
-// 3.5 mm panel-mount jack, LROUT/RROUT from the PCM5102. Line level — it feeds a
-// powered speaker or an amp, never a driver directly.
-module jack_bore() {
-    translate([jack_pos[0], -outer_h()/2 - 0.1, jack_pos[1]]) rotate([-90, 0, 0])
-        cylinder(h = wall + 0.2, d = jack_bore_d);
+// ---- +x side wall ----------------------------------------------------------
+// The DAC board's OWN 3.5 mm socket, used through a locally THINNED panel. Three cuts:
+// a counterbore on the inner face that the socket body nests into, the plug hole
+// through what is left, and a lead-in on the outer face.
+//
+// The thinning is what makes the socket usable. A 3.5 mm plug has ~14 mm of barrel and
+// needs nearly all of it in to make the ring contact; a full 3 mm wall in front of the
+// socket costs enough of that to leave the plug unseated. And the socket stops INSIDE
+// the counterbore rather than poking through, so the base plate carrying the board can
+// still rise straight up into the shell — a protruding socket would have to be threaded
+// in sideways, which a vertical joint cannot do.
+//
+// Line level: it feeds a powered speaker or an amp, never a driver.
+module dac_jack_cut() {
+    cy = dac_jack_w + 2*clr;
+    cz = dac_jack_h + 2*clr;
+    panel_x = outer_w()/2 - jack_panel_t;
+    // counterbore on the inner face — the socket body lives in here
+    translate([(inner_half() - 0.1 + panel_x)/2, dac_jack_y(), dac_jack_cz()])
+        cube([panel_x - inner_half() + 0.1, cy, cz], center = true);
+    // plug hole through the thinned panel, on the barrel axis
+    translate([panel_x - 0.1, dac_jack_y(), dac_axis_z()]) rotate([0, 90, 0])
+        cylinder(h = jack_panel_t + 0.2, d = jack_hole_d);
+    // lead-in on the OUTER face, so a plug meets a chamfer and not a cut edge
+    translate([outer_w()/2 - jack_lead_in, dac_jack_y(), dac_axis_z()]) rotate([0, 90, 0])
+        cylinder(h = jack_lead_in + 0.1, d1 = jack_hole_d, d2 = jack_hole_d + 2*jack_lead_in);
+}
+
+// Pull-out stop for the DAC. Pulling a plug drags the board +x, and its pocket is open
+// on that side; without this the board's only backstop is the socket body landing on the
+// 1.2 mm thinned panel. This rib catches the PCB EDGE and takes the load into the full
+// side wall instead — and doubles as the board's x datum.
+//
+// It sits in a 2.1 mm slot in z, between the socket above it and the base plate's
+// register lip below. In y it is entirely CLEAR of the socket, which is not cosmetic: the
+// plate rises vertically into the shell at assembly, so a rib anywhere in the socket's
+// path would stop the case closing.
+module dac_pull_stop() {
+    x0 = inner_half() - jack_stop_proj();
+    y0 = jack_stop_y0();  y1 = jack_stop_y1();
+    z0 = jack_stop_z0();  z1 = jack_stop_z1();
+    translate([(x0 + inner_half() + 0.5)/2, (y0 + y1)/2, (z0 + z1)/2])
+        cube([inner_half() + 0.5 - x0, y1 - y0, z1 - z0], center = true);
 }
 
 // ---- corners ---------------------------------------------------------------
@@ -106,13 +123,13 @@ module shell() {
         union() {
             shell_body(top_depth());
             corner_bosses();
-            switch_seat();
             mic_posts();
-            dac_mounts();
+            dac_pull_stop();
         }
         button_cut();
+        button_pilots();
         mic_seat();
         usb_window();
-        jack_bore();
+        dac_jack_cut();
     }
 }

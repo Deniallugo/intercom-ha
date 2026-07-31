@@ -5,9 +5,11 @@
 //
 // It is a cup, not a plug. A solid skirt the width of the bore cannot flex through it,
 // so the skirt is a thin annulus split by radial slits; it collapses on the way in and
-// springs back, and the lip on its lower edge then catches on the top wall's inner
-// face. The switch spring holds the cap up against that lip — the recess floor is
-// never the stop, which is what leaves `btn_face_gap` of free travel above it.
+// springs back, and the lip on its lower edge then catches inside the HOLDER — not on
+// the shell wall. That is deliberate: the catch is the fussiest fit on the whole case,
+// and putting it on a part that reprints in minutes is what makes it tunable. The
+// switch spring holds the cap up against that lip, so the recess floor is never the
+// stop, which is what leaves `btn_face_gap` of free travel above it.
 //
 // The centre post reaches down the plunger bore in the switch seat. Nothing keys the
 // cap's rotation and nothing needs to: the post is on axis.
@@ -25,9 +27,13 @@ module button_cap() {
                     translate([0, 0, -0.1])
                         cylinder(h = btn_skirt_h() + btn_lip_t + 0.2, d = btn_skirt_id());
                 }
-            translate([0, 0, lip_top])                                // retention lip
+            // Retention lip. Tapered, not a square barb: the far end goes into the
+            // bore first, so it is the narrow end (skirt OD) and the skirt cams
+            // inward as you press. The step back to skirt OD at the near end stays
+            // square — that face is what bears on the wall's inner face.
+            translate([0, 0, lip_top])
                 difference() {
-                    cylinder(h = btn_lip_t, d = btn_lip_od());
+                    cylinder(h = btn_lip_t, d1 = btn_lip_od(), d2 = btn_skirt_od());
                     translate([0, 0, -0.1]) cylinder(h = btn_lip_t + 0.2, d = btn_skirt_id());
                 }
             translate([0, 0, face_bottom])                            // centre post
