@@ -318,10 +318,15 @@ are deliberately kept separate (see *Key technical decisions*).
 | **FMT** | GND | I²S format (not left-justified) |
 | **XMT** | 3V3 | Un-mute; tie high or the output stays soft-muted |
 | **FLT / DEMP** | GND | Normal filter, de-emphasis off |
-| **LROUT / RROUT** | jack tip / ring | Line level, already DC-blocked on the breakout |
+| **LROUT / RROUT** | *nothing* | The breakout's **onboard 3.5 mm socket** already carries them, and the puck uses that socket straight through the side wall. Wire these only on a board with no socket. |
 
-The jack is **line level**, not speaker level — it needs a powered speaker or an
-amp downstream. Jack sleeve → GND.
+Everything above is a **strap**, not a signal — only BCK, LCK and DIN carry data.
+Four of the five straps have a failure mode that looks like a broken device:
+floating `SCK` is silent or noisy, floating `XMT` stays soft-muted, and `FMT`
+selects left-justified instead of I²S.
+
+The output is **line level**, not speaker level — it needs a powered speaker or
+an amp downstream.
 
 #### INMP441 mic (I²S bus 1)
 
@@ -340,7 +345,10 @@ microphone sources; the intercom's raw data callback converts itself.
 
 **It needs no gain.** Measured from a real capture, speech peaks at 5404/32767
 (≈ −15.7 dBFS) with `gain_factor: 1` and a plain `>> 16` on the intercom path.
-`use_apll: true` gives the RX a lower-jitter clock.
+
+Do **not** set `use_apll` on this bus. The APLL is shared silicon between the
+two I²S peripherals, so requesting it for the mic can disturb the DAC on the
+other one. It was tried against the hiss below and gave no measured benefit.
 
 #### Bring-up notes — how this mic fails
 
@@ -384,6 +392,57 @@ energy piled into 3–8 kHz, that is broadband hiss from the wiring, not the
 capsule: add 100 nF across VDD–GND at the module, shorten SD/SCK/WS, run the
 mic's ground alongside the data line, and add 10 kΩ from SD to GND so the line
 is defined while the mic isn't driving it.
+
+#### The lost first half-second — it was the powered speaker
+
+Symptom: every Assist reply arrived with roughly its first 0.5 s missing, so
+"02:05" was heard as "05". **The cause was outside the device**: JBL powered
+speakers auto-standby on a silent input, and the ~10 s Home Assistant spends
+between the microphone releasing and the reply arriving was enough for them to
+drop out. They then ate the first half-second waking back up.
+
+Everything inside the device measured clean, and chasing it there cost hours:
+
+| Checked | Result |
+|---|---|
+| HA's TTS audio | complete, speech from frame 0, **no leading silence** |
+| I²S driver start-up | ~300 ms, real, but eliminated by keeping the chain warm |
+| Codec (FLAC vs WAV) | identical clipping. WAV is 5x the bytes and starved the pipeline |
+| Mixer / buffer timeouts | `timeout: never` on `announcement_src` **silenced replies entirely** |
+| Player volume | fine |
+
+The tell was in the *sequence*, not the logs: the chime was audible and the
+reply was not, and the chime always arrived moments after full-volume music
+while the reply always arrived after a long quiet stretch.
+
+**The fix is the ducking schedule.** Music is only ducked when it needs to be,
+so the line is never quiet for long:
+
+| Moment | Music | Why |
+|---|---|---|
+| Wake word → listening (`on_start`) | −15 dB | Not talking over you into the mic |
+| Mic released → waiting (`on_stt_vad_end`) | **full** | Keeps the speaker awake through the wait |
+| Reply starts (`on_tts_start`) | −15 dB | So the answer is clear |
+| Reply ends (`on_end`) | full | Normal |
+
+This only helps **while music is playing**. Asked from a silent house, the
+speaker still sleeps. The permanent fixes are to disable auto-off on the
+speaker, drive a bare PAM8406 / TPA3116 (no standby logic at all — which is why
+the speaker case never showed this), or pad the response text in HA so the lost
+moment is a throwaway word.
+
+#### The on-device chime
+
+It confirms the wake word registered, and it warms the output chain — I²S driver
+running, DAC settled — before the reply arrives. It does **not** fix the problem
+above; that was the theory it was built for, and the ten-second gap is far longer
+than any warm-up it can bridge.
+
+Two details still matter. It must go through the **announcement pipeline**
+(`announcement: true` on `media_player.speaker.play_on_device_media_file`) — raw
+`speaker.play` bypasses the mixer and fails with "Incompatible audio streams".
+And it opens with 60 ms of silence and a 12 ms fade-in, so start-up latency
+lands on silence rather than on the sound. Regenerate with `tools/make-chime.py`.
 
 #### Button
 
@@ -453,9 +512,14 @@ intercom/
   re-arms the wake word *before* returning it — the count never hits zero, so the
   I²S driver never tears down mid-recording.
 - **One button, split by hold time** — tap (< 1.2 s) starts Assist, hold
-  (≥ 1.2 s) records the intercom. A `restart`-mode script started on press and
-  cancelled on release is what distinguishes them; a `bool` global remembers
-  which mode the release belongs to.
+  (≥ 1.2 s) records the intercom. A `restart`-mode script started on press
+  distinguishes them: if it is *still running* at release, the press was a tap.
+  Asking the script rather than a flag also means a hold that could not record
+  (an upload still in flight) does nothing, instead of falling through to Assist.
+- **Ducking follows the interaction, not the session** — music is quiet only
+  while the mic listens and while the reply plays, and returns to full during the
+  wait in between. A permanently ducked line lets a powered speaker with
+  auto-standby drop out; see "The lost first half-second" above.
 - **Dual mono on two MAX98357A** — both amps are passive parallel listeners on
   Bus 2 (I²S is a broadcast), both decoding the same left/mono slot, so adding
   the second board is wiring-only (no YAML change). GAIN → GND on both = +12 dB.

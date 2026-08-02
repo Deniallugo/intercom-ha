@@ -31,9 +31,9 @@ esphome:
     - priority: 600.0
       then:
         - lambda: |-
-            // No recorder_set_gain() call: measured, this mic delivers speech at
-            // −15.7 dBFS with no gain anywhere, so the intercom path runs at unity.
-            // If broadcasts ever sound faint, recorder_set_gain(2, 1) is +6 dB.
+            // No recorder_set_gain(): measured, this mic delivers speech at
+            // −15.7 dBFS unaided, so the intercom path runs at unity. If
+            // broadcasts ever sound faint, recorder_set_gain(2, 1) is +6 dB.
             recorder_init();
 
     # Raw mic tap for the intercom recorder. micro_wake_word / voice_assistant
@@ -112,13 +112,9 @@ i2s_audio:
 
 # ── Microphone ───────────────────────────────────────────────────────────────
 # INMP441 with L/R tied to GND → it drives the LEFT slot, per the datasheet.
-# Reading the wrong slot is not silent: the part goes high-Z outside its own
-# slot, so the ESP latches a floating line at the MSB and you get ±32768 spikes
-# on top of crosstalk from the driven half. Symptom to recognise — a peak pinned
-# near 32768 while the mean stays near zero.
 # 32-bit slots are the part's native framing (24-bit data, left-justified);
-# ESPHome's microphone sources down-convert to the 16-bit that the wake word and
-# Assist require.
+# ESPHome's microphone sources down-convert to the 16 bits the wake word and
+# Assist require. Failure signatures are in docs/DEVICES.md → "how this mic fails".
 
 microphone:
   - platform: i2s_audio
@@ -129,9 +125,7 @@ microphone:
     channel: left
     bits_per_sample: 32bit
     sample_rate: 16000
-    # NB: the APLL is shared silicon between the two I²S peripherals, so setting
-    # use_apll here is not free — it can disturb the DAC on the other bus. It was
-    # tried as a hiss fix, gave no measured benefit, and was removed.
+    # Don't add use_apll: the APLL is shared with the DAC's peripheral.
     correct_dc_offset: true  # INMP441 has a real DC bias; leaving it hurts the wake word
 
 # ── Speaker chain ────────────────────────────────────────────────────────────
@@ -145,6 +139,12 @@ speaker:
     bits_per_sample: 16bit
     sample_rate: 48000
     channel: stereo          # real stereo DAC → both channels out the jack
+    # Stay resident instead of tearing down after 500 ms of starved buffer (the
+    # default). A restart races the driver's own not-yet-released bus lock —
+    # "Parent bus is busy" — then backs off a full second, turning a brief stream
+    # hiccup mid-song into a long gap. Nothing else contends for this bus.
+    timeout: never
+    buffer_duration: 1000ms  # more slack before the buffer counts as starved
 
   # Two virtual sources so TTS/announcements and music can share the one DAC —
   # ESPHome requires both pipelines and rejects the same speaker on both.
@@ -152,8 +152,16 @@ speaker:
     id: speaker_mixer
     output_speaker: pcm5102_speaker
     source_speakers:
+      # Leave announcement_src at defaults. With `timeout: never` it does not
+      # reset between streams, and a second announcement on it — the TTS reply,
+      # after the chime — decodes and reports "finished playing" while producing
+      # no sound at all.
       - id: announcement_src
+      # media_src carries no announcements, so it can stay resident. That keeps
+      # the mixer up, and with it the I²S driver, avoiding the teardown/restart
+      # cycle described on the speaker above.
       - id: media_src
+        timeout: never
 
 # ── Media player (Music Assistant / HA playback) ─────────────────────────────
 
@@ -171,9 +179,18 @@ media_player:
       num_channels: 2
     announcement_pipeline:
       speaker: announcement_src
+      # Keep FLAC. Uncompressed 48 kHz stereo is ~5x the bytes (225 KB vs 44 KB
+      # for a 1.2 s reply) and starves this pipeline into multi-second stalls.
       format: FLAC
       sample_rate: 48000
       num_channels: 2
+    # Wake-word chime, flashed into the app. Must be played with
+    # `announcement: true`; raw speaker.play bypasses the mixer and fails with
+    # "Incompatible audio streams". 48 kHz stereo matches the pipeline exactly,
+    # so nothing resamples it.
+    files:
+      - id: chime_sound
+        file: ../sounds/chime.wav
     # No on_announcement / on_idle wake-word juggling here: the mic is on its own
     # I²S peripheral, so it keeps listening straight through playback.
 
@@ -230,9 +247,14 @@ micro_wake_word:
       id: okay_nabu
       probability_cutoff: 0.7  # default 0.97 is too strict at this gain
   on_wake_word_detected:
-    # Ducking lives in voice_assistant.on_start so the button path gets it too.
-    # The chime is configured HA-side — an on-device chime fails ("Incompatible
-    # audio streams") because external audio must go through the media pipeline.
+    # Ducking lives in voice_assistant's triggers so the button path gets it too.
+    # The chime confirms the wake word registered, and incidentally warms the
+    # output chain. It must go through the announcement pipeline — see the
+    # media_player `files:` note.
+    - media_player.speaker.play_on_device_media_file:
+        id: voice_player
+        media_file: chime_sound
+        announcement: true
     - voice_assistant.start:
         wake_word: !lambda return wake_word;
 
@@ -249,17 +271,36 @@ voice_assistant:
   auto_gain: 31dBFS
   volume_multiplier: 2.0
   on_start:
-    # Duck music ~20 dB with a short ramp; restored when the answer finishes.
+    - script.execute: va_watchdog
+    # Duck while the microphone is listening, so music does not talk over you.
     - mixer_speaker.apply_ducking:
         id: media_src
-        decibel_reduction: 20
+        decibel_reduction: 15
         duration: 0.3s
+
+  # Microphone released — HA is now thinking, which can take ten seconds or more.
+  # Bring music straight back to full for that stretch. Nothing needs quiet here,
+  # and a near-silent line is what lets a powered speaker with auto-standby drop
+  # out; it then eats the first half second of the reply waking back up.
+  on_stt_vad_end:
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 0
+        duration: 0.3s
+
+  # The reply is about to play — duck again so it is intelligible over the music.
+  # Fires a few ms before ANNOUNCING, and the audio itself does not start flowing
+  # for ~250 ms after that, so the ramp is comfortably ahead of the first word.
+  on_tts_start:
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 15
+        duration: 0.2s
   on_end:
-    # Re-arm the wake word — VA stops it while a pipeline runs.
-    - micro_wake_word.start:
-    # Keep music ducked until the answer finishes playing. on_end fires before the
-    # TTS plays, so wait for the announcement to start, then end, then restore.
-    # Timeouts cover the no-answer case (first times out, second passes through).
+    - script.stop: va_watchdog
+    # on_end fires BEFORE the reply plays, so wait for the announcement to start
+    # and then finish before un-ducking. Timeouts cover the no-answer case (the
+    # first times out, the second passes straight through).
     - wait_until:
         condition:
           lambda: 'return id(voice_player)->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
@@ -272,8 +313,15 @@ voice_assistant:
         id: media_src
         decibel_reduction: 0
         duration: 0.5s
+    # Re-arm the wake word only once the answer has finished, so spawning the
+    # inference task and allocating its tensor arena doesn't land on top of the
+    # announcement decode. intercom-s3 has to do this first because its mic and
+    # speaker share a bus; here the mic has its own peripheral and nothing needs
+    # it back early. Cost: no barge-in during the answer itself.
+    - micro_wake_word.start:
   # No answer coming — restore music and re-arm.
   on_error:
+    - script.stop: va_watchdog
     - mixer_speaker.apply_ducking:
         id: media_src
         decibel_reduction: 0
@@ -294,6 +342,36 @@ globals:
     initial_value: 'false'
 
 script:
+  # If Home Assistant never answers, the pipeline sits in AWAITING_RESPONSE
+  # forever — and since voice_assistant stops the wake word while it runs, the
+  # device goes deaf until it is rebooted. Started in on_start, cancelled in
+  # on_end / on_error, so it only fires when a run genuinely stalls.
+  - id: va_watchdog
+    mode: restart
+    then:
+      - delay: 30s
+      - if:
+          condition:
+            voice_assistant.is_running:
+          then:
+            - logger.log: "Assist stalled — no response from HA; resetting"
+            - voice_assistant.stop:
+            # Stopping fires on_end, which restores ducking and re-arms the wake
+            # word by itself. Wait for that to play out before checking, so we
+            # only step in if it did not — otherwise both fire and mww logs
+            # "Wake word detection is already running".
+            - delay: 3s
+            - if:
+                condition:
+                  not:
+                    micro_wake_word.is_running:
+                then:
+                  - mixer_speaker.apply_ducking:
+                      id: media_src
+                      decibel_reduction: 0
+                      duration: 0.5s
+                  - micro_wake_word.start:
+
   # Started on press, cancelled on release. If it survives the hold threshold,
   # this press was a hold, not a tap.
   - id: hold_watch
@@ -352,6 +430,12 @@ binary_sensor:
                   - voice_assistant.stop:
                 else:
                   - micro_wake_word.stop:
+                  # Same chime as the wake word — feedback, and it warms the
+                  # output chain before the reply arrives.
+                  - media_player.speaker.play_on_device_media_file:
+                      id: voice_player
+                      media_file: chime_sound
+                      announcement: true
                   - voice_assistant.start:
           # ── hold released: close out the broadcast ──
           else:
