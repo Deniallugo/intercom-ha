@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Wyoming Piper TTS for Home Assistant.
+  Install to /Library/LaunchDaemons/ (root:wheel 0644) — see docs/REMOTE-VOICE.md.
+
+  Voices must be downloaded before first start (piper.download_voices); this
+  daemon does not fetch them on demand.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.wyoming-piper</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/opt/wyoming/venv/bin/python</string>
+    <string>-m</string>
+    <string>wyoming_piper</string>
+    <string>--uri</string>
+    <string>tcp://0.0.0.0:10200</string>
+    <string>--data-dir</string>
+    <string>/usr/local/var/wyoming/piper</string>
+    <string>--voice</string>
+    <string>en_US-lessac-medium</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/wyoming-piper.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/wyoming-piper.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/usr/local/var/wyoming</string>
+  </dict>
+</dict>
+</plist>

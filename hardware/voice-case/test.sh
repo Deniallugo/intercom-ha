@@ -10,7 +10,7 @@ echo "== parameter asserts =="
 "$OPENSCAD" --hardwarnings -o /tmp/vc_asserts.stl tests/asserts.scad >/dev/null 2>&1 \
     && echo "OK asserts" || { echo "FAIL asserts"; fail=1; }
 
-for part in shell base button holder clamp coupon; do
+for part in shell base button holder clamp coupon fit; do
     if "$OPENSCAD" --hardwarnings -D "part=\"$part\"" -o "stl/$part.stl" voice-case.scad 2>/tmp/vc_err; then
         sz=$(wc -c < "stl/$part.stl")
         if [ "$sz" -lt 1000 ]; then echo "FAIL $part: STL too small ($sz B)"; fail=1

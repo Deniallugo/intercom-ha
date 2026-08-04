@@ -247,6 +247,23 @@ micro_wake_word:
       id: okay_nabu
       probability_cutoff: 0.7  # default 0.97 is too strict at this gain
   on_wake_word_detected:
+    # A ringing timer does NOT eat the wake word — "okay nabu" opens a normal
+    # conversation, and only an actual "stop" (which HA turns into a timer
+    # cancel, arriving here as on_timer_cancelled) silences it.
+    #
+    # But the alarm must pause while we listen: it plays into this microphone,
+    # which sits on its own I2S peripheral and keeps capturing straight through
+    # playback, so a chime every 1.5 s would land in the middle of the phrase
+    # being transcribed. Suspend it, remember that it was ringing, and let
+    # on_end / on_error resume it if the timer was not actually cancelled.
+    - if:
+        condition:
+          script.is_running: timer_alarm
+        then:
+          - script.stop: timer_alarm
+          - globals.set:
+              id: alarm_suspended
+              value: 'true'
     # Ducking lives in voice_assistant's triggers so the button path gets it too.
     # The chime confirms the wake word registered, and incidentally warms the
     # output chain. It must go through the announcement pipeline — see the
@@ -285,7 +302,7 @@ voice_assistant:
   on_stt_vad_end:
     - mixer_speaker.apply_ducking:
         id: media_src
-        decibel_reduction: 0
+        decibel_reduction: 15
         duration: 0.3s
 
   # The reply is about to play — duck again so it is intelligible over the music.
@@ -319,6 +336,18 @@ voice_assistant:
     # speaker share a bus; here the mic has its own peripheral and nothing needs
     # it back early. Cost: no barge-in during the answer itself.
     - micro_wake_word.start:
+    # The conversation is over and nothing cancelled the timer, so whatever was
+    # said, it wasn't "stop" — bring the alarm back. Resumes from the top of the
+    # 8-chime cycle rather than where it left off, which is the right bias: the
+    # timer is still unacknowledged.
+    - if:
+        condition:
+          lambda: 'return id(alarm_suspended);'
+        then:
+          - globals.set:
+              id: alarm_suspended
+              value: 'false'
+          - script.execute: timer_alarm
   # No answer coming — restore music and re-arm.
   on_error:
     - script.stop: va_watchdog
@@ -327,6 +356,32 @@ voice_assistant:
         decibel_reduction: 0
         duration: 0.5s
     - micro_wake_word.start:
+    # Same as on_end: a failed pipeline definitely didn't cancel the timer, so
+    # an unacknowledged alarm must not be swallowed by a network hiccup.
+    - if:
+        condition:
+          lambda: 'return id(alarm_suspended);'
+        then:
+          - globals.set:
+              id: alarm_suspended
+              value: 'false'
+          - script.execute: timer_alarm
+
+  # Timers themselves live in Home Assistant — it parses "set a timer for ten
+  # minutes", counts down, and pushes the events here. Declaring any on_timer_*
+  # trigger is also what advertises timer support to HA; without one it reports
+  # "timers are not supported on this device" and refuses the intent outright.
+  on_timer_finished:
+    - script.execute: timer_alarm
+
+  # Cancelled from anywhere — "okay nabu, stop", the HA UI, an automation. This
+  # is the ONLY thing that truly ends the alarm by voice: clearing the suspend
+  # flag is what stops on_end from bringing it back.
+  on_timer_cancelled:
+    - globals.set:
+        id: alarm_suspended
+        value: 'false'
+    - script.stop: timer_alarm
 
 # ── Button: tap = Assist, hold = intercom ────────────────────────────────────
 # One button, two jobs, split by hold time:
@@ -337,6 +392,14 @@ voice_assistant:
 
 globals:
   - id: intercom_recording
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # True between "the wake word paused a ringing timer" and "we found out
+  # whether that conversation actually cancelled it". Cleared by
+  # on_timer_cancelled; consumed by voice_assistant's on_end / on_error.
+  - id: alarm_suspended
     type: bool
     restore_value: false
     initial_value: 'false'
@@ -397,6 +460,26 @@ script:
                 uploader_start("${intercom_url}", App.get_name().c_str());
             - logger.log: "intercom: recording"
 
+  # Rings until it is acknowledged with a button tap, or gives up after ~12 s.
+  # A timer that chimes once from across the room is a timer you miss.
+  #
+  # `announcement: true` is required — a raw speaker.play bypasses the mixer and
+  # fails with "Incompatible audio streams", same as the wake-word chime above.
+  # Reusing chime_sound keeps this to zero new assets; it is quiet (0.22 FS) and
+  # deliberately identical to the wake tone, so a distinct sound from
+  # tools/make-chime.py would be an improvement.
+  - id: timer_alarm
+    mode: restart
+    then:
+      - repeat:
+          count: 8
+          then:
+            - media_player.speaker.play_on_device_media_file:
+                id: voice_player
+                media_file: chime_sound
+                announcement: true
+            - delay: 1500ms
+
 binary_sensor:
   - platform: gpio
     id: ptt_button
@@ -423,20 +506,36 @@ binary_sensor:
           # ── tap: talk to Assist (second tap cancels) ──
           then:
             - script.stop: hold_watch
+            # A ringing timer claims the tap: silence it and do nothing else.
+            # Otherwise the only way to stop the alarm would be to talk over it.
+            # `alarm_suspended` covers the tap landing mid-conversation, after a
+            # wake word already paused the alarm — without it, the tap would
+            # look like an ordinary Assist cancel and on_end would ring again.
             - if:
                 condition:
-                  voice_assistant.is_running:
+                  or:
+                    - script.is_running: timer_alarm
+                    - lambda: 'return id(alarm_suspended);'
                 then:
-                  - voice_assistant.stop:
+                  - globals.set:
+                      id: alarm_suspended
+                      value: 'false'
+                  - script.stop: timer_alarm
                 else:
-                  - micro_wake_word.stop:
-                  # Same chime as the wake word — feedback, and it warms the
-                  # output chain before the reply arrives.
-                  - media_player.speaker.play_on_device_media_file:
-                      id: voice_player
-                      media_file: chime_sound
-                      announcement: true
-                  - voice_assistant.start:
+                  - if:
+                      condition:
+                        voice_assistant.is_running:
+                      then:
+                        - voice_assistant.stop:
+                      else:
+                        - micro_wake_word.stop:
+                        # Same chime as the wake word — feedback, and it warms
+                        # the output chain before the reply arrives.
+                        - media_player.speaker.play_on_device_media_file:
+                            id: voice_player
+                            media_file: chime_sound
+                            announcement: true
+                        - voice_assistant.start:
           # ── hold released: close out the broadcast ──
           else:
             - if:

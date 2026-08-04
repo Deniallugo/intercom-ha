@@ -16,7 +16,7 @@ module shell_body(depth) {
     difference() {
         hull() {
             linear_extrude(0.01)
-                rounded_rect(2*flat_half(), 2*flat_half(), max(0.5, radius - chamfer));
+                rounded_rect(2*flat_half_x(), 2*flat_half_y(), max(0.5, radius - chamfer));
             translate([0, 0, chamfer])
                 linear_extrude(depth - chamfer)
                     rounded_rect(outer_w(), outer_h(), radius);
@@ -26,6 +26,12 @@ module shell_body(depth) {
                 rounded_rect(outer_w() - 2*wall, outer_h() - 2*wall, max(0.5, radius - wall));
     }
 }
+
+// points along a circular arc, for building rotate_extrude profiles. Angles in degrees,
+// CCW positive, and a0/a1 may run either way — the caller picks the direction so the
+// points come out in polygon order.
+function arc_pts(cx, cz, r, a0, a1, n = 24) =
+    [for (i = [0 : n]) let (a = a0 + (a1 - a0)*i/n) [cx + r*cos(a), cz + r*sin(a)]];
 
 // screw boss with a self-tap pilot (or a heat-set insert bore), base at z=0
 module screw_boss(h, od, pilot) {

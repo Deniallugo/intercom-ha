@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Wyoming faster-whisper STT for Home Assistant.
+  Install to /Library/LaunchDaemons/ (root:wheel 0644) — see docs/REMOTE-VOICE.md.
+
+  ProcessType=Interactive is not cosmetic: a Background daemon is given a low
+  QoS class, and on Apple Silicon the scheduler parks low-QoS work on the two
+  efficiency cores. That alone turns a 0.6 s transcribe into several seconds.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.wyoming-whisper</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/opt/wyoming/venv/bin/python</string>
+    <string>-m</string>
+    <string>wyoming_faster_whisper</string>
+    <string>--uri</string>
+    <string>tcp://0.0.0.0:10300</string>
+    <string>--data-dir</string>
+    <string>/usr/local/var/wyoming/whisper</string>
+    <string>--model</string>
+    <string>small.en</string>
+    <string>--device</string>
+    <string>cpu</string>
+    <string>--compute-type</string>
+    <string>int8</string>
+    <string>--cpu-threads</string>
+    <string>8</string>
+    <string>--language</string>
+    <string>en</string>
+    <!-- Biases decoding toward this house's device names. Without it,
+         base.en hears "terra speaker" for "terrace speaker". -->
+    <string>--initial-prompt</string>
+    <string>Devices: kitchen, terrace, Voice S3. Home Assistant voice commands.</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/log/wyoming-whisper.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/log/wyoming-whisper.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Daemons inherit no HOME; without this the HF cache lands in / -->
+    <key>HOME</key>
+    <string>/usr/local/var/wyoming</string>
+    <key>HF_HUB_DISABLE_TELEMETRY</key>
+    <string>1</string>
+  </dict>
+</dict>
+</plist>

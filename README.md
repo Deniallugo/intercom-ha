@@ -63,7 +63,9 @@ intercom/
 ├── tests/                # pytest suite for the add-on
 ├── hardware/             # 3D-printable enclosures (kitchen, terrace, speaker, voice puck)
 ├── tools/mic-capture.py  # Bench tool — catch a device's mic upload as a WAV + verdict
+├── tools/wyoming-macos/  # launchd plists — remote Whisper/Piper on a Mac
 ├── docs/DEVICES.md       # Full hardware + wiring reference
+├── docs/REMOTE-VOICE.md  # Offloading STT/TTS off the Pi onto a LAN machine
 └── flash.sh              # ./flash.sh <device> — flash helper
 ```
 

@@ -23,6 +23,12 @@ ota:
 wifi:
   ssid: ${wifi_ssid}
   password: ${wifi_password}
+  # These devices stream mic audio up and TTS/music down, so the radio must not
+  # sleep between DTIM beacons. Measured with the default power save on voice-s3:
+  # 31/84/138 ms min/avg/max RTT at -49 dBm with 0% loss — a strong link idling
+  # most of the time. That throttles the TTS fetch to seconds of dead air before
+  # the reply starts playing.
+  power_save_mode: none
   ap:
     ssid: "${name} Fallback"
     password: ${ap_password}
