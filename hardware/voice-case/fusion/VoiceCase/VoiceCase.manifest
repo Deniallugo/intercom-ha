@@ -1,0 +1,12 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"script",
+	"author":	"",
+	"description":	{
+		"":	"Voice S3 desk puck — parametric enclosure for devices/voice-s3.yaml. Builds the shell, base plate, button cap, button holder, mic clamp or a fit coupon from the parameters in vc/params.py."
+	},
+	"version":	"",
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"ScriptIcon.svg"
+}

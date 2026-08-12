@@ -4,7 +4,7 @@ Parametric OpenSCAD enclosure for [`devices/voice-s3.yaml`](../../devices/voice-
 — a tabletop voice satellite shaped like the Home Assistant Voice PE, **with a 3.5 mm
 line-out instead of an internal speaker**.
 
-**72 × 76 × 35 mm** (41.5 over the button), rounded box, 45° chamfered top edge. One
+**73 × 74 × 35 mm** (41.5 over the button), rounded box, 45° chamfered top edge. One
 big button and the mic port on the top face; the devkit's USB-C out the rear wall and the
 DAC board's own 3.5 mm socket out the `+x` side. Wiring for everything inside is in
 [../../docs/DEVICES.md](../../docs/DEVICES.md) → *Voice S3 — bare ESP32-S3*.
@@ -16,23 +16,23 @@ line-out device, so the driver is replaced by the DAC's own 3.5 mm socket used s
 through the wall, and the box becomes a board carrier. Every dimension is set by the two
 boards, not by an acoustic volume.
 
-## Why it is 72 × 76 × 35
+## Why it is 73 × 74 × 35
 
 Neither number is a free choice. Both have derived floors, and the asserts name the
 value they need rather than failing as a pile of unrelated collisions further down:
 
 ```
-plan_x_min = 70.8    one chain: boss line -> devkit -> shared wall -> DAC -> socket
-plan_y_min = 75.4    (devkit length 75.4 | DAC vs bosses 66.2)
+plan_x_min = 72.8    one chain: boss line -> devkit -> shared wall -> DAC -> socket
+plan_y_min = 73.4    (devkit length 73.4 | DAC vs bosses 66.2)
 cavity_min = 27.25   (bare 16.1 | mic 23.7 | button holder 27.25)
 ```
 
-**It is not square, because the two axes are not set by the same thing.** Depth is the 65 mm
-board plus two walls, two register lips and two pocket clearances — 75.4, and there is nothing
+**It is not square, because the two axes are not set by the same thing.** Depth is the 63 mm
+board plus two walls, two register lips and two pocket clearances — 73.4, and there is nothing
 on that axis to save. Width is one chain read inward from the `+x` wall: the socket fixes the
 DAC, the DAC fixes the devkit one shared wall inboard of it, and `plan_x` only has to be big
-enough that the devkit's outer wall still clears the `-x` corner bosses — 70.8. Getting here
-took four steps.
+enough that the devkit's outer wall still clears the `-x` corner bosses — 72.8. Getting here
+took five steps.
 
 It was **96** until the devkit stopped being centred. The old rule was that a board
 spanning nearly the full depth has no y escape from the four full-depth M3 bosses, so it
@@ -43,8 +43,11 @@ just as well as centring does. Centred, the DAC had to begin beyond **half** the
 pocket, so the `-x` half of the plate — 17.6 mm across the whole depth — held nothing at
 all. Pushed over, the DAC begins just past the pocket's own edge. That took it to 80.
 
-Then the board got measured properly: **`s3_l` 30 → 26** took 4 mm off the pocket's width and
-**`s3_w` 67 → 65** took 2 mm off its length. 78, then 76.
+Then the board got measured properly, which took several goes at both dimensions: **`s3_w`
+67 → 65 → 63** walked `plan_y` down with it, and **`s3_l` settled at 28** via 26 and 25 — both of
+those *derived* from something rather than measured. See the note on `s3_l` in params: each axis of
+this case is one board dimension plus fixed overheads, so both are caliper numbers and nothing
+else.
 
 Then the two beds started **sharing one wall** instead of standing two walls back to back with
 a 3 mm gap between them: 1.6 + 3 + 1.6 became a single 2.0 mm rib, and `plan_x` lost 4 mm.
@@ -55,9 +58,9 @@ have bought nothing but a wider `+x` half than the DAC needs.
 Two smaller things moved along the way: `dac_pos_y` went to **0**, because the DAC pocket is
 38.2 mm deep and has to pass *between* the `+y` and `-y` bosses, so every millimetre of offset
 costs two of `plan_y` and at the old 14.7 the DAC alone demanded 95.6; and the mic came back
-from y 28 to **24**, which is where it stops running onto the chamfer.
+from y 28 to **23**, which is where it stops running onto the chamfer.
 
-Net: **−32 % of material** (96.3 → 65.5 cm³ for shell + plate) and **−38 % of desk**.
+Net: **−32 % of material** (96.3 → 65.8 cm³ for shell + plate) and **−39 % of desk**.
 VPE manages 86 mm with a purpose-built PCB; this undercuts it on two off-the-shelf boards,
 at the cost of being 35 mm tall instead of flat.
 
@@ -82,7 +85,7 @@ the new minimum.
 `+y` is the front, `-y` the rear, `z` runs from the top face down into the box.
 
 ```
-base plate — both boards, looking down (72 x 76)      o = M3 screw
+base plate — both boards, looking down (73 x 74)      o = M3 screw
 
     +-----------------------------------------+
     | | | +--------------------++----------+  |
@@ -90,16 +93,16 @@ base plate — both boards, looking down (72 x 76)      o = M3 screw
     | |=| |                    ||          |  |     +y  front
     | |=| |                    ||          |  |
     | |=| |      devkit        ||   DAC    |  |
-    | |=| |      26 x 65       ||  20 x 33 |]--- socket, y +10.5
+    | |=| |      28 x 63       ||  20 x 33 |]--- socket, y +10.5
     | |=| |                    ||          |  |
     | |=| |                    ||          |  |
     | |=| |                    ||          |  |
     | |o| |                    ||          |  |
-    | | | +-##--[ USB ]---##---++----------+  |
+    | | | +-###-[ USB ]--###---++----------+  |
     | | |                                     |     -y  rear
     +-----------------------------------------+
         ^ -x strip: boss clearance, and both long vents
-              ^ rear stops, 1.7 mm, flanking a 23.8 mm notch
+              ^ rear stops, 3.2 mm, flanking a 22.8 mm notch
                                  ^ ONE shared wall, 2.0 mm
 
     devkit parked against the -x bosses with 0.8 mm of air (s3_pos_x is derived from
@@ -120,7 +123,7 @@ base plate — both boards, looking down (72 x 76)      o = M3 screw
 
     the two beds SHARE one 2.0 mm wall — each pocket still draws its own 1.6 mm on that
     side, and they overlap into a single rib. That replaced 1.6 + 3 + 1.6 mm of wall,
-    gap, wall, and is what took plan_x from 76 to 72.
+    gap, wall, and is what took plan_x from 76 to 72; the 28 mm board put it at 73.
 
     the vents are down to FOUR: two long ones in the -x strip (dead plate the bosses
     force on us anyway, and it runs right along the devkit) and one in each bay fore and
@@ -394,6 +397,23 @@ Render one part manually:
 Select with the normal variable flag `-D part="..."` (a `$`-prefixed variable would be
 ignored by `-D`).
 
+### ...or in Fusion 360
+
+The same model, same parameters and same asserts are ported to a Fusion 360 script in
+[fusion/](fusion/) — standard sketches, extrudes, revolves, lofts and combines, one
+component and one timeline group per part, taking the same part names as `-D part=`. Its
+`fusion/test.sh` needs no Fusion at all: it runs the design checks in plain Python, then
+renders the port's own geometry through OpenSCAD and diffs it against `stl/`:
+
+```bash
+./fusion/test.sh          # design floors, then every part vs the OpenSCAD render
+./fusion/test.sh --png    # ...and a picture of each part in fusion/tests/emitted/
+```
+
+See [fusion/README.md](fusion/README.md) for how to register the script folder in Fusion
+and where the two models deliberately differ (true arcs instead of `$fn = 64`, and no
+Fusion user parameters — Python is still the parametric engine).
+
 ## Print the coupon first
 
 The coupon is the button bore, its pilots and the mic seat cut out of the real top face,
@@ -451,7 +471,7 @@ coupon and the holder rather than anything large.
 - Mic board doesn't seat flat → `mic_seat_depth`, `clr`.
 
 **`s3_w` and `s3_l` set the case size.** Both were first recorded over something that is not
-the laminate — 67 × 30 — and both are now measured off the PCB: **65 × 26**. Depth is
+the laminate — 67 × 30 — and both are now measured off the PCB: **63 × 28**. Depth is
 `2·wall + 2·clr + 2·reg_t + s3_w + 2·s3_board_clr`, so a millimetre off `s3_w` is still a
 millimetre off the puck.
 
@@ -500,7 +520,7 @@ All in [modules/params.scad](modules/params.scad). Common edits:
 | `plan_x`, `plan_y`, `cavity_depth` | footprint and interior height. **All three have derived floors** — `plan_x_min()`, `plan_y_min()`, `cavity_min()`; the asserts name the number needed |
 | `shared_wall` | the single wall between the two beds. Each pocket still draws its own `pocket_wall` there and they overlap into exactly this |
 | `s3_comp_h` | tallest thing on the devkit's component side. This sets the case height |
-| `s3_w`, `s3_l` | devkit PCB footprint (65 × 26, measured off the laminate). These set the whole case size |
+| `s3_w`, `s3_l` | devkit PCB footprint (63 × 28, measured off the laminate). One sets `plan_y`, the other `plan_x` — **measure, never infer** |
 | `s3_pos_x` | devkit x — **derived**, parked one `shared_wall` inboard of the DAC's cavity. The DAC is the fixed end of the chain because its socket has to reach the `+x` wall |
 | `s3_boss_margin` | that air gap. It is in `plan_x_min()` millimetre for millimetre |
 | `boss_inset` | how far the corner bosses sit into the corners. It is the `-x` end of the width chain, so it sets `plan_x`; floored at 9.6 by the register lip |
@@ -562,10 +582,10 @@ will name the collision rather than let you find it with a printed part.
 - 1× **11 × 11 mm 4-pin** tactile switch with a pin plunger (the 12×12 family). Measure its
   body height, plunger and travel — see `sw_*` in params. **No return spring**: this switch
   has its own, which is the whole reason the coil spring came out
-- 4× M3 heat-set inserts + 4× M3×8 screws (M3×10 if your inserts are deep)
+- 4× M3 heat-set inserts + 4× M3×8 screws for the corners (M3×10 if your inserts are deep)
+- 2× M2×10 self-tap screws for the button holder — they run the full height of the collar's
+  screw posts before they reach the blind pilots in the top face
 - 2× M2×8 self-tap screws for the mic clamp (they reach through the bar into the posts)
-- 2× M2×10 self-tap screws for the button holder — they run the full height of the
-  collar's screw posts before they reach the blind pilots in the top face
 - 1× foam/EVA gasket **ring** for the mic, ⌀12 mm outer with a bore that clears the
   module's port — punch it out of foam tape; a solid disc would seal the port shut
 - 4× self-adhesive rubber feet (stuck straight onto the flat plate — no recesses)
@@ -573,14 +593,15 @@ will name the collision rather than let you find it with a printed part.
 
 ## Assembly
 
-1. **Heat-set the four M3 inserts** into the shell's corner bosses, from the open
-   (base) side.
+1. **Heat-set the four M3 inserts** into the shell's corner bosses, from the open (base) side.
+   Only the corners get inserts — the button holder and the mic clamp are M2 self-tap into
+   printed pilots, which a built one has shown is enough.
 2. **Build the button module on the bench**, before it goes anywhere near the shell.
    Reaching down the open mouth of the collar: drop the 11 × 11 switch in **plunger up**,
    with its four pins through the four windows in the floor, until the body sits on the cross
    of floor between them and between the four locating ribs, which give it 0.4 mm of play and no
    more. It stands well proud of the collar — that is correct, it reaches up into the cap. Turn the holder over and **solder the leads to the pins from underneath**;
-   that is the only side you can reach them from, so do it now. Leads to **G4** and **GND**,
+   that is the only side you can reach them from, so do it now. Leads to **G38** and **GND**,
    left long.
 3. **Bench-test the whole action**: press the cap into the holder's bore until the lip
    catches. Now press the dome. You should get about half a millimetre of travel and a

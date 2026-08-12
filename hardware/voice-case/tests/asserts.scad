@@ -160,7 +160,8 @@ assert(s3_rear_notch() >= s3_usb_w(),
            "s3_rear_notch() is ", s3_rear_notch(), " and the window is ", s3_usb_w()));
 assert(s3_rear_notch() <= s3_l + 2*s3_board_clr - 2,
        str("rear stops have no width left — the notch is ", s3_rear_notch(),
-           " in a cavity of ", s3_l + 2*s3_board_clr, ". Reduce s3_usb_slop or widen the pocket"));
+           " in a cavity of ", s3_l + 2*s3_board_clr,
+           ". s3_usb_slop() tracks s3_board_clr, so this means the pocket itself is too narrow"));
 assert(s3_pocket_y1() > s3_cy() + s3_w/2, "devkit pocket has no +y wall to locate the board");
 // Reach check. A USB-C plug has only ~6.5 mm of shell before its overmold. The board no
 // longer registers against this wall — it is held 2.2 mm off it by the rear stops — so what
@@ -537,9 +538,9 @@ assert(abs(s3_pos_x) + s3_pocket_f()[0]/2 <= lip_inner_half_x(), "devkit pocket 
 // may not do is run past the lip's OUTER face, which is what the shell cavity accepts.
 assert(max(abs(s3_pocket_y0()), abs(s3_pocket_y1())) <= lip_outer_half_y(),
        "devkit pocket runs past the register lip's outer face — the plate would not drop in");
-assert(lip_outer_half_y() - (s3_cy() + s3_w/2 + s3_front_clr()) >= reg_t - 0.001,
+assert(s3_front_wall_t() >= reg_t - 0.001,
        str("devkit pocket's front wall is thinner than the register lip it stands on — only ",
-           lip_outer_half_y() - (s3_cy() + s3_w/2 + s3_front_clr()), " mm"));
+           s3_front_wall_t(), " mm"));
 assert(dac_pocket_x1() <= lip_inner_half_x(), "DAC pocket crosses the register lip");
 assert(abs(dac_pos_y()) + dac_pocket_f()[1]/2 <= lip_inner_half_y(), "DAC pocket fouls the register lip (y)");
 assert(dac_pocket_x0() < dac_pocket_x1(), "DAC pocket has no length — the board is too long for the plate");
@@ -558,35 +559,55 @@ assert(s3_seat_h > 0 && s3_lip > 0, "devkit pocket needs a floor and a retaining
 assert(s3_board_clr > 0, "devkit pocket has no clearance at all — the board would not go in");
 assert(s3_board_clr <= board_clr,
        "the devkit pocket is looser than the DAC's, which has its socket to locate it — that is backwards");
-assert(s3_board_clr < 1.0,
-       "s3_board_clr is back at the value the board rattled in — print part=\"fit\" and dial it in");
+// No upper bound tied to a remembered print any more. There WAS one at 1.0, on the grounds that
+// the board rattled there — but that was measured when s3_l said 30 against a real 28 mm board, so
+// the rattle was 2 mm of wrong board dimension, not clearance. What is worth bounding is the thing
+// that actually goes wrong if this grows: the board drifting far enough in x to hide a USB port
+// behind the wall. s3_usb_slop() is derived from it, so that is handled by construction — this
+// just catches a value big enough to mean something has been mistyped.
+assert(s3_board_clr <= 2.0,
+       "s3_board_clr is large enough that the board is not in a pocket so much as a tray");
 // ---- the front clearance the tab has to reach across ----
 // Derived, so it is whatever depth `plan` did not spend on the board. It must be at least the
 // pocket clearance (or the board is pinched between the stops and the front wall) and it must
 // not run away, because the tab's underside drops 1:1 with it and eventually reaches the
 // pocket floor.
-assert(s3_front_clr() >= s3_board_clr - 0.001,
-       str("no room left in front of the devkit — the board is pinched between the rear stops and the front wall (", s3_front_clr(), ")"));
+// The board's y travel is s3_board_clr, at the rear, between the stops and the front wall — the
+// cavity is cut to the board's nominal front edge, so all of the play is behind it.
+assert(s3_board_clr > 0.2, "no y travel for the devkit — it would be pinched between the stops and the front wall");
+// The front gap is the other half of that travel, and it is what the tab reaches across.
+assert(s3_front_gap > 0,
+       "the cavity ends at the board's front edge — no y clearance in front of it at all");
+// The relief runs the board's whole length now, so what has to hold is that it still stops short
+// of the front wall rather than undercutting its base.
+assert(s3_relief_front_setback > 0 && s3_relief_front_setback < s3_front_gap + pin_row_w,
+       "devkit relief setback does not leave the front wall a base to stand on");
 if (s3_tab_cover > 0) {
     // The tab is only printable because its underside is a 45 deg ramp, and the ramp needs
     // room between where it meets the wall and the top of that wall.
-    assert(s3_wall_top() > s3_tab_z1(),
-           str("no room for the retention tab's 45 deg ramp under the pocket wall's top — s3_lip must exceed ",
-               s3_lip + s3_tab_z1() - s3_wall_top()));
+    // The tab is a small nib at the top of its own ramp now, not a block running to the top of
+    // the pocket wall — but it still has to fit under that top.
+    assert(s3_tab_h > 0, "retention tab has no height above its ramp");
+    // s3_lip() is derived from the tab, so these two planes coincide by construction. The check
+    // is that the derivation still says so — if it drifts, the tab is either poking out of the top
+    // of the wall or buried below it.
+    assert(abs(s3_wall_top() - s3_tab_top()) < 0.001,
+           str("retention tab is no longer flush with the top of the pocket wall — wall top ",
+               s3_wall_top(), ", tab top ", s3_tab_top()));
     // ...and the underside must stay clear of the pocket FLOOR. This is what bounds
-    // s3_front_clr from above: every millimetre of it drops the ramp a millimetre.
+    // s3_board_clr from above: every millimetre of board travel drops the ramp a millimetre.
     assert(s3_tab_z0() > s3_seat_h + 0.2,
-           str("retention tab's ramp reaches the pocket floor — s3_front_clr() is ", s3_front_clr(),
+           str("retention tab's ramp reaches the pocket floor — s3_lip is ", s3_lip,
                " and the ramp starts at ", s3_tab_z0(), " against a floor at ", s3_seat_h));
     // The preload is what makes this a hold rather than a cover. Small and self-limiting is
     // the whole idea — the ramp is 45 deg, so a big number here is a press fit, not a
     // slide-in, and the board would seat proud of the floor.
-    assert(s3_tab_preload > 0, "no preload — the tab merely covers the board and it can still knock");
-    assert(s3_tab_preload <= 0.4,
-           str("tab preload is ", s3_tab_preload,
-               " mm — that is a press fit, not a slide-in, and the board would ride up on it"));
-    assert(s3_tab_preload < pcb_t/2,
-           "tab reaches more than half way down the PCB's edge — the board would not go under it");
+    // The bite is DERIVED now, because the tab is anchored to the top of the wall rather than to
+    // the board. All that can be checked is the one thing that would make it meaningless — a tab
+    // so low the board cannot be pushed under it at all.
+    assert(s3_tab_bite() < pcb_t/2,
+           str("tab reaches more than half way down the PCB's edge (bite ", s3_tab_bite(),
+               ") — the board would not go under it"));
     // It reaches in over the board, which is the point — but not so far it covers whatever
     // is at the middle of that end, and not so wide it reaches the header rows on the long
     // edges. 4 mm is roughly one header body plus its solder fillet.

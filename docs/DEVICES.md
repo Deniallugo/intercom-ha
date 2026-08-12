@@ -51,7 +51,7 @@ and is the only one whose mic and speaker sit on separate I²S peripherals.
 | DAC | PCM5102A on I²S bus 0 (BCK G5, LCK G6, DIN G7) → 3.5 mm stereo jack |
 | Mic | INMP441 MEMS on I²S bus 1 (SCK G10, WS G11, SD G12), left slot |
 | Amplification | None on board — the jack feeds a powered speaker or an external amp |
-| Button | One momentary switch on G4 to GND (active LOW, internal pull-up) |
+| Button | One momentary switch on G38 to GND (active LOW, internal pull-up) |
 | Power | USB-C |
 
 Unlike the other two, capture and playback run on **two separate I²S
@@ -448,13 +448,13 @@ lands on silence rather than on the sound. Regenerate with `tools/make-chime.py`
 
 | Pin | Wiring |
 |---|---|
-| **G4** | one leg of a momentary switch; other leg to **GND** (internal pull-up, active LOW) |
+| **G38** | one leg of a momentary switch; other leg to **GND** (internal pull-up, active LOW) |
 
 #### Pins to avoid on this board
 
 G26–G32 are the SPI flash and **G33–G37 the octal PSRAM** — using any of them
 kills the board's memory. G19/G20 are USB, G43/G44 are UART0, and G0/G3/G45/G46
-are strapping pins. The G4–G12 block used here is clear of all of that.
+are strapping pins. The G5–G12 block and G38 used here are clear of all of that.
 
 ---
 

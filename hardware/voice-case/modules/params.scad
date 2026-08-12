@@ -61,8 +61,8 @@ chamfer      = 5;          // 45 deg top-edge chamfer (prints support-free top-d
 // depth is the 65 mm board and there is no wall to save along it. The two floors are now 4 mm
 // apart, and spending that on squareness would be spending it on nothing — the +x half of the
 // case would just get wider than the DAC needs.
-plan_x       = 72;         // across x — the two beds side by side, sharing one wall
-plan_y       = 76;         // along y — the devkit's length, and nothing else
+plan_x       = 73;         // across x — the two beds side by side, sharing one wall
+plan_y       = 74;         // along y — the devkit's length, and nothing else
 // Interior height, floored by cavity_min() at 28.35 for an 11 mm component stack. What sets
 // it is not the devkit (which needs only 16.1) and not even the button holder's own floor —
 // it is the four SWITCH PINS hanging through that floor, whose tips reach 13.25 mm down and
@@ -77,6 +77,15 @@ cavity_depth = 29;
 // the box, so this joint gets opened repeatedly. Same call the speaker case made.
 boss_od       = 8;
 insert_m3_d   = 4.0;       // heat-set insert bore
+// Insert LENGTH, which is what a boss's height has to cover. It only mattered for the corner
+// pillars before — they are full-depth, so any insert fits — but every fastener in the case is
+// M3-into-an-insert now, and the two on the top face stand on 3 mm of wall. Those need real
+// bosses, and this is the number that sizes them. [MEASURE your inserts: 5.7 and 4.0 are both
+// common for M3, and the short ones would let btn_boss_h and mic_post_h come back down.]
+// It only bears on the CORNER pillars, which are full-depth and swallow any insert. The two
+// top-face joints briefly used inserts too and this sized their bosses; they went back to M2
+// self-tap (see below), so this is documentation now rather than a constraint.
+insert_m3_h   = 5.0;
 screw_clear   = 3.4;
 screw_cbore_d = 6.2;       // counterbore in the base plate's OUTER face, so no screw
 screw_cbore_h = 1.6;       // head stands proud to scratch the desk
@@ -92,16 +101,22 @@ boss_inset    = 10;
 // ---- boards [confirm vs hardware] ----
 // MEASURED off the actual boards.
 //
-// s3_l was 30 and is now 26 — the pocket built to 30 was 4 mm wider than the board needed,
-// which is most of why the devkit rattled in it. 30 was measured over something that is not
-// the laminate (a DevKitC-1's PCB is 25.4 across), and a pocket referenced to anything but
-// the PCB edge cannot grip the PCB edge.
+// s3_l is 28, MEASURED, and it took three wrong values to get there — worth recording, because
+// every one of them was a derived number standing in for a measured one:
+//   30  inherited, measured over something that is not the laminate
+//   26  back-solved from "the pocket can be 4 mm narrower". A pocket is board + 1.2 clearance
+//       + 3.2 walls, so a narrower pocket does not imply an equally narrower board, and this
+//       is where the 2 mm went missing
+//   25  from "a mm narrower than it should be", read as the board measuring less when it meant
+//       the SPACE was a millimetre too tight — the wrong direction, on top of the wrong value
+// The lesson is in the file rather than in a commit message: s3_l sets plan_x through the whole
+// width chain, so it is a caliper number and nothing else. Do not infer it from the pocket.
 //
-// s3_w was 67 from the same session and is now 65, measured. It is the binding constraint on
-// the whole footprint — plan_y_from_depth() is just this plus two walls, two lips and two
-// clearances — so a millimetre off it is a millimetre off the puck, and the 2 mm took the
-// case from 78 to 76.
-s3_w = 65; s3_l = 26;      // ESP32-S3 devkit; LONG AXIS ALONG Y, USB-C end at the rear
+// s3_w is 63, MEASURED, having come down from 67 via 65. plan_y_from_depth() is just this plus
+// two walls, two lips and two clearances, so it is the ONLY thing setting the case's depth and a
+// millimetre off it is a millimetre off the puck: 67 -> 65 -> 63 walked plan_y 78 -> 76 -> 74.
+// Same rule as s3_l — a caliper number, nothing inferred.
+s3_w = 63; s3_l = 28;      // ESP32-S3 devkit; LONG AXIS ALONG Y, USB-C end at the rear
 // ONE wall between the two beds, not two standing back to back with a gap. Each pocket still
 // draws its own `pocket_wall` on that side, but the cavities are set exactly this far apart,
 // so the two walls overlap and the union comes out as a single rib of exactly this thickness.
@@ -127,15 +142,18 @@ dac_l = 33;                // board size along y (its LONG dimension)    [measur
 // counterbore off there instead of seating against wall.
 jack_cb_rim_margin = 0.1;
 // MEASURED CORRECTION, from the board sitting in the printed plate. The derived chain (pocket
-// floor + pcb_t + dac_jack_axis) puts the socket 3 mm LOWER than where it actually ends up —
-// the board rides proud, most likely because the real socket is taller than the 6.5 recorded
-// and bottoms in the recess before the PCB reaches its seating plane.
+// floor + pcb_t + dac_jack_axis) puts the socket LOWER than where it actually ends up — the
+// board rides proud, most likely because the real socket is taller than the 6.5 recorded and
+// bottoms in the recess before the PCB reaches its seating plane.
 //
-// Applied to the SHELL's counterbore and plug hole only. The plate is untouched: its recess
-// stays where it was printed, and being 3 mm deeper than the socket needs is harmless. This is
-// a trim on estimate error, not a design change — if dac_jack_h and dac_jack_axis ever get
-// measured properly, this should fall back to 0.
-jack_z_rise = 3.0;
+// 2.0, having been 3.0: the printed hole sat a millimetre high. Note the sign — this RAISES the
+// hole (z runs down from the top face), so moving the hole DOWN means taking the correction off.
+//
+// Applied to the SHELL's counterbore and plug hole only. The plate is untouched: its recess stays
+// where it was printed, and being deeper than the socket needs is harmless. This is a trim on
+// estimate error, not a design change — if dac_jack_h and dac_jack_axis ever get measured
+// properly, this should fall back to 0.
+jack_z_rise = 2.0;
 // Deep enough to HOUSE THE SOCKET. The board sits component-side DOWN, so the socket hangs
 // below the PCB into a recess in this floor — which is the only way to get the jack hole
 // near the base plate. Component-side UP put the axis 8 mm above the plate at best, leaving
@@ -152,10 +170,20 @@ dac_lip    = 4.0;
 mic_board_w = 17; mic_board_l = 15;   // INMP441 breakout, 17 x 15 [measured]
 pcb_t             = 1.6;
 pocket_wall       = 1.6;   // friction-pocket wall (boards without usable mount holes)
+// The two top-face joints are M2 SELF-TAP, not M3 into inserts, and that is a decision rather
+// than an oversight. They were converted to M3 inserts on the argument that the holder hangs on
+// 2 mm of thread in 2.2 mm of blind PLA and takes the finger load — theoretically the weakest
+// thing in the box. A printed one then went together and worked, which beats the argument.
+//
+// Reverting was not free either way: an M3 insert is ~5 mm long against a 3 mm wall, so both
+// joints had to grow bosses on the inner face, and the button's had to move out to pitch 34 to
+// stop its boss fighting the holder's own collar for the same ring of wall. Small self-tap
+// bosses cost none of that. The corner screws stay M3-into-inserts — that joint really is opened
+// and closed repeatedly.
 board_screw_pilot = 1.6;   // M2 self-tap
-screw_m2_d        = 2.0;   // the screw itself. Only used to work out how far a part can
-                           // float in its own clearance holes, which is what sets the
-                           // button holder's bore clearance.
+screw_m2_d        = 2.0;   // the screw itself. Used to work out how far a part can float in
+                           // its own clearance holes, which is what sets the button holder's
+                           // bore clearance.
 // PER-SIDE clearance in the friction pockets — deliberately looser than the global `clr`,
 // which is for parts that locate precisely. Both pockets were first built on `clr` (0.4)
 // and both came out SMALLER than the real boards: printed pocket walls come in slightly
@@ -171,15 +199,22 @@ board_clr = 1.0;
 // of slack is 2 mm of rattle — and it lands straight on the USB-C window, which is the one
 // opening that has to line up with something.
 //
-// 0.6 is a deliberate midpoint, not a measurement: at 0.4 the printed pocket came out
-// smaller than the board and at 1.0 the board moves in it, so the truth is between them and
-// this is the number to tune. Do NOT tune it by reprinting the plate — that is four hours a
-// go. Print `part="fit"`: a 25 mm slice of the front of this pocket, including the retention
-// tab, that tells you in ten minutes whether the board slides in and stays put.
+// 0.5 per side, and what matters is that every printed data point behind the earlier values
+// turned out to be measuring s3_l rather than this:
+//   0.4  "pocket came out smaller than the board"  — taken with s3_l 30 vs a real 28
+//   1.0  "board rattles in it"                     — same wrong 30
+//   0.6  "almost impossible to fit"                — taken with s3_l 26, i.e. a 27.2 mm cavity
+//        on a 28 mm board: 0.8 mm of interference, and nothing to do with clearance at all
+// So none of them says anything about this number, and with s3_l finally measured 1.0 was simply
+// generous — 1 mm came back out of the total.
 //
+// Nothing is lost to what is left: the board's y is set by the rear stops and the tab, and its x
+// play feeds s3_usb_slop(), which is derived from this so the window tracks it.
+//
+// Tune with `part="fit"`, not by reprinting the plate:
 //   board will not go in / needs force  ->  raise in 0.1 steps
 //   board rocks side to side            ->  lower in 0.1 steps
-s3_board_clr = 0.6;
+s3_board_clr = 0.5;
 // ---- devkit retention: the pocket is a SLOT, not a tray ---------------------------
 // Three features, and the reason there are three is that the devkit is the only board in
 // here with nothing else locating it:
@@ -212,14 +247,25 @@ s3_rear_stops  = true;
 // ends before it is in, which is a part you cannot put together. At pcb_t it catches the full
 // edge and the rear corners still clear it on a 2 deg tilt.
 s3_rear_stop_h = pcb_t;
-s3_tab_cover  = 1.2;       // how much of the board's front edge the tab sits over
+// The board's y clearance at the FRONT, between its nominal front edge and the cavity's front
+// face. Explicit now: the cavity used to be cut to exactly the board's edge, so all of the y play
+// was the s3_board_clr behind it — 0.5 mm total against 1.0 in x, and the printed pocket came out
+// too short to take the board. 1.0 here makes it 1.5 total, and being its own number means the
+// tab's reach and ramp track it instead of silently assuming the cavity ends at the board.
+s3_front_gap  = 1.0;
+s3_tab_cover  = 0.8;       // how much of the board's front edge the tab sits over
+// How far the tab continues above its ramp. It used to run all the way to the top of the pocket
+// wall, which made it a 4 mm block hanging over the board for no reason — the ramp is the part
+// that does the work and the rest was material. 1.0 leaves a small nib at the ramp's top.
+s3_tab_h      = 1.0;
 s3_tab_w      = 10;        // across x, centred — narrow, to stay between the header rows
-// PRELOAD, not a gap. The tab's underside is derived from where the board's front edge
-// actually is, so it holds whatever the front clearance turns out to be — and that clearance
-// is now derived too (s3_front_clr), so a fixed gap would silently stop touching the board
-// the moment `plan` or s3_w moved. 0.1 mm is a push, not a press; the ramp is 45 deg so it
-// is self-limiting. Raise toward 0 if the board will not go in.
-s3_tab_preload = 0.1;      // how far the ramp reaches below the board's top face, AT its edge
+// How far the ramp reaches below the board's top face, AT the board's own edge. SIGNED: positive
+// bites into the laminate and preloads the board, negative leaves a clearance above it.
+//
+// The tab's z is anchored to the TOP OF THE WALL, not to the board: its top face is flush with
+// s3_wall_top() and the ramp hangs below from there. So there is no bite input any more —
+// s3_tab_bite() is derived, and reports where the tab happens to fall relative to the laminate.
+// To move the tab, move what it is anchored to: s3_lip, or s3_tab_h.
 // ---- pin relief: why the pocket floors are not flat ------------------------------
 // Soldered headers leave pin TAILS protruding through the solder side. On a flat floor
 // the board then rests on those tails instead of the floor, sitting ~2 mm proud — and a
@@ -235,16 +281,23 @@ s3_tab_preload = 0.1;      // how far the ramp reaches below the board's top fac
 board_pin_h = 2.0;         // solder-side pin tail protrusion [MEASURE]
 pin_row_w   = 6;           // width of the relief strip along each long edge
 pin_land    = 4;           // supported land left at each short end
-// The strips used to run flush to the cavity face, which UNDERCUT THE POCKET WALL'S BASE:
-// the wall then stands on nothing at its inner face and its exposed height grows by the
-// relief depth. This setback keeps a strip of full-height floor at the wall base. It costs
-// nothing — the header row sits ~2.5 mm in from the board edge, so a 1.2 mm setback still
-// leaves the relief right under it.
-pin_relief_setback = 1.2;
-// The devkit's relief length is PINNED rather than derived from s3_w, so growing the board
-// lengthens its pocket without lengthening the channels. Anchored at the rear end, which
-// does not move when s3_w changes (s3_cy() shifts by exactly half the growth).
-s3_relief_len = 57;
+// The strips used to run flush to the cavity face, which UNDERCUT THE POCKET WALL'S BASE: the
+// wall then stands on nothing at its inner face and its exposed height grows by the relief depth.
+// This setback keeps a land of full-height floor at the wall base.
+//
+// 0.5, down from 1.2, because at 1.2 the relief was missing the pins it exists for. The claim
+// that a header row sits ~2.5 mm in from the board edge was too generous — on this devkit they
+// are closer to the edge than that, and a strip stopping 1.2 mm short of the CAVITY face stops
+// well short of the BOARD's. At 0.5, with s3_board_clr at 1.0, the strip's outer edge now runs
+// 0.5 mm PAST the board's edge, so the whole outer 5.5 mm of the underside is relieved and the
+// tails cannot land on floor.
+pin_relief_setback = 0.5;
+// The devkit's channels run the board's WHOLE length: off the open rear end, and up to this
+// setback short of the front wall. They were pinned to 57 of the 63 mm board with a pin_land at
+// each end, which left the tails coming down on solid floor at both ends — the exact failure the
+// relief exists to prevent. End lands are not needed: the strips are along the +-x edges, so the
+// board still seats on a 16 mm central land that runs the full length anyway.
+s3_relief_front_setback = pin_relief_setback;
 // The DAC channel stops SHORT of the +x wall rather than running off the floor's edge. It is
 // the jack's access, and it needs a land between it and that wall, not an open end.
 dac_relief_wall_gap = 3.0;
@@ -260,9 +313,6 @@ function dac_recess_w()  = max(dac_cut_w, dac_jack_w);
 // bare 1.6 mm because the floor height is what sets the USB-C receptacle height, and
 // the rear window has to stay a BOUNDED hole with material left below it.
 s3_seat_h = 3.5;           // pocket floor under the devkit
-// Back at 3.5. It went to 4.5 to fit the retention tab's 45 deg ramp between the PCB's top
-// face and the wall's top; with the tab's underside now BELOW that face the ramp starts a
-// millimetre lower and 3.5 is enough again (it needs 2.7). Asserted either way.
 s3_lip    = 3.5;           // pocket wall standing above the seated board
 s3_comp_h = 11;            // tallest thing on the devkit's component side: soldered
                            // 2.54 headers (~8.5) plus dressed wire, 11 mm total [measured]
@@ -293,10 +343,10 @@ function s3_cavity_hw() = s3_l/2 + s3_board_clr;      // board cavity half-width
 // shared wall, so "do the blocks intersect" answers yes by design and tells you nothing.
 function s3_cavity_x1()  = s3_pos_x + s3_cavity_hw();
 function dac_cavity_x0() = dac_cx() - dac_w/2 - board_clr;
-// Mic on the front edge, but no longer at y 28: with plan at 76 the flat top face ends at
-// 33 and the board + posts are 15.8 deep, so 25.1 is the hard limit and 24 leaves a
-// millimetre on it.
-mic_pos   = [ 0, 24];      // top face, front edge — centred in x, on the button's axis
+// Mic on the front edge, and it walks in every time plan_y does: the flat top face ends at
+// flat_half_y, and the board + posts are 15.8 deep. At plan_y 74 that caps it at 24.1, so 23
+// leaves a millimetre on the chamfer.
+mic_pos   = [ 0, 23];      // top face, front edge — centred in x, on the button's axis
 btn_pos   = [ 0,  0];      // top face, centred
 
 // ---- rear wall (-y): devkit USB-C ----
@@ -313,7 +363,12 @@ usb_recept_h  = 3.2;       // USB-C receptacle height above the PCB [confirm]
 s3_usb_ports  = 2;         // the DevKitC-1 has two
 s3_usb_port_w = 9.0;       // one USB-C receptacle across [confirm]
 s3_usb_gap    = 2.0;       // between the two
-s3_usb_slop   = 3.0;       // extra, to absorb the board's play in its oversize pocket
+// Extra window width, to absorb the board's play in its pocket — DERIVED from that play rather
+// than typed in. It was a constant, and every time s3_board_clr moved it had to be remembered
+// separately: too small and the board drifts until a port hides behind the wall, too large and it
+// eats the notch the rear stops need. The board can shift s3_board_clr either way, so the window
+// needs twice that plus a margin, and now it tracks automatically.
+function s3_usb_slop() = 2*s3_board_clr + 1.0;
 s3_usb_h      = 10;        // nominal window height (z) before the trims below
 // Trimmed ASYMMETRICALLY from measurement of the printed part. z runs from the top face down,
 // so "bottom" (the base plate side) is the LARGER z edge and "top" the smaller.
@@ -455,7 +510,11 @@ btn_guide_clr    = 0.3;
 // Deep enough to swallow the whole stroke: the flange is FLUSH with the top face at rest
 // (btn_face_gap equals it) and sinks btn_stroke() into the recess when pressed.
 btn_recess_depth = 1.6;
-btn_pilot_pitch  = 30;     // 2x BLIND M2 pilots, on +-X now: the holder is a Ø21 collar
+// 2x BLIND M2 pilots in the top wall, on +-x: the holder is a Ø25 collar and +y belongs to the
+// mic. Blind is the point — a through-hole here would be two visible dots either side of the
+// button. 30 rather than 34: with no boss to keep clear of the holder's collar, the pilots can
+// sit closer in, and the holder's footprint shrinks with them.
+btn_pilot_pitch  = 30;
 btn_pilot_depth  = 2.2;    // blind: must not reach the outer face
 // No halo groove any more. It existed to make a FLAT 18 mm disc findable by feel on a
 // blank face; a dome standing 6.5 mm proud is not something you grope for.
@@ -527,9 +586,10 @@ bh_ear_d     = 7;          // screw POST od. Full height, not a tab on a gusset:
                            // overhang and a post is just another vertical wall. It also
                            // leaves the driver a straight shot at the head.
 bh_fin_t     = 3;          // web tying each post back into the collar
-bh_screw_clear   = 2.2;    // M2 clearance up the posts. Tighter than the usual 2.4 — with
-                           // no spigot registering the collar in the shell bore, these two
-                           // holes are what bound how far off axis it can sit.
+bh_screw_clear   = 2.2;    // M2 clearance up the posts. Tighter than the usual 2.4 — with no
+                           // spigot registering the collar in the shell bore, these two holes
+                           // are what bound how far off axis it can sit, and that slop feeds
+                           // straight into bh_guide_clr.
 bh_screw_cbore_d = 4.0;    // head counterbore at the floor: an M2 head standing proud
 bh_screw_cbore_h = 1.2;    // here would eat the gap to the devkit
 // The posts take M2x10: 9.1 mm of collar, less the counterbore, plus btn_pilot_depth.
@@ -662,7 +722,7 @@ reg_t = 1.2;
 //
 // Every slot's clearance to the pockets and the screw counterbores is asserted, so if you
 // move a plan dimension or a board, run ./test.sh before assuming this list still fits.
-vent_rects = [[-29.0, 0, 4.0, 46], [-22.5, 0, 4.0, 46],
+vent_rects = [[-29.7, 0, 3.5, 46], [-23.7, 0, 3.5, 46],
               [ 17, -25, 10, 3.0], [ 17, 25, 10, 3.0]];
 // NO foot recesses. There is no clean set of four positions left: the corners are the
 // screw counterbores, the +x mid-band is the DAC pocket, and a 0.6 mm recess on the
@@ -716,7 +776,7 @@ function mic_size()     = [mic_post_pitch + mic_post_od, max(mic_board_l + 2*clr
 // is not located. What locates it is the tab, whose 45 deg ramp pushes it BACK against the
 // rear stops — so the rear stop face, not the front wall, is the datum, and the setback
 // below is computed from it.
-function s3_usb_w()     = s3_usb_ports*s3_usb_port_w + (s3_usb_ports-1)*s3_usb_gap + s3_usb_slop;
+function s3_usb_w()     = s3_usb_ports*s3_usb_port_w + (s3_usb_ports-1)*s3_usb_gap + s3_usb_slop();
 // The notch between the two rear stops. Wider than the window by clr each side: anything
 // narrower and the stops start doing what the deleted rear wall used to do.
 function s3_rear_notch()= s3_usb_w() + 2*clr;
@@ -724,10 +784,12 @@ function s3_rear_notch()= s3_usb_w() + 2*clr;
 // lip_inner_half), and everything else follows from that.
 function s3_cy()        = -lip_inner_half_y() + s3_board_clr + s3_w/2;
 function s3_pos()       = [s3_pos_x, s3_cy()];
-// What is left over at the front. DERIVED, not chosen: it is whatever depth `plan` has that
-// the board and its rear clearance did not use. The tab's reach chases it, so it can grow
-// without the tab losing contact.
-function s3_front_clr() = lip_inner_half_y() - (s3_cy() + s3_w/2);
+// The FRONT WALL's thickness: whatever depth plan_y has that the board and its rear clearance did
+// not use, all of it landing here. It grows with plan_y and nothing downstream cares — which is
+// the point, and it used to be otherwise. This number fed the tab's z chain, so a plan_y with
+// spare depth pushed the tab's ramp down until it reached the pocket floor and the part stopped
+// being buildable. The tab is off the BOARD's travel now (see s3_tab_z0), so this is just a wall.
+function s3_front_wall_t() = lip_outer_half_y() - s3_cavity_y1();
 // pocket block: floor and side walls from the lip at the rear, front wall out to the lip's
 // OUTER face — i.e. the front wall is the lip, grown to pocket height.
 function s3_pocket_y0() = -lip_inner_half_y();
@@ -735,9 +797,24 @@ function s3_pocket_y1() = lip_outer_half_y();
 function s3_pocket_c()  = [s3_pos_x, (s3_pocket_y0() + s3_pocket_y1())/2];
 function s3_pocket_f()  = [s3_pocket_w(), s3_pocket_y1() - s3_pocket_y0()];
 // ---- the tab's z chain, all of it derived from the board's front edge ----
-function s3_tab_over()  = s3_front_clr() + s3_tab_cover;         // reach off the wall face
-function s3_tab_z0()    = s3_seat_h + pcb_t - s3_front_clr() - s3_tab_preload;
-function s3_tab_z1()    = s3_tab_z0() + s3_tab_over();           // ramp top = full reach
+// The tab hangs off the cavity's front face — which is the board's nominal front edge, since the
+// cavity is cut to exactly there — and it is dimensioned against the board's own TRAVEL, not
+// against how much spare depth plan_y has. The board can retreat s3_board_clr toward the rear
+// stops, so the ramp has to still be biting at that distance: reach covers it, and the underside
+// starts a matching amount lower.
+//
+// Getting this off the front WALL instead was the bug: the wall's thickness absorbs plan_y's
+// slack, so the ramp sank a millimetre for every millimetre of spare depth and eventually met the
+// floor. Nothing about the tab should know what plan_y is.
+// The cavity's front face, s3_front_gap past the board's nominal front edge.
+function s3_cavity_y1() = s3_cy() + s3_w/2 + s3_front_gap;
+function s3_tab_over()  = s3_front_gap + s3_tab_cover;
+// Top face flush with the wall's, then work downward: the nib, then the 45 deg ramp.
+function s3_tab_top()   = s3_wall_top();
+function s3_tab_z1()    = s3_tab_top() - s3_tab_h;
+function s3_tab_z0()    = s3_tab_z1() - s3_tab_over();
+// ...and what that leaves at the board's own edge. Negative is clearance above the laminate.
+function s3_tab_bite()  = (s3_seat_h + pcb_t) - (s3_tab_z0() + s3_front_gap);
 function s3_wall_top()  = s3_seat_h + pcb_t + s3_lip;
 // how far the receptacle sits in from the outer face — a USB-C plug has only ~6.5 mm of
 // shell before its overmold. Measured from the THINNED panel, and from the rear stop face
@@ -887,7 +964,8 @@ function plan_y_from_boss_dac() = 2*(abs(dac_pos_y()) + (dac_pocket_f()[1] + bos
 // Depth is the devkit's LENGTH between the two register lips: rear stop face, board, and a
 // front clearance at least as big as the rear one. Written out rather than measured off
 // s3_pocket_f(), which depends on plan_y and made this circular.
-function plan_y_from_depth()  = 2*wall + 2*clr + 2*reg_t + s3_w + 2*s3_board_clr;
+// rear clearance behind the board, the board, and the front gap in front of it
+function plan_y_from_depth()  = 2*wall + 2*clr + 2*reg_t + s3_w + s3_board_clr + s3_front_gap;
 function plan_y_min()         = max(plan_y_from_depth(), plan_y_from_boss_dac());
 
 // ---- and how DEEP it has to be, likewise derived ---------------------------------

@@ -22,7 +22,8 @@
 // so it has to be passed in rather than read off the global. Pass the devkit's and the
 // strips land under its header rows; leave it and they land under the DAC's.
 module pin_relief(bw, bl, floor_h, along_short = false, x_lo = undef, x_hi = undef,
-                 y_len = undef, sides = [-1, 1], row_w = undef, bclr = board_clr) {
+                 y_lo = undef, y_hi = undef, y_len = undef, sides = [-1, 1],
+                 row_w = undef, bclr = board_clr) {
     d = board_pin_h + clr;
     rw = is_undef(row_w) ? pin_row_w : row_w;
     if (along_short)
@@ -38,11 +39,14 @@ module pin_relief(bw, bl, floor_h, along_short = false, x_lo = undef, x_hi = und
                 cube([xr - xl, rw, d + 0.02], center = true);
         }
     else
-        // Long-edge strips. `y_len` pins the length instead of deriving it from the board,
-        // anchored at the REAR end, so the board can grow without the channels growing.
+        // Long-edge strips. y_lo / y_hi override each end; without them each is inset by a
+        // `pin_land`. The devkit passes both, because its channels have to run the board's whole
+        // length — a land at either end is somewhere its tails come down on solid floor.
         for (sx = [-1, 1]) {
-            yl = -(bl + 2*bclr)/2 + pin_land;
-            yh = is_undef(y_len) ? (bl + 2*bclr)/2 - pin_land : yl + y_len;
+            yl = is_undef(y_lo) ? -(bl + 2*bclr)/2 + pin_land : y_lo;
+            yh = is_undef(y_hi)
+                   ? (is_undef(y_len) ? (bl + 2*bclr)/2 - pin_land : yl + y_len)
+                   : y_hi;
             translate([sx*((bw + 2*bclr)/2 - pin_relief_setback - pin_row_w/2),
                        (yl + yh)/2, floor_h - d/2 + 0.01])
                 cube([pin_row_w, yh - yl, d + 0.02], center = true);
@@ -71,14 +75,14 @@ module register_lip() {
 // the wall face and the finished tab one `s3_tab_over` higher, which makes the 45 deg true
 // by construction rather than by a number that can drift.
 //
-// It hangs off the front wall, which is the register lip grown to pocket height, so the reach
-// has to cross s3_front_clr before it is over the board at all — hence both the reach and the
-// underside height being derived rather than typed.
+// It hangs off the front wall's inner face, which is the cavity's front face and therefore the
+// board's nominal front edge. Both the reach and the underside height are derived from the board's
+// travel toward the rear stops — the tab has to still be biting when the board sits back.
 module s3_front_tab() {
-    yf   = lip_inner_half_y();                      // front wall's inner face
+    yf   = s3_cavity_y1();                          // cavity's front face
     z0   = s3_tab_z0();
     zt   = s3_tab_z1();
-    ztop = s3_wall_top();
+    ztop = s3_tab_top();
     if (s3_tab_cover > 0 && ztop > zt)
         hull() {
             translate([s3_pos_x, yf - 0.005, z0 + 0.005])
@@ -127,18 +131,22 @@ module s3_seat() {
     h  = s3_seat_h + pcb_t + s3_lip;
     y0 = s3_pocket_y0();
     y1 = s3_pocket_y1();
-    by = s3_cy() + s3_w/2;              // board's +y edge
+    cy1 = s3_cavity_y1();               // cavity's front face, s3_front_gap past the board
     mirror([0, 0, 1]) {
         difference() {
             translate([s3_pos_x, (y0 + y1)/2, h/2])
                 cube([s3_pocket_f()[0], y1 - y0, h], center = true);
             // board cavity, running off the -y end so the pocket is open there
-            translate([s3_pos_x, (y0 - 1 + by)/2, s3_seat_h + (h - s3_seat_h + 0.1)/2])
-                cube([s3_l + 2*s3_board_clr, by - y0 + 1, h - s3_seat_h + 0.1], center = true);
-            // Pin-tail relief so the board seats FLAT, not on its own pins. BOTH strips run the
-            // board's full length — the header rows do, so the relief has to.
+            translate([s3_pos_x, (y0 - 1 + cy1)/2, s3_seat_h + (h - s3_seat_h + 0.1)/2])
+                cube([s3_l + 2*s3_board_clr, cy1 - y0 + 1, h - s3_seat_h + 0.1], center = true);
+            // Pin-tail relief so the board seats FLAT, not on its own pins. Both strips run the
+            // board's WHOLE length: off the open rear end, and up to a setback short of the front
+            // wall so they do not undercut its base. No end lands — the board seats on the 16 mm
+            // central land between the strips, which runs the full length anyway.
             translate([s3_pos_x, s3_cy(), 0])
-                pin_relief(s3_l, s3_w, s3_seat_h, y_len = s3_relief_len, bclr = s3_board_clr);
+                pin_relief(s3_l, s3_w, s3_seat_h, bclr = s3_board_clr,
+                           y_lo = -(s3_w/2 + s3_board_clr) - 1,
+                           y_hi = s3_w/2 + s3_front_gap - s3_relief_front_setback);
         }
         // ...and then the tab and the rear stops are put BACK into the cavity that was just
         // cut. The tab has to be a union rather than a smaller cut, or its 45 deg underside

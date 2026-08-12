@@ -1,6 +1,7 @@
 // ===== Voice S3 desk puck — render entry point =====
 // Render a single part:  openscad -D 'part="shell"' -o out.stl voice-case.scad
-// Parts: "shell" | "base" | "button" | "holder" | "clamp" | "coupon" | "all" (preview)
+// Parts: "shell" | "base" | "button" | "holder" | "clamp" | "coupon" | "fit" |
+//        "fit-front" | "all" (preview)
 // NOTE: use a normal variable `part` (overridable by -D), NOT a special $-variable —
 // OpenSCAD's -D does not reliably set $-prefixed variables.
 include <modules/params.scad>
@@ -38,43 +39,47 @@ module coupon() {
     translate([-coupon_w()/2 - 16, coupon_y0() - 14, 0]) mic_clamp();
 }
 
-// Fit coupon for the DEVKIT BED — the WHOLE bed, end to end, not a slice of it.
+// Fit coupons for the DEVKIT BED — a slice off ONE END, `end` picking which:
+//   -1  the REAR: the pin relief channels, the pocket width, the rear stops
+//   +1  the FRONT: the retention tab, and the width again
 //
-// It started as a 25 mm slice off the front, which was enough while the only questions were
-// "is the pocket the right width" and "does the tab catch". Adding the rear stops made that
-// useless: the board no longer slides in, it goes in TILTED, and a slice cannot tell you
-// whether that works because the two features you are tilting between are 65 mm apart. What
-// you need to rehearse is the real motion — front edge under the tab, rear corners dropping
-// behind the stops — and for that the coupon has to be the whole bed.
+// TWO short coupons rather than one long one. This has been all three shapes: a front slice
+// first, then the WHOLE bed once the rear stops went in, on the argument that the board now goes
+// in tilted between two features 63 mm apart and a slice cannot rehearse that. True — but the
+// whole bed is 10 cm3, a third of the plate, and the questions live at the two ENDS, not in the
+// 40 mm of plain pocket between them. Two 3.5 cm3 slices answer both for less than one bed, and
+// each is a ten-minute print.
 //
-// It is still much cheaper than the thing it saves you from: a plate is four hours, this is
-// well under one, and the plate is the part you cannot iterate.
+// What neither tests is the tilt itself. For that, raise s3_fit_len until they meet, or print the
+// plate. One module builds both so they cannot drift apart, or drift from the plate they came off.
 //
-// The x span is the pocket EXACTLY, with no skirt. Not laziness — the vent slots either side
-// run within half a millimetre of the pocket walls, so any skirt at all would slice a channel
-// down the coupon's own edges and leave it flexing where it has to be stiff. In y it takes a
-// small skirt, because there the nearest thing outboard is plate.
-// ...and it is shaved to `s3_fit_base` of plate rather than the real `wall`. Taking the whole
-// bed instead of a slice quadrupled this part, to half the volume of the plate it is meant to
-// save — at which point you may as well print the plate. But none of that plate thickness is
-// under test: the bed is everything above the inner face, and 1.2 mm plus the pocket's own
-// 3.5 mm floor is more than stiff enough to push a board into. Nothing is lost because there
-// are no vents or counterbores inside the bed's x span to cut through.
+// The x span is the pocket EXACTLY, with no skirt. Not laziness: the vent slots either side run
+// within half a millimetre of the pocket walls, so any skirt would slice a channel down the
+// coupon's own edges and leave it flexing where it has to be stiff. In y it takes a small skirt at
+// the outboard end, because there the nearest thing beyond is plain plate.
+//
+// It is also shaved to `s3_fit_base` of plate rather than the real `wall`. None of that thickness
+// is under test — the bed is everything above the plate's inner face — and 1.2 mm plus the
+// pocket's own 3.5 mm floor is more than stiff enough to push a board into.
+s3_fit_len   = 25;         // how much of the bed to take, at whichever end
 s3_fit_skirt = 2;          // plate left beyond the bed, y only
 s3_fit_base  = 1.2;        // plate thickness kept under it — the bed is what is on test
-module fit_coupon() {
-    zlo = -4*outer_d();
+module fit_coupon(end = -1) {
+    zlo      = -4*outer_d();
+    outboard = end*(lip_outer_half_y() + s3_fit_skirt);
+    inboard  = outboard - end*s3_fit_len;
+    y0       = min(outboard, inboard);
+    y1       = max(outboard, inboard);
     intersection() {
         base_plate();
-        translate([s3_pos_x, 0, (zlo + s3_fit_base)/2])
-            cube([s3_pocket_f()[0],
-                  2*(lip_outer_half_y() + s3_fit_skirt),
-                  s3_fit_base - zlo], center = true);
+        translate([s3_pos_x, (y0 + y1)/2, (zlo + s3_fit_base)/2])
+            cube([s3_pocket_f()[0], y1 - y0, s3_fit_base - zlo], center = true);
     }
 }
 
 if (part == "shell")       shell();
-else if (part == "fit")    fit_coupon();
+else if (part == "fit")    fit_coupon(-1);
+else if (part == "fit-front") fit_coupon(+1);
 else if (part == "base")   base_plate();
 else if (part == "button") button_cap();
 else if (part == "holder") button_holder();

@@ -20,9 +20,14 @@ module button_cut() {
     }
 }
 
-// Two BLIND M2 pilots in the top wall, drilled from the inner face, on +-x: +y belongs
-// to the mic and the bore between them is 32 mm across. Blind is the point — a
-// through-hole here would be two visible dots either side of the button.
+// Two BLIND M2 pilots in the top wall, drilled from the inner face, on +-x: +y belongs to the
+// mic and the bore between them is the button's. Blind is the point — a through-hole here would
+// be two visible dots either side of the button.
+//
+// These briefly became bosses holding M3 inserts, on the argument that 2 mm of thread in 2.2 mm
+// of blind PLA is the weakest joint in the box. A printed one works, so they are back: the M3
+// version needed a boss (a 3 mm wall cannot hold a ~5 mm insert) and the boss needed the pitch
+// pushed out to 34 to stop it fighting the holder's collar for the same ring of wall.
 module button_pilots() {
     for (sx = [-1, 1])
         translate([btn_pos[0] + sx*btn_pilot_pitch/2, btn_pos[1], wall - btn_pilot_depth])

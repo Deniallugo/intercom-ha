@@ -72,7 +72,7 @@ module button_holder() {
             translate([0, 0, z_floor - 0.01])
                 cylinder(h = z_catch - z_floor + 0.02, d = bh_relief_d());
             // M2 clearance up the posts, counterbored so no head stands proud of the
-            // floor — the devkit is only 2.8 mm below it
+            // floor — the devkit is only a few mm below it
             for (sx = [-1, 1]) translate([sx*ear_x, 0, -0.1]) {
                 cylinder(h = h + 0.2, d = bh_screw_clear);
                 cylinder(h = bh_screw_cbore_h + 0.1, d = bh_screw_cbore_d);

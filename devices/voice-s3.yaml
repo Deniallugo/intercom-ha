@@ -388,7 +388,8 @@ voice_assistant:
 #   tap (< 1.2 s)   → talk to Assist, same as saying "okay nabu"
 #   hold (≥ 1.2 s)  → record while held and broadcast to the other devices
 #
-# Wire: GPIO4 → button → GND (internal pull-up, active LOW).
+# Wire: GPIO38 → button → GND (internal pull-up, active LOW). GPIO33-37 are off
+# limits on this N16R8 module — octal PSRAM owns them (SPIIO4-7, SPIDQS).
 
 globals:
   - id: intercom_recording
@@ -485,7 +486,7 @@ binary_sensor:
     id: ptt_button
     name: "Button"
     pin:
-      number: GPIO4
+      number: GPIO38
       inverted: true
       mode:
         input: true
