@@ -1,10 +1,12 @@
 # Intercom System — Current State
 
-A two-device PTT intercom + voice satellite running on Home Assistant.
+A three-device PTT intercom + voice satellite running on Home Assistant.
 The kitchen Atom Echo has one MAX98357A amp wired to its exposed I²S header
 pads, driving a larger speaker in place of the disconnected internal one. The
 terrace VoiceS3R has two MAX98357A amps wired to its free GPIOs, both playing
-the same mono mix into a pair of larger drivers (dual mono).
+the same mono mix into a pair of larger drivers (dual mono). Voice S3 is a bare
+ESP32-S3 built from discrete parts — PCM5102A line-out, INMP441 mic, one button —
+and is the only one whose mic and speaker sit on separate I²S peripherals.
 
 ---
 
@@ -41,18 +43,50 @@ the same mono mix into a pair of larger drivers (dual mono).
 > volume; it needs 4× M3×35 screws and foam tape on the two new seams. See
 > `hardware/terrace-case/README.md`.
 
+### Voice S3 — bare ESP32-S3 + PCM5102A line-out + INMP441
+
+| Item | Detail |
+|---|---|
+| MCU | Bare ESP32-S3 devkit, N16R8 (16 MB flash, 8 MB octal PSRAM @ 40 MHz) |
+| DAC | PCM5102A on I²S bus 0 (BCK G5, LCK G6, DIN G7) → 3.5 mm stereo jack |
+| Mic | INMP441 MEMS on I²S bus 1 (SCK G10, WS G11, SD G12), left slot |
+| Amplification | None on board — the jack feeds a powered speaker or an external amp |
+| Button | One momentary switch on G38 to GND (active LOW, internal pull-up) |
+| Power | USB-C |
+
+Unlike the other two, capture and playback run on **two separate I²S
+peripherals**, so the mic never has to yield the bus to the speaker: the wake
+word keeps listening through music and TTS, and barge-in works. That removes the
+`on_announcement` / `on_idle` wake-word juggling that intercom-s3 needs.
+
+The button does two jobs, split by hold time — tap (< 1.2 s) starts Assist
+without the wake word, hold (≥ 1.2 s) records and broadcasts over the intercom
+for as long as you hold it.
+
+> The 3D-printed enclosure is a **desk puck**, 96 × 96 × 34 mm — modelled on the Home
+> Assistant Voice PE, slightly broader because a 64 mm-deep devkit has to sit centred
+> between four full-depth corner bosses. Driver and grille are replaced by the
+> 3.5 mm line-out — button and mic port on top, the devkit's USB-C out the back, and the
+> PCM5102A board's **own 3.5 mm socket** used straight through the side wall (so
+> `LROUT`/`RROUT` need no wiring and there is no panel-mount jack). The wall is
+> locally thinned to 1.2 mm behind that socket, or a plug loses too much of its
+> 14 mm barrel to the wall to seat. Both boards sit in friction pockets on the base
+> plate — the DAC has no mounting holes.
+> See `hardware/voice-case/README.md`.
+
 ---
 
 ## Capabilities
 
-| Capability | Kitchen | Terrace |
-|---|---|---|
-| Button-PTT intercom (record → POST to addon → playback elsewhere) | ✓ | ✓ |
-| Wake-word + HA Assist (STT, intent, TTS reply) | — | ✓ (`okay nabu`) |
-| Music streaming from Spotify via Music Assistant | — | ✓ |
-| HA TTS announcements (`media_player.play_media`) | ✓ | ✓ |
-| Text announcements (UI + automation TTS) | ✓ | ✓ |
-| External larger-driver speakers | ✓ (1× MAX98357A) | ✓ (2× MAX98357A, dual mono) |
+| Capability | Kitchen | Terrace | Voice S3 |
+|---|---|---|---|
+| Button-PTT intercom (record → POST to addon → playback elsewhere) | ✓ | ✓ | ✓ (hold) |
+| Wake-word + HA Assist (STT, intent, TTS reply) | — | ✓ (`okay nabu`) | ✓ (`okay nabu`, or tap) |
+| Music streaming from Spotify via Music Assistant | — | ✓ | ✓ (stereo) |
+| HA TTS announcements (`media_player.play_media`) | ✓ | ✓ | ✓ |
+| Text announcements (UI + automation TTS) | ✓ | ✓ | ✓ |
+| External larger-driver speakers | ✓ (1× MAX98357A) | ✓ (2× MAX98357A, dual mono) | ✓ (line-out to any amp) |
+| Listens while playing (no shared-bus stall) | — | — | ✓ |
 | Internal speaker fallback | — (disconnected) | ✓ (HA-toggleable switch) |
 | Software mic gain | +6 dB (recorder.h) | n/a (codec PGA at 36 dB) |
 | DMA watchdog auto-reboot | ✓ | — |
@@ -266,6 +300,162 @@ The audio I²S pins from the legend (G3, G17, G11, G48, G4) are **not** broken
 out — they go straight to the internal codec. That's why we use a **second**
 I²S peripheral on free GPIOs (G5/G6/G7) for the external amps.
 
+### Voice S3 — bare ESP32-S3
+
+Everything is discrete here, so every wire is yours to run. The two I²S buses
+are deliberately kept separate (see *Key technical decisions*).
+
+#### PCM5102A DAC → 3.5 mm jack (I²S bus 0)
+
+| PCM5102A pin | ESP32-S3 | Note |
+|---|---|---|
+| **VIN** | 5V (or 3V3) | The GY-PCM5102 breakout regulates on board |
+| **GND** | GND | |
+| **BCK** | G5 | Bit clock |
+| **LCK** | G6 | Word/LR clock |
+| **DIN** | G7 | Data in |
+| **SCK** | **GND** | Forces the internal PLL to make MCLK — this is why no `i2s_mclk_pin` is declared. Left floating, the DAC is silent or noisy. |
+| **FMT** | GND | I²S format (not left-justified) |
+| **XMT** | 3V3 | Un-mute; tie high or the output stays soft-muted |
+| **FLT / DEMP** | GND | Normal filter, de-emphasis off |
+| **LROUT / RROUT** | *nothing* | The breakout's **onboard 3.5 mm socket** already carries them, and the puck uses that socket straight through the side wall. Wire these only on a board with no socket. |
+
+Everything above is a **strap**, not a signal — only BCK, LCK and DIN carry data.
+Four of the five straps have a failure mode that looks like a broken device:
+floating `SCK` is silent or noisy, floating `XMT` stays soft-muted, and `FMT`
+selects left-justified instead of I²S.
+
+The output is **line level**, not speaker level — it needs a powered speaker or
+an amp downstream.
+
+#### INMP441 mic (I²S bus 1)
+
+| INMP441 pin | ESP32-S3 | Note |
+|---|---|---|
+| **VDD** | 3V3 | 3.3 V only — not 5 V tolerant |
+| **GND** | GND | |
+| **SCK** | G10 | Bit clock |
+| **WS** | G11 | Word select |
+| **SD** | G12 | Data out → ESP32 data in |
+| **L/R** | **GND** | Selects the LEFT slot, matching `channel: left`. Leave it floating and the slot assignment is undefined. |
+
+The INMP441 is 24-bit left-justified in a 32-bit slot, so the mic is configured
+`bits_per_sample: 32bit`. Assist and the wake word get 16-bit via their
+microphone sources; the intercom's raw data callback converts itself.
+
+**It needs no gain.** Measured from a real capture, speech peaks at 5404/32767
+(≈ −15.7 dBFS) with `gain_factor: 1` and a plain `>> 16` on the intercom path.
+
+Do **not** set `use_apll` on this bus. The APLL is shared silicon between the
+two I²S peripherals, so requesting it for the mic can disturb the DAC on the
+other one. It was tried against the hiss below and gave no measured benefit.
+
+#### Bring-up notes — how this mic fails
+
+Debugging one of these is mostly about telling four different failures apart,
+and the raw sample words distinguish them faster than any level meter:
+
+| Symptom in the raw 32-bit words | Cause |
+|---|---|
+| Exactly `00000000` forever, no noise floor | Nothing arriving — dead wire, or the mic isn't clocked |
+| Peak pinned at `32768` (`0x8000`) while the mean stays near 0 | Floating data line latched at the MSB — the mic goes high-Z outside its slot |
+| Long runs of zeros interrupted by full-scale bursts | Intermittent connection; the bursts are contact noise, not audio |
+| Smooth ramps of a constant step, ~4 Hz, heavily clipped | Sub-audio wander, usually too much digital gain applied to a DC-ish signal |
+
+A real capture settles it where statistics mislead: **speech produces hundreds
+to thousands of zero-crossings per second.** Anything under ~50/s is not sound,
+whatever the level looks like.
+
+Getting one takes about a minute — `tools/mic-capture.py` stands in for the
+add-on's `/intercom` endpoint, writes a WAV, and prints the verdict:
+
+```bash
+python3 tools/mic-capture.py            # on any machine on the LAN
+# then set intercom_url: "http://<that-machine>:9999/intercom", flash,
+# and press the device's "Mic test recording" button in Home Assistant
+```
+
+```
+peak 5404  mean 824  dc -7
+clipped 0.00%   impossible jumps 0
+zero crossings 564/s
+noise floor 699  loudest 1074  SNR ~4 dB
+--> looks like real audio.
+```
+
+It distinguishes SILENT / GLITCHING / NOT AUDIO / CLIPPING / real audio, which
+is exactly the set of failures above. The `Mic test recording` button is a
+permanent diagnostic entity on the device — no PTT button needs to be wired.
+
+A healthy INMP441 should show **40–60 dB SNR**. If it is closer to 5 dB with
+energy piled into 3–8 kHz, that is broadband hiss from the wiring, not the
+capsule: add 100 nF across VDD–GND at the module, shorten SD/SCK/WS, run the
+mic's ground alongside the data line, and add 10 kΩ from SD to GND so the line
+is defined while the mic isn't driving it.
+
+#### The lost first half-second — it was the powered speaker
+
+Symptom: every Assist reply arrived with roughly its first 0.5 s missing, so
+"02:05" was heard as "05". **The cause was outside the device**: JBL powered
+speakers auto-standby on a silent input, and the ~10 s Home Assistant spends
+between the microphone releasing and the reply arriving was enough for them to
+drop out. They then ate the first half-second waking back up.
+
+Everything inside the device measured clean, and chasing it there cost hours:
+
+| Checked | Result |
+|---|---|
+| HA's TTS audio | complete, speech from frame 0, **no leading silence** |
+| I²S driver start-up | ~300 ms, real, but eliminated by keeping the chain warm |
+| Codec (FLAC vs WAV) | identical clipping. WAV is 5x the bytes and starved the pipeline |
+| Mixer / buffer timeouts | `timeout: never` on `announcement_src` **silenced replies entirely** |
+| Player volume | fine |
+
+The tell was in the *sequence*, not the logs: the chime was audible and the
+reply was not, and the chime always arrived moments after full-volume music
+while the reply always arrived after a long quiet stretch.
+
+**The fix is the ducking schedule.** Music is only ducked when it needs to be,
+so the line is never quiet for long:
+
+| Moment | Music | Why |
+|---|---|---|
+| Wake word → listening (`on_start`) | −15 dB | Not talking over you into the mic |
+| Mic released → waiting (`on_stt_vad_end`) | **full** | Keeps the speaker awake through the wait |
+| Reply starts (`on_tts_start`) | −15 dB | So the answer is clear |
+| Reply ends (`on_end`) | full | Normal |
+
+This only helps **while music is playing**. Asked from a silent house, the
+speaker still sleeps. The permanent fixes are to disable auto-off on the
+speaker, drive a bare PAM8406 / TPA3116 (no standby logic at all — which is why
+the speaker case never showed this), or pad the response text in HA so the lost
+moment is a throwaway word.
+
+#### The on-device chime
+
+It confirms the wake word registered, and it warms the output chain — I²S driver
+running, DAC settled — before the reply arrives. It does **not** fix the problem
+above; that was the theory it was built for, and the ten-second gap is far longer
+than any warm-up it can bridge.
+
+Two details still matter. It must go through the **announcement pipeline**
+(`announcement: true` on `media_player.speaker.play_on_device_media_file`) — raw
+`speaker.play` bypasses the mixer and fails with "Incompatible audio streams".
+And it opens with 60 ms of silence and a 12 ms fade-in, so start-up latency
+lands on silence rather than on the sound. Regenerate with `tools/make-chime.py`.
+
+#### Button
+
+| Pin | Wiring |
+|---|---|
+| **G38** | one leg of a momentary switch; other leg to **GND** (internal pull-up, active LOW) |
+
+#### Pins to avoid on this board
+
+G26–G32 are the SPI flash and **G33–G37 the octal PSRAM** — using any of them
+kills the board's memory. G19/G20 are USB, G43/G44 are UART0, and G0/G3/G45/G46
+are strapping pins. The G5–G12 block and G38 used here are clear of all of that.
+
 ---
 
 ## Repo layout
@@ -277,8 +467,11 @@ intercom/
 │   ├── listen_and_answer.yaml      # Atom Echo VA variant
 │   ├── intercom-s3.yaml            # Terrace VoiceS3R (intercom + wake-word + music)
 │   ├── intercom-s3-minimal.yaml    # Bare-boot diagnostic config
+│   ├── speaker-s3.yaml             # Bare S3 + PCM5102A — playback only, no mic
+│   ├── voice-s3.yaml               # Bare S3 + PCM5102A + INMP441 + button
 │   ├── secrets-atom.yaml           # Atom Echo's API key (gitignored)
-│   └── secrets-s3.yaml             # VoiceS3R's API key (gitignored)
+│   ├── secrets-s3.yaml             # VoiceS3R's API key (gitignored)
+│   └── secrets-voice.yaml          # Voice S3's API key (gitignored)
 ├── include/
 │   ├── recorder.h                  # Shared C++ — PCM ring buffer + software gain
 │   └── uploader.h                  # Shared C++ — chunked HTTP POST to addon
@@ -302,6 +495,31 @@ intercom/
   the ES8311 codec for mic; Bus 2 (G5/G6/G7) handles the external MAX98357A
   amps. They run independently so wake-word listening doesn't conflict with
   external playback.
+- **Two I²S *peripherals* on Voice S3** — the S3 has two I²S controllers, and
+  Voice S3 spends both: bus 0 drives the PCM5102A, bus 1 reads the INMP441. Not
+  an optimisation — it's what lets the mic stay live during playback. A single
+  full-duplex bus (the VoiceS3R's situation) forces mic and DAC onto one clock,
+  which is why intercom-s3 has to stop the wake word and wait for the mic to
+  release the bus before every announcement.
+- **INMP441 read as 32-bit, converted twice over** — the part is 24-bit
+  left-justified in a 32-bit slot. `micro_wake_word` and `voice_assistant` each
+  take a *microphone source*, which down-converts to the 16 bits they require;
+  the intercom's raw `add_data_callback` gets native 32-bit frames and shifts
+  them itself. Feeding raw frames to `recorder.h` unshifted yields noise.
+- **The mic is reference-counted** — `Microphone::start()` / `stop()` take and
+  return listener slots, and the driver only stops when all are returned. So the
+  intercom's hold path takes its own slot before `micro_wake_word.stop`, and
+  re-arms the wake word *before* returning it — the count never hits zero, so the
+  I²S driver never tears down mid-recording.
+- **One button, split by hold time** — tap (< 1.2 s) starts Assist, hold
+  (≥ 1.2 s) records the intercom. A `restart`-mode script started on press
+  distinguishes them: if it is *still running* at release, the press was a tap.
+  Asking the script rather than a flag also means a hold that could not record
+  (an upload still in flight) does nothing, instead of falling through to Assist.
+- **Ducking follows the interaction, not the session** — music is quiet only
+  while the mic listens and while the reply plays, and returns to full during the
+  wait in between. A permanently ducked line lets a powered speaker with
+  auto-standby drop out; see "The lost first half-second" above.
 - **Dual mono on two MAX98357A** — both amps are passive parallel listeners on
   Bus 2 (I²S is a broadcast), both decoding the same left/mono slot, so adding
   the second board is wiring-only (no YAML change). GAIN → GND on both = +12 dB.

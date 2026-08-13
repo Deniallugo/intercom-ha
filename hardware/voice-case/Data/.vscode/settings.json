@@ -1,0 +1,5 @@
+{
+	"python.autoComplete.extraPaths":	["/Users/danil/Library/Application Support/Autodesk/Autodesk Fusion 360/API/Python/defs"],
+	"python.analysis.extraPaths":	["/Users/danil/Library/Application Support/Autodesk/Autodesk Fusion 360/API/Python/defs"],
+	"python.defaultInterpreterPath":	"/Users/danil/Library/Application Support/Autodesk/webdeploy/production/7698c9b1a08b85444b2eb3d6ec1ab6ea0789097a/Autodesk Fusion.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python"
+}

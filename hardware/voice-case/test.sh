@@ -7,16 +7,16 @@ mkdir -p stl
 fail=0
 
 echo "== parameter asserts =="
-"$OPENSCAD" --hardwarnings -o /tmp/sc_asserts.stl tests/asserts.scad >/dev/null 2>&1 \
+"$OPENSCAD" --hardwarnings -o /tmp/vc_asserts.stl tests/asserts.scad >/dev/null 2>&1 \
     && echo "OK asserts" || { echo "FAIL asserts"; fail=1; }
 
-for part in body rear port; do
-    if "$OPENSCAD" --hardwarnings -D "part=\"$part\"" -o "stl/$part.stl" speaker-case.scad 2>/tmp/sc_err; then
+for part in shell base button holder clamp coupon fit fit-front; do
+    if "$OPENSCAD" --hardwarnings -D "part=\"$part\"" -o "stl/$part.stl" voice-case.scad 2>/tmp/vc_err; then
         sz=$(wc -c < "stl/$part.stl")
         if [ "$sz" -lt 1000 ]; then echo "FAIL $part: STL too small ($sz B)"; fail=1
         else echo "OK $part ($sz B)"; fi
     else
-        echo "FAIL $part render:"; cat /tmp/sc_err; fail=1
+        echo "FAIL $part render:"; cat /tmp/vc_err; fail=1
     fi
 done
 exit $fail
