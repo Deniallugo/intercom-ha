@@ -165,6 +165,27 @@ can review against the original and a rewrite you have to re-derive.
   fail on a module that produced no geometry. Building the parts is that check now, and an
   empty profile raises.
 
+## Check the export, not just the port
+
+`test.sh` checks the design numbers and the geometry this code *emits*. It does not see
+what Fusion then wrote to `VoiceCase/stl/*.stl` or to a 3MF, and both known print failures
+so far have lived in exactly that gap:
+
+* **The cap's outer dome fillet came out as a straight cone** — apex ring at r 7.8, body
+  ring at r 9.8, and nothing in between. The inner fillet was correct, so the wall between
+  them fell to **0.15 mm** for about a millimetre of height: under half a nozzle, so a
+  slicer drops those perimeters and everything above them starts in mid-air. The emitted
+  OpenSCAD for the same code has the arc, so this is Fusion losing it, not the profile
+  being wrong. Re-run the script and re-export before assuming anything else.
+* **The holder's four locating ribs came out as four separate bodies**, because they were
+  drawn 0.01 mm clear of the floor and a Join across a gap joins nothing. Fixed in the
+  source — see `bh_rib_embed` — but the symptom to recognise is a part that exports as
+  five bodies instead of one.
+
+Two cheap things to look at on any fresh export: the **body count** (every part here is one
+body) and a **section through the cap's dome**, which should show 1.2 mm of wall the whole
+way round the fillet.
+
 ## What is still in the OpenSCAD
 
 The full design archaeology — why every number is what it is, what it used to be, and which

@@ -568,6 +568,13 @@ will name the collision rather than let you find it with a printed part.
 - **Holder: floor DOWN** — the opposite end from the cap, and the opposite of the old
   plate holder. It is a cup, so the floor goes on the plate and the collar, the switch
   block and the two screw posts all grow up off it as vertical walls.
+
+  If your slicer shows **four small blocks floating** a millimetre or so above the floor,
+  the four locating ribs are not fused to it: they are drawn on the nominal floor plane
+  while the lip relief cuts `bh_relief_eps` below it, so they have to be sunk
+  `bh_rib_embed` back into it. Both numbers are in params and the asserts check one
+  against the other. Fusion is where it bites — a Join across a 0.01 mm gap joins nothing
+  and leaves the ribs as four separate bodies, which export as four separate objects.
 - **Mic clamp**: bar face down, pad up.
 - 0.2 mm layers, ≥4 perimeters, 20–30% infill.
 - **PETG for the button cap** if you have it — the slit body is a snap-fit and PLA

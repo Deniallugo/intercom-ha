@@ -485,6 +485,17 @@ def run_checks():
            'under %s' % (2*P.sw_pin_a_lo()))
         ok(P.sw_locate_h > P.pcb_t,
            'locating ribs too short to catch the switch body\'s side')
+        # ...and they have to be FUSED to the floor they stand on. The lip relief is cut
+        # bh_relief_eps below bh_floor_t, so the seating plane is that much lower than
+        # nominal and a rib built at bh_floor_t hovers over it. The gap is invisible in a
+        # render and costs nothing in a section, which is why it needs a check: it comes
+        # out of Fusion as four separate bodies and slices as four islands in mid-air.
+        ok(P.bh_rib_embed > P.bh_relief_eps,
+           'locating ribs must reach INTO the collar floor — bh_rib_embed %s against a '
+           'relief that oversteps it by %s' % (P.bh_rib_embed, P.bh_relief_eps))
+        ok(P.bh_rib_embed < P.bh_floor_t - 1.0,
+           'locating ribs sunk %s into a %s floor — leave the pins something to pass '
+           'through' % (P.bh_rib_embed, P.bh_floor_t))
     ok(P.sw_pin_len > P.bh_floor_t,
        'pins do not reach through the floor — nothing to solder to under the holder')
     ok(P.bh_floor_t >= 1.2, 'collar floor too thin to stand the switch on')

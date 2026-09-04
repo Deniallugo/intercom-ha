@@ -276,6 +276,14 @@ bh_screw_clear = 2.2       # M2 clearance up the posts. Tighter than usual — w
                            # spigot these two holes bound how far off axis it can sit.
 bh_screw_cbore_d = 4.0     # head counterbore at the floor: a proud M2 head here would
 bh_screw_cbore_h = 1.2     # eat the gap to the devkit. Takes M2x10.
+# The lip relief is cut from bh_relief_eps BELOW bh_floor_t so its bottom face is never
+# coplanar with the floor's own top — which means the plane the switch and its four
+# locating ribs stand on is that much lower than bh_floor_t. The ribs are therefore sunk
+# bh_rib_embed INTO the floor; a rib built on the nominal plane hovers over the real one,
+# which Fusion joins into nothing and leaves as four separate bodies, and a slicer prints
+# as four islands out of thin air. bh_rib_embed must exceed bh_relief_eps — checked.
+bh_relief_eps = 0.01       # how far the lip relief oversteps the floor, top and bottom
+bh_rib_embed = 0.3         # how far the locating ribs reach INTO it
 
 # ---- 11 x 11 tactile switch, 4 pins [MEASURE — these place the whole mechanism] ----
 # Big enough to have a usable spring and stroke of its own (so the coil spring came out)

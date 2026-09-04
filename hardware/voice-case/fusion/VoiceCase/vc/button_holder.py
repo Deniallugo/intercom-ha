@@ -53,10 +53,18 @@ def switch_ribs(part, z_floor):
     Two lengths: the switch's pins stand OUT from two opposite sides, so on those the rib
     has to fit in the gap between that side's pair. Get it wrong and a rib sits over a pin
     window, printing in mid-air over a hole.
+
+    They are joined on AFTER the lip relief has been cut, and that cut takes the floor down
+    to z_floor - bh_relief_eps. So the seating plane is z_seat, not z_floor, and each rib is
+    sunk bh_rib_embed below it. Built on the nominal plane they clear the real one by
+    bh_relief_eps, and a Join across a gap joins nothing: they survive as four separate
+    bodies, export as four separate objects, and slice as four islands hanging in mid-air
+    over the floor. sw_locate_h stays the height above the plane the switch sits on.
     """
     if not (P.sw_locate_t > 0 and P.sw_locate_h > 0):
         return []
     r_mid = (P.sw_locate_r0() + P.sw_locate_r1())/2
+    z_seat = z_floor - P.bh_relief_eps        # what the relief cut actually left
     out = []
     for i in range(4):
         pinned = (i % 2) == P.sw_pin_axis     # i even -> +-x pair, i odd -> +-y pair
@@ -64,8 +72,8 @@ def switch_ribs(part, z_floor):
         centre = (r_mid, 0) if i % 2 == 0 else (0, r_mid)
         if i >= 2:
             centre = (-centre[0], -centre[1])
-        out.append(box_z(part, z_floor, P.sw_locate_h, centre,
-                         (P.sw_locate_t, length), angle=i*90, name='locating rib'))
+        out.append(box_z(part, z_seat - P.bh_rib_embed, P.sw_locate_h + P.bh_rib_embed,
+                         centre, (P.sw_locate_t, length), angle=i*90, name='locating rib'))
     return out
 
 
@@ -93,9 +101,11 @@ def build(part):
         cyl(part, z_catch, h - z_catch + 0.1, P.bh_bore_d(), name='guide bore'),
         cone_z(part, h - lead_in, lead_in + 0.1,
                P.bh_bore_d(), P.bh_bore_d() + 2*lead_in, name='bore lead-in'),
-        # lip relief. Its upper face is the guide's end, and that IS the catch.
-        cyl(part, z_floor - 0.01, z_catch - z_floor + 0.02, P.bh_relief_d(),
-            name='lip relief'),
+        # lip relief. Its upper face is the guide's end, and that IS the catch. It
+        # oversteps the floor by bh_relief_eps at the bottom, so the plane the switch and
+        # the ribs stand on is that much below z_floor — switch_ribs() is what has to know.
+        cyl(part, z_floor - P.bh_relief_eps, z_catch - z_floor + 2*P.bh_relief_eps,
+            P.bh_relief_d(), name='lip relief'),
     ]
     # M2 clearance up the posts, counterbored so no head stands proud of the floor — the
     # devkit is only 2.8 mm below it
