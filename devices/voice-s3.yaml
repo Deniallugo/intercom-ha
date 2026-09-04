@@ -15,6 +15,10 @@ substitutions:
   name: voice-s3
   friendly_name: Voice S3
   intercom_url: "http://homeassistant.local:9999/intercom"
+  # Where the "Mic test recording" button uploads to. Separate from
+  # ${intercom_url} so pointing a mic test at tools/mic-capture.py on a laptop
+  # does not also divert PTT broadcasts away from the add-on.
+  mic_test_url: "http://192.168.31.149:9999/intercom"
 
 packages:
   secrets: !include secrets-voice.yaml
@@ -31,9 +35,10 @@ esphome:
     - priority: 600.0
       then:
         - lambda: |-
-            // No recorder_set_gain(): measured, this mic delivers speech at
-            // −15.7 dBFS unaided, so the intercom path runs at unity. If
-            // broadcasts ever sound faint, recorder_set_gain(2, 1) is +6 dB.
+            // No recorder_set_gain(): the intercom path's +6 dB is taken in the
+            // data callback's shift instead, out of bits this would have to
+            // discard anyway. recorder_set_gain() multiplies already-truncated
+            // samples to buy the same level, so it stays at unity.
             recorder_init();
 
     # Raw mic tap for the intercom recorder. micro_wake_word / voice_assistant
@@ -41,6 +46,18 @@ esphome:
     # callback gets the mic's NATIVE frames, so convert here. The INMP441 is
     # 24-bit left-justified in a 32-bit slot, so the sample sits in the top bits.
     # recorder.h and the add-on both expect 16 kHz / 16-bit / mono.
+    #
+    # `>> 15` is +6 dB, out of the low 8 bits a plain `>> 16` discards — so it
+    # costs no resolution, and measurement says it cannot clip: the loudest
+    # close-range capture peaked at −15.7 dBFS, leaving 9.7 dB of headroom after
+    # this.
+    #
+    # +6 dB and no more, because big shifts here were measured and reverted:
+    # `>> 13` (+18 dB) reached a metre, `>> 10` (+36 dB) pinned the peak and
+    # clipped 12.3% of a capture, and SNR was 13-15 dB at every setting — gain
+    # lifts the noise floor with the signal, so it only arrives louder, never
+    # clearer. Level is now made up in the add-on instead (denoise.py), after the
+    # hiss between words is pushed down and in float, where it cannot clip.
     - priority: 200.0
       then:
         - lambda: |-
@@ -55,7 +72,7 @@ esphome:
               // a loud transient clips cleanly instead of wrapping to full-scale
               // opposite sign — which sounds like a gunshot in the broadcast.
               for (size_t i = 0; i < frames; i++) {
-                int32_t s = in[i] >> 16;
+                int32_t s = in[i] >> 15;   // +6 dB; see the note above
                 if (s > INT16_MAX) s = INT16_MAX;
                 else if (s < INT16_MIN) s = INT16_MIN;
                 out[i] = static_cast<int16_t>(s);
@@ -199,10 +216,12 @@ media_player:
 # hold timing to get right. Diagnostic category, so it stays out of the way in
 # Home Assistant.
 #
-# To capture it as a WAV instead of broadcasting it, run `tools/mic-capture.py`
-# on a machine on the LAN and point ${intercom_url} at it — that prints level,
-# clipping, zero-crossing and SNR statistics, which is how the mic on this board
-# was characterised. See docs/DEVICES.md → "how this mic fails".
+# This button uploads to ${mic_test_url}, not ${intercom_url}: point it at
+# `tools/mic-capture.py` on a LAN machine and the test lands there as a WAV with
+# level, clipping, zero-crossing and SNR statistics — which is how the mic on
+# this board was characterised — while a held PTT still broadcasts normally.
+# Point it back at the add-on to hear a test through the speakers instead.
+# See docs/DEVICES.md → "how this mic fails".
 button:
   - platform: template
     id: record_test
@@ -219,7 +238,7 @@ button:
             - lambda: |-
                 id(inmp441_mic).start();   // take our own listener slot
                 recorder_start();
-                uploader_start("${intercom_url}", App.get_name().c_str());
+                uploader_start("${mic_test_url}", App.get_name().c_str());
             - logger.log: "mic test recording started"
             - delay: 5s
             - lambda: recorder_stop();
@@ -241,39 +260,60 @@ micro_wake_word:
     # Measured from a real capture: speech peaks at 5404/32767 = −15.7 dBFS with
     # no gain at all, so this mic needs none. (An earlier 64 here came from a
     # −60 dBFS reading taken while the wiring was faulty; it clipped everything.)
-    gain_factor: 1
+    #
+    # 2 is +6 dB, matching the intercom shift. This path gets no help from the
+    # add-on's cleanup — detection happens here, on the device — so a small
+    # fixed boost is the only lever, and 15.7 dB of measured headroom makes it
+    # free of clipping. 8 (+18 dB) was tried and reverted: louder, not clearer.
+    gain_factor: 2
   models:
     - model: okay_nabu
       id: okay_nabu
       probability_cutoff: 0.7  # default 0.97 is too strict at this gain
   on_wake_word_detected:
-    # A ringing timer does NOT eat the wake word — "okay nabu" opens a normal
-    # conversation, and only an actual "stop" (which HA turns into a timer
-    # cancel, arriving here as on_timer_cancelled) silences it.
+    # Nothing to talk to when Home Assistant is unreachable, and failing here is
+    # not harmless: request_start() logs "No API client connected" and returns
+    # WITHOUT firing error_trigger_, so the on_error branch below — the one that
+    # re-arms this component — never runs and the device stays deaf until it
+    # reboots. Bail out before touching anything, which leaves the wake word
+    # listening and skips a chime nobody asked for.
     #
-    # But the alarm must pause while we listen: it plays into this microphone,
-    # which sits on its own I2S peripheral and keeps capturing straight through
-    # playback, so a chime every 1.5 s would land in the middle of the phrase
-    # being transcribed. Suspend it, remember that it was ringing, and let
-    # on_end / on_error resume it if the timer was not actually cancelled.
+    # `api.connected` is NOT the right test: it is true for ANY API client, and
+    # `esphome logs` over the network is one. Only a client that subscribed to
+    # the voice assistant sets api_client_, so ask voice_assistant itself.
     - if:
         condition:
-          script.is_running: timer_alarm
+          lambda: 'return id(va)->get_api_connection() == nullptr;'
         then:
-          - script.stop: timer_alarm
-          - globals.set:
-              id: alarm_suspended
-              value: 'true'
-    # Ducking lives in voice_assistant's triggers so the button path gets it too.
-    # The chime confirms the wake word registered, and incidentally warms the
-    # output chain. It must go through the announcement pipeline — see the
-    # media_player `files:` note.
-    - media_player.speaker.play_on_device_media_file:
-        id: voice_player
-        media_file: chime_sound
-        announcement: true
-    - voice_assistant.start:
-        wake_word: !lambda return wake_word;
+          - logger.log: "wake word ignored — Home Assistant not subscribed"
+        else:
+          # A ringing timer does NOT eat the wake word — "okay nabu" opens a normal
+          # conversation, and only an actual "stop" (which HA turns into a timer
+          # cancel, arriving here as on_timer_cancelled) silences it.
+          #
+          # But the alarm must pause while we listen: it plays into this microphone,
+          # which sits on its own I2S peripheral and keeps capturing straight through
+          # playback, so a chime every 1.5 s would land in the middle of the phrase
+          # being transcribed. Suspend it, remember that it was ringing, and let
+          # on_end / on_error resume it if the timer was not actually cancelled.
+          - if:
+              condition:
+                script.is_running: timer_alarm
+              then:
+                - script.stop: timer_alarm
+                - globals.set:
+                    id: alarm_suspended
+                    value: 'true'
+          # Ducking lives in voice_assistant's triggers so the button path gets it too.
+          # The chime confirms the wake word registered, and incidentally warms the
+          # output chain. It must go through the announcement pipeline — see the
+          # media_player `files:` note.
+          - media_player.speaker.play_on_device_media_file:
+              id: voice_player
+              media_file: chime_sound
+              announcement: true
+          - voice_assistant.start:
+              wake_word: !lambda return wake_word;
 
 # ── HA Voice Assistant satellite ─────────────────────────────────────────────
 
@@ -388,9 +428,16 @@ voice_assistant:
 #   tap (< 1.2 s)   → talk to Assist, same as saying "okay nabu"
 #   hold (≥ 1.2 s)  → record while held and broadcast to the other devices
 #
-# Wire: GPIO38 → button → GND (internal pull-up, active LOW). GPIO33-37 are off
-# limits on this N16R8 module — octal PSRAM owns them (SPIIO4-7, SPIDQS).
-
+# Wire: GPIO21 → button → GND (internal pull-up, active LOW).
+#
+# NOT 38 or 39, measured: with the switch open both flicker at 20-30 edges/s
+# continuously, sub-2 ms glitches included — a floating input, not bounce. They
+# are the first pads past the MSPI block (26-37, soc/esp32s3/spi_pins.h) and this
+# module's octal PSRAM keeps that bus switching at 40 MHz, which a pin held only
+# by the ~45 kOhm internal pull-up is too high-impedance to sit beside. GPIO21 is
+# the last RTC-domain pad (SOC_RTCIO_PIN_COUNT 22), well away from MSPI, and
+# reads rock-solid. GPIO33-37 remain hard-off-limits: PSRAM owns them.
+#
 globals:
   - id: intercom_recording
     type: bool
@@ -486,11 +533,9 @@ binary_sensor:
     id: ptt_button
     name: "Button"
     pin:
-      number: GPIO38
+      number: GPIO21
+      mode: INPUT_PULLUP
       inverted: true
-      mode:
-        input: true
-        pullup: true
     filters:
       - delayed_on: 25ms      # debounce
       - delayed_off: 25ms
@@ -529,14 +574,26 @@ binary_sensor:
                       then:
                         - voice_assistant.stop:
                       else:
-                        - micro_wake_word.stop:
-                        # Same chime as the wake word — feedback, and it warms
-                        # the output chain before the reply arrives.
-                        - media_player.speaker.play_on_device_media_file:
-                            id: voice_player
-                            media_file: chime_sound
-                            announcement: true
-                        - voice_assistant.start:
+                        # Same reason as on_wake_word_detected: with no client
+                        # subscribed, request_start() bails WITHOUT firing
+                        # error_trigger_, so the on_error branch that re-arms the
+                        # wake word never runs and the device goes deaf until it
+                        # reboots. api.connected is the wrong test — any client,
+                        # `esphome logs` included, satisfies it.
+                        - if:
+                            condition:
+                              lambda: 'return id(va)->get_api_connection() == nullptr;'
+                            then:
+                              - logger.log: "tap ignored — Home Assistant not subscribed"
+                            else:
+                              - micro_wake_word.stop:
+                              # Same chime as the wake word — feedback, and it
+                              # warms the output chain before the reply arrives.
+                              - media_player.speaker.play_on_device_media_file:
+                                  id: voice_player
+                                  media_file: chime_sound
+                                  announcement: true
+                              - voice_assistant.start:
           # ── hold released: close out the broadcast ──
           else:
             - if:

@@ -6,3 +6,7 @@
 temp_auto_push.bat
 temp_interactive_push.bat
 .gitignore
+
+# Mic captures from tools/mic-capture.py and their tools/denoise-preview.py
+# output. Scoped rather than *.wav: sounds/chime.wav is a build asset.
+tools/mic-*.wav

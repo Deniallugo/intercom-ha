@@ -59,7 +59,7 @@ intercom/
 │   └── listen_and_answer.yaml
 ├── include/              # Shared C++ — recorder.h (PCM ring + gain), uploader.h (chunked POST)
 ├── packages/base.yaml    # Shared logger/api/ota/wifi/captive_portal
-├── intercom-addon/       # HA add-on (aiohttp): relay, chimes, ducking, talkback, announce
+├── intercom-addon/       # HA add-on (aiohttp): relay, chimes, ducking, talkback, announce, recordings
 ├── tests/                # pytest suite for the add-on
 ├── hardware/             # 3D-printable enclosures (kitchen, terrace, speaker, voice puck)
 ├── tools/mic-capture.py  # Bench tool — catch a device's mic upload as a WAV + verdict
@@ -106,6 +106,69 @@ tag (see `.github/workflows/build.yml`).
 | `bits_per_sample` | `16` | Sample width |
 | `channels` | `1` | Channel count |
 | `tts_engine` | `tts.piper` | HA TTS engine for text announcements |
+| `keep_recordings` | `10` | Mic recordings retained for playback in the panel (`0` disables) |
+| `denoise` | `true` | Clean up broadcast audio: high-pass, expander, normalise |
+
+### Broadcast cleanup
+
+The INMP441 has no gain control, and measurement showed device-side digital gain
+buys nothing: SNR was 13-15 dB at unity, at +18 dB and at +36 dB alike, because
+gain lifts the noise floor with the signal. So the device takes only a small
+fixed +6 dB that cannot clip, and the real work happens in the add-on, where
+there is CPU to spare and float headroom.
+
+`denoise.py` runs four stages over each upload before it is broadcast:
+
+1. **high-pass** at 80 Hz — the single biggest win. Measured on a real capture,
+   **35% of the total RMS sits below 80 Hz**: room rumble carrying no speech at
+   all. The filter is −3 dB at the corner and flat above 200 Hz, so the voice is
+   untouched.
+2. **multiband spectral subtraction** — 8 bands, each attenuated by the noise
+   estimated for that band. This is the stage that matters, because it is the
+   only one that reduces noise *while speech is present*. An expander alone was
+   inaudible: measurement showed 67% of frames carry speech, and no gate can
+   touch the hiss underneath them.
+3. **downward expander** — cleans the remaining gaps. Its threshold is the
+   *geometric mean* of the measured floor and the measured speech level (their
+   midpoint in dB); a fixed multiple of the floor landed above the speech on
+   real captures and attenuated everything equally, achieving nothing.
+4. **level restore** — puts speech back at exactly the level it arrived at.
+
+Stage 3 is deliberately **not** a normaliser. Raising the level lifts the
+suppressed noise with it, which sounds like "louder, including the noise" — the
+one thing this must not do. Set `MAKEUP_DB` if a broadcast genuinely needs more
+level; it is in dB so the cost is explicit.
+
+The band split is complementary — each band is a one-pole low-pass of what is
+left, subtracted from the residual — so with all gains at 1 the bands sum back
+to the input to within 2e-13. A conventional filter bank would leave crossover
+ripple that colours the voice even when nothing is being attenuated.
+
+Measured against a high-passed reference across eight real captures: **audible
+hiss (1-8 kHz median) 7-12 dB down, voice level within ±0.5 dB, and the gaps
+between words 11-14 dB quieter** without going dead. ~0.22 s of CPU per 5 s
+upload. Set `denoise: false` to broadcast raw.
+
+Both `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` are taste calls, swept and
+documented in the module: raise them if the gaps sound abrupt, lower them if
+there is still too much hiss.
+
+The retained recordings stay **raw** either way — that copy exists to expose mic
+faults, and cleaning it would hide them. To hear what the cleanup does to a
+capture, run `tools/denoise-preview.py <wav>`; it writes a `-clean` sibling and
+prints the before/after statistics.
+
+### Mic recordings
+
+Every upload to `/intercom` — a PTT broadcast or a device's **Mic test
+recording** button — is also kept as a chime-free WAV of the raw mic audio in
+the add-on's `/data/recordings`, newest `keep_recordings` retained. The
+**Intercom** side-panel lists them with an inline player, a download link and a
+delete button, so a mic can be judged without repointing `mic_test_url` at
+`tools/mic-capture.py` and reflashing.
+
+Set `keep_recordings: 0` if you'd rather nothing spoken over the intercom is
+retained on disk.
 
 ### HTTP API
 

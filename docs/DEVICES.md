@@ -51,7 +51,7 @@ and is the only one whose mic and speaker sit on separate I²S peripherals.
 | DAC | PCM5102A on I²S bus 0 (BCK G5, LCK G6, DIN G7) → 3.5 mm stereo jack |
 | Mic | INMP441 MEMS on I²S bus 1 (SCK G10, WS G11, SD G12), left slot |
 | Amplification | None on board — the jack feeds a powered speaker or an external amp |
-| Button | One momentary switch on G38 to GND (active LOW, internal pull-up) |
+| Button | One momentary switch on G21 to GND (active LOW, internal pull-up) |
 | Power | USB-C |
 
 Unlike the other two, capture and playback run on **two separate I²S
@@ -346,6 +346,43 @@ microphone sources; the intercom's raw data callback converts itself.
 **It needs no gain.** Measured from a real capture, speech peaks at 5404/32767
 (≈ −15.7 dBFS) with `gain_factor: 1` and a plain `>> 16` on the intercom path.
 
+The INMP441 has no PGA and no GAIN pin (the GAIN references elsewhere in this
+file are the amplifier's, not the mic's), so every dB is digital — and digital
+gain lifts the noise floor with the signal. Measured SNR was 12-15 dB at unity,
+at `>> 13` (+18 dB) and at `>> 10` (+36 dB) alike; the loud settings only added
+clipping (12.3% of a capture at +36 dB, peak pinned at full scale). Louder, not
+clearer.
+
+So the split is: **a small boost here, the level made up in the add-on.**
+
+| Path | Gain | Why not more |
+|---|---|---|
+| Intercom | +6 dB (`>> 15`) | 9.7 dB of headroom left; the add-on normalises after gating |
+| Wake word | +6 dB (`gain_factor: 2`) | detection is on-device, so this is its only lever |
+| Assist | unity | `auto_gain: 31dBFS` already AGCs this pipeline |
+
+`>> 15` rather than `recorder_set_gain(2, 1)` because the shift spends bits a
+plain `>> 16` discards, so it costs no resolution; the multiply would amplify
+already-truncated samples for the same level.
+
+The add-on's `denoise.py` then high-passes, subtracts each of 8 bands' own
+estimated noise, expands the gaps, and puts speech back at the level it arrived
+at — quieter noise at the same loudness, which is the thing device-side gain
+cannot do. Measured across eight captures: **hiss 7-12 dB down, voice within
+±0.5 dB.**
+
+The band subtraction is what makes it audible. This mic delivers only 10-13 dB
+of in-band SNR with the noise present continuously, and 67% of frames carry
+speech — so a gate or expander, which can only act in the gaps, changed the
+audible 1-8 kHz level by 0.2 dB. Reducing noise *underneath* speech needs
+per-band subtraction.
+
+Worth knowing for mic placement: **35% of the total RMS in a real capture sits
+below 80 Hz.** That is structure-borne rumble reaching the MEMS element, not
+speech, and it is why the high-pass alone removes ~10 dB of measured energy
+without touching the voice. Decoupling the mic from the case would attack it at
+the source. Preview any capture with `tools/denoise-preview.py`.
+
 Do **not** set `use_apll` on this bus. The APLL is shared silicon between the
 two I²S peripherals, so requesting it for the mic can disturb the DAC on the
 other one. It was tried against the hiss below and gave no measured benefit.
@@ -366,14 +403,28 @@ A real capture settles it where statistics mislead: **speech produces hundreds
 to thousands of zero-crossings per second.** Anything under ~50/s is not sound,
 whatever the level looks like.
 
-Getting one takes about a minute — `tools/mic-capture.py` stands in for the
-add-on's `/intercom` endpoint, writes a WAV, and prints the verdict:
+There are two ways to get one, chosen by the `mic_test_url` substitution — the
+address the **Mic test recording** button uploads to. It is deliberately
+separate from `intercom_url`, so aiming a mic test at a laptop never diverts PTT
+broadcasts away from the add-on.
+
+To simply *hear* the mic, point `mic_test_url` at the add-on and press the
+button: the add-on keeps the raw mic audio of the last `keep_recordings` uploads
+and lists them under **Mic recordings** in its side-panel, with an inline player
+and a download link.
+
+For the statistics — which is what settles the failures in the table above —
+`tools/mic-capture.py` stands in for the add-on's `/intercom` endpoint, writes a
+WAV next to itself, and prints the verdict:
 
 ```bash
 python3 tools/mic-capture.py            # on any machine on the LAN
-# then set intercom_url: "http://<that-machine>:9999/intercom", flash,
+# then set mic_test_url: "http://<that-machine>:9999/intercom", flash,
 # and press the device's "Mic test recording" button in Home Assistant
 ```
+
+Either way the file is the same bytes the device streamed; only where it lands
+differs. Flashing is only needed to change `mic_test_url`, not to listen.
 
 ```
 peak 5404  mean 824  dc -7
@@ -448,13 +499,23 @@ lands on silence rather than on the sound. Regenerate with `tools/make-chime.py`
 
 | Pin | Wiring |
 |---|---|
-| **G38** | one leg of a momentary switch; other leg to **GND** (internal pull-up, active LOW) |
+| **G21** | one leg of a momentary switch; other leg to **GND** (internal pull-up, active LOW) |
 
 #### Pins to avoid on this board
 
 G26–G32 are the SPI flash and **G33–G37 the octal PSRAM** — using any of them
 kills the board's memory. G19/G20 are USB, G43/G44 are UART0, and G0/G3/G45/G46
-are strapping pins. The G5–G12 block and G38 used here are clear of all of that.
+are strapping pins. The G5–G12 block and G21 used here are clear of all of that.
+
+**Do not put the button on G38 or G39.** Measured: with the switch open both
+flicker at 20–30 edges/s, continuously, sub-2 ms glitches included — a floating
+input, not contact bounce. They are the first pads past the MSPI block (G26–G37,
+per `soc/esp32s3/spi_pins.h`), and this module's octal PSRAM keeps that bus
+switching at 40 MHz, which a pin held only by the ~45 kΩ internal pull-up is too
+high-impedance to sit beside. **G21** is the last RTC-domain pad
+(`SOC_RTCIO_PIN_COUNT 22`), well away from MSPI, and reads rock-solid. Caveat:
+G38–G42 *and* G21 are the external USB PHY signals (`soc/esp32s3/usb_pins.h`) —
+irrelevant with the internal PHY, which is what `USB_SERIAL_JTAG` logging uses.
 
 ---
 

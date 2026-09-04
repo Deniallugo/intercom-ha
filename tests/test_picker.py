@@ -400,6 +400,31 @@ async def test_intercom_wav_includes_chimes(
     # Chime is 120ms at 16k/16/1 = 3840 bytes each side.
     # Total PCM = 3840 + 200 + 3840 = 7880.
     assert pcm_len == 7880
+    # The payload is no longer byte-identical to the upload: denoise.process()
+    # high-passes, expands and normalises it on the way out (the retained
+    # recording is what keeps the raw bytes). Length is preserved exactly, which
+    # is what the chime offsets and the duration arithmetic depend on.
+    payload = wav[44 + 3840:44 + 3840 + 200]
+    assert len(payload) == len(pcm)
+
+
+async def test_intercom_wav_payload_is_verbatim_when_denoise_off(
+    aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
+):
+    """With cleanup disabled the broadcast carries the uploaded bytes untouched."""
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    monkeypatch.setattr(srv, "load_options",
+                        lambda: {"ha_url": "http://ha.test:8123", "denoise": False})
+    client = await aiohttp_client(lan_app)
+    pcm = b"\xAA\xBB" * 100
+    await client.post(
+        "/intercom", data=pcm,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
     assert wav[44 + 3840:44 + 3840 + 200] == pcm
 
 

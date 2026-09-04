@@ -13,6 +13,8 @@ from ducking import Ducker
 from talkback import TalkbackWindows
 import players
 import announce
+import denoise
+import recordings
 
 ha = HAClient()
 
@@ -34,6 +36,13 @@ OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 PICKER_HTML_FILE = Path(__file__).parent / "picker.html"
 
+# Whether to clean up broadcast audio when the option is absent.
+DEFAULT_DENOISE = True
+
+# How many mic recordings to retain when the option is absent. 0 disables
+# retention entirely.
+DEFAULT_KEEP_RECORDINGS = 10
+
 # X-Session-ID is attacker-controllable and is interpolated into a /config/www
 # filename, so a value like "../../config/foo" would escape the directory and
 # let a LAN client write an arbitrary .wav. Accept it for logging/correlation
@@ -48,6 +57,20 @@ def safe_session_id(raw: str) -> str:
 def load_options() -> dict:
     with open(OPTIONS_FILE) as f:
         return json.load(f)
+
+
+def denoise_enabled() -> bool:
+    """Whether to high-pass / expand / normalise before broadcasting."""
+    return bool(load_options().get("denoise", DEFAULT_DENOISE))
+
+
+def keep_recordings() -> int:
+    """How many mic recordings to retain, from options.json."""
+    try:
+        value = int(load_options().get("keep_recordings", DEFAULT_KEEP_RECORDINGS))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return DEFAULT_KEEP_RECORDINGS
+    return max(0, value)
 
 
 async def fetch_media_players() -> list[dict]:
@@ -116,6 +139,20 @@ async def handle_intercom(request: web.Request) -> web.Response:
     log.info("received  session=%s  source=%s  pcm=%d bytes  duration=%.1fs",
              session_id[:8], source, len(pcm), duration)
 
+    # Keep the raw mic audio before routing, so a mic test is still listenable
+    # from the ingress panel even if the broadcast that follows fails.
+    try:
+        kept = recordings.save(
+            mixer.build_plain_wav(pcm),
+            source=source,
+            session_id=session_id,
+            keep=keep_recordings(),
+        )
+        if kept is not None:
+            log.info("recording kept  %s", kept.name)
+    except OSError as e:
+        log.warning("could not keep recording: %s", e)
+
     state = players.load_players()
 
     # Talkback: if this source has a live reply window, route ONLY to the
@@ -138,8 +175,18 @@ async def handle_intercom(request: web.Request) -> web.Response:
         selves=state["selves"],
     )
 
-    wav = mixer.build_wav(pcm)
-    total_duration = mixer.total_duration_seconds(pcm)
+    # Clean up only what goes out. recordings.save() above deliberately kept the
+    # raw bytes — that copy exists to expose mic faults, and processing it would
+    # hide them. Failure here must not cost the broadcast, so fall back to raw.
+    try:
+        clean = denoise.process(pcm, sample_rate=mixer.sample_rate,
+                                enabled=denoise_enabled())
+    except Exception:
+        log.exception("denoise failed — broadcasting raw audio")
+        clean = pcm
+
+    wav = mixer.build_wav(clean)
+    total_duration = mixer.total_duration_seconds(clean)
     log.info("WAV built  %s  (%.2fs incl. chimes)", session_id[:8], total_duration)
 
     await _play_on_targets(
@@ -198,6 +245,26 @@ async def handle_announce(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+async def handle_recordings_list(request: web.Request) -> web.Response:
+    return web.json_response({
+        "keep": keep_recordings(),
+        "items": recordings.listing(),
+    })
+
+
+async def handle_recording_get(request: web.Request) -> web.StreamResponse:
+    path = recordings.path_for(request.match_info.get("name", ""))
+    if path is None:
+        return web.Response(status=404, text="no such recording")
+    return web.FileResponse(path, headers={"Content-Type": "audio/wav"})
+
+
+async def handle_recording_delete(request: web.Request) -> web.Response:
+    if not recordings.delete(request.match_info.get("name", "")):
+        return web.Response(status=404, text="no such recording")
+    return web.Response(status=204)
+
+
 async def _play_on_targets(
     wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str
 ) -> None:
@@ -249,6 +316,9 @@ def make_ingress_app() -> web.Application:
     app.router.add_get("/api/players", handle_picker_get)
     app.router.add_post("/api/players", handle_picker_post)
     app.router.add_post("/api/announce", handle_announce)
+    app.router.add_get("/api/recordings", handle_recordings_list)
+    app.router.add_get("/api/recordings/{name}", handle_recording_get)
+    app.router.add_delete("/api/recordings/{name}", handle_recording_delete)
     return app
 
 
@@ -273,6 +343,10 @@ async def _run() -> None:
     log.info("audio format: %d Hz, %d-bit, %d channel(s)",
              sample_rate, bits, channels)
     log.info("tts engine: %s", opts.get("tts_engine", "tts.piper"))
+    keep = keep_recordings()
+    log.info("denoise: %s", "on" if denoise_enabled() else "off")
+    log.info("mic recordings: %s",
+             f"keeping newest {keep} in {recordings.RECORDINGS_DIR}" if keep else "disabled")
 
     lan_runner = web.AppRunner(make_lan_app())
     await lan_runner.setup()

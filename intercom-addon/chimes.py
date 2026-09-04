@@ -68,6 +68,16 @@ class ChimeMixer:
             sample_width=self.sample_width,
         ) + body
 
+    def build_plain_wav(self, pcm: bytes) -> bytes:
+        """Return the payload as a WAV with no chimes around it — what you want
+        when judging the microphone rather than playing a broadcast."""
+        return wav_header(
+            len(pcm),
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            sample_width=self.sample_width,
+        ) + pcm
+
     def pcm_duration_seconds(self, pcm: bytes) -> float:
         return len(pcm) / (self.sample_rate * self.sample_width * self.channels)
 
