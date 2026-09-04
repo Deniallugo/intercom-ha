@@ -593,6 +593,17 @@ bh_screw_clear   = 2.2;    // M2 clearance up the posts. Tighter than the usual 
 bh_screw_cbore_d = 4.0;    // head counterbore at the floor: an M2 head standing proud
 bh_screw_cbore_h = 1.2;    // here would eat the gap to the devkit
 // The posts take M2x10: 9.1 mm of collar, less the counterbore, plus btn_pilot_depth.
+//
+// The lip relief is cut from bh_relief_eps BELOW bh_floor_t, so that its bottom face is
+// never coplanar with the floor's own top. That means the floor the switch and its four
+// locating ribs actually stand on is bh_relief_eps lower than bh_floor_t — which is only
+// a modelling detail until something is placed at bh_floor_t and finds nothing under it.
+// The ribs are that something, so they are sunk bh_rib_embed INTO the floor. A rib merely
+// resting on the nominal plane hovers over the real one: an extra shell in the STL, four
+// separate BODIES out of Fusion, and four floating islands in the slicer, appearing out of
+// thin air just above the floor. bh_rib_embed must exceed bh_relief_eps — asserted.
+bh_relief_eps = 0.01;      // how far the lip relief oversteps the floor, top and bottom
+bh_rib_embed  = 0.3;       // how far the locating ribs reach INTO it
 
 // ---- 11 x 11 tactile switch, 4 pins [MEASURE — these place the whole mechanism] ----
 // An 11 mm square 4-pin tactile with a pin plunger on top — the 12x12 family. It is not a

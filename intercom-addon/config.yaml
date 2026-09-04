@@ -1,7 +1,7 @@
 image: ghcr.io/deniallugo/intercom-ha/{arch}-intercom-relay
 name: Intercom Relay
 description: Receives audio from Atom Echo and plays it on HA media players.
-version: "4.0.1"
+version: "4.2.0"
 slug: intercom_relay
 init: false
 hassio_api: true
@@ -21,6 +21,8 @@ options:
   bits_per_sample: 16
   channels: 1
   tts_engine: "tts.piper"
+  keep_recordings: 10
+  denoise: true
 schema:
   ha_url: str
   port: int
@@ -28,6 +30,8 @@ schema:
   bits_per_sample: int
   channels: int
   tts_engine: str
+  keep_recordings: int(0,200)
+  denoise: bool
 map:
   - config:rw
 ports:

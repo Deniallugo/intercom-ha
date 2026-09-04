@@ -29,6 +29,16 @@
   .error { color: #c33; }
   .hint { color: #666; margin: 0.75rem 0; }
   button.save { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+  .rec { padding: 0.6rem 0; border-bottom: 1px solid #eee; }
+  .rec:last-child { border-bottom: none; }
+  .rec-head { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+  .rec-src { font-weight: 600; }
+  .rec-meta { color: #888; font-size: 0.85rem; }
+  .rec audio { width: 100%; margin-top: 0.35rem; }
+  .linkish {
+    border: none; background: transparent; padding: 0; cursor: pointer;
+    color: #557; font-size: 0.85rem; text-decoration: underline;
+  }
 </style>
 </head>
 <body>
@@ -44,6 +54,17 @@
     <button class="save" id="ann-send">Announce</button>
     <span id="ann-toast" class="toast"></span>
   </div>
+</section>
+<section id="recordings" style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid #eee;">
+  <div class="src-line">
+    <h2 style="margin: 0 0.5rem 0 0;">Mic recordings</h2>
+    <button class="linkish" id="rec-refresh">refresh</button>
+  </div>
+  <div class="hint" style="margin: 0.2rem 0 0.6rem;">
+    The raw mic audio of the last few uploads — press “Mic test recording” on a
+    device, then refresh.
+  </div>
+  <div id="rec-list"></div>
 </section>
 <div id="status"></div>
 <div id="content"></div>
@@ -291,7 +312,90 @@ $("ann-send").addEventListener("click", async () => {
   }
 });
 
+function recWhen(epochSeconds) {
+  return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+function renderRecordings(data) {
+  const list = $("rec-list");
+  list.innerHTML = "";
+
+  if (!data.keep) {
+    const off = document.createElement("div");
+    off.className = "hint";
+    off.textContent = "Retention is off — set keep_recordings in the add-on configuration.";
+    list.appendChild(off);
+    return;
+  }
+  if (!data.items.length) {
+    const none = document.createElement("div");
+    none.className = "empty";
+    none.textContent = "No recordings yet.";
+    list.appendChild(none);
+    return;
+  }
+
+  for (const item of data.items) {
+    const row = document.createElement("div");
+    row.className = "rec";
+
+    const head = document.createElement("div");
+    head.className = "rec-head";
+
+    const src = document.createElement("span");
+    src.className = "rec-src";
+    src.textContent = state.aliases[item.source] || item.source;
+    head.appendChild(src);
+
+    const meta = document.createElement("span");
+    meta.className = "rec-meta";
+    const secs = item.seconds == null ? "?" : item.seconds.toFixed(1);
+    meta.textContent = recWhen(item.modified) + " · " + secs + "s · "
+                     + Math.round(item.bytes / 1024) + " kB";
+    head.appendChild(meta);
+
+    const dl = document.createElement("a");
+    dl.href = "./api/recordings/" + encodeURIComponent(item.name);
+    dl.download = item.name;
+    dl.className = "linkish";
+    dl.textContent = "download";
+    head.appendChild(dl);
+
+    const del = document.createElement("button");
+    del.className = "linkish";
+    del.textContent = "delete";
+    del.addEventListener("click", async () => {
+      del.disabled = true;
+      await fetch("./api/recordings/" + encodeURIComponent(item.name), {method: "DELETE"});
+      loadRecordings();
+    });
+    head.appendChild(del);
+    row.appendChild(head);
+
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "none";
+    audio.src = "./api/recordings/" + encodeURIComponent(item.name);
+    row.appendChild(audio);
+
+    list.appendChild(row);
+  }
+}
+
+async function loadRecordings() {
+  try {
+    const resp = await fetch("./api/recordings");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    renderRecordings(await resp.json());
+  } catch (e) {
+    $("rec-list").innerHTML = '<span class="error">Could not load recordings: ' + e + '</span>';
+  }
+}
+
+$("rec-refresh").addEventListener("click", loadRecordings);
+
 load();
+loadRecordings();
 </script>
 </body>
 </html>

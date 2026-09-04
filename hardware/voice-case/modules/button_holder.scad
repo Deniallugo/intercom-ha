@@ -69,8 +69,11 @@ module button_holder() {
             translate([0, 0, h - lead_in])
                 cylinder(h = lead_in + 0.1, d1 = bh_bore_d(), d2 = bh_bore_d() + 2*lead_in);
             // lip relief. Its upper face is the guide's end, and that IS the catch.
-            translate([0, 0, z_floor - 0.01])
-                cylinder(h = z_catch - z_floor + 0.02, d = bh_relief_d());
+            // It oversteps the floor by bh_relief_eps at the bottom, so the plane the
+            // switch and the ribs stand on is bh_relief_eps below z_floor — see
+            // switch_ribs(), which is the one thing that has to know.
+            translate([0, 0, z_floor - bh_relief_eps])
+                cylinder(h = z_catch - z_floor + 2*bh_relief_eps, d = bh_relief_d());
             // M2 clearance up the posts, counterbored so no head stands proud of the
             // floor — the devkit is only a few mm below it
             for (sx = [-1, 1]) translate([sx*ear_x, 0, -0.1]) {
@@ -91,7 +94,14 @@ module button_holder() {
 // Two lengths. The switch's pins stand OUT from two opposite sides, so on those two the rib has
 // to fit in the gap between that side's pair of pins; on the other two it runs full length. Get
 // this wrong and a rib sits over a pin window with nothing under it.
+//
+// They are UNIONED ON AFTER the lip relief has been cut, and that cut takes the floor down to
+// z_floor - bh_relief_eps. So the seating plane is z_seat, not z_floor, and the ribs are sunk
+// bh_rib_embed below it: a rib built on the nominal plane would stand bh_relief_eps clear of the
+// real one and never fuse to it. sw_locate_h stays the height above the plane the switch sits on.
 module switch_ribs(z_floor) {
+    z_seat = z_floor - bh_relief_eps;               // what the relief cut actually left
+    h      = sw_locate_h + bh_rib_embed;
     if (sw_locate_t > 0 && sw_locate_h > 0)
         for (i = [0 : 3]) {
             // i even -> the +-x pair, i odd -> the +-y pair
@@ -99,8 +109,8 @@ module switch_ribs(z_floor) {
             len    = pinned ? sw_locate_len_pin : sw_locate_len;
             rotate([0, 0, i*90])
                 translate([(sw_locate_r0() + sw_locate_r1())/2, 0,
-                           z_floor + sw_locate_h/2])
-                    cube([sw_locate_t, len, sw_locate_h], center = true);
+                           z_seat - bh_rib_embed + h/2])
+                    cube([sw_locate_t, len, h], center = true);
         }
 }
 

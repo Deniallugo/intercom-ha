@@ -466,6 +466,18 @@ if (sw_locate_t > 0) {
            str("long rib reaches the pin slots on the neighbouring side — keep sw_locate_len under ",
                2*sw_pin_a_lo()));
     assert(sw_locate_h > pcb_t, "locating ribs too short to catch the switch body's side");
+    // ...and they have to be FUSED to the floor they stand on. The lip relief is cut
+    // bh_relief_eps below bh_floor_t, so the seating plane is that much lower than nominal
+    // and a rib built at bh_floor_t hovers over it. The gap is invisible in a render and
+    // costs nothing in a section, which is exactly why it needs an assert: it shows up as
+    // an extra shell in the STL, four separate bodies out of Fusion, and four islands
+    // floating in mid-air a millimetre and a half up in the slicer.
+    assert(bh_rib_embed > bh_relief_eps,
+           str("locating ribs must reach INTO the collar floor — bh_rib_embed ", bh_rib_embed,
+               " against a relief that oversteps it by ", bh_relief_eps));
+    assert(bh_rib_embed < bh_floor_t - 1.0,
+           str("locating ribs sunk ", bh_rib_embed, " into a ", bh_floor_t,
+               " floor — leave the pins something to pass through"));
 }
 assert(sw_pin_len > bh_floor_t,
        "pins do not reach through the floor — nothing to solder to under the holder");
