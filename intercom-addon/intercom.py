@@ -132,6 +132,10 @@ async def handle_intercom(request: web.Request) -> web.Response:
     source = (request.headers.get("X-Device-Name") or "unknown").strip() or "unknown"
 
     pcm = await request.read()
+    # Whole frames only: a stray odd byte would shift the closing chime by one
+    # byte and play it as noise.
+    frame = mixer.sample_width * mixer.channels
+    pcm = pcm[: len(pcm) - len(pcm) % frame]
     if not pcm:
         log.warning("empty body from session=%s, ignoring", session_id[:8])
         return web.Response(status=400)

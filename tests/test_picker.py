@@ -402,6 +402,24 @@ async def test_intercom_wav_includes_chimes(
     assert pcm_len == 7880
 
 
+async def test_intercom_odd_length_upload_keeps_closing_chime_aligned(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    import struct
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    client = await aiohttp_client(lan_app)
+    await client.post(
+        "/intercom", data=b"\xAA\xBB" * 100 + b"\x7f",
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
+    assert struct.unpack_from("<I", wav, 40)[0] == 7880   # odd byte dropped
+    assert wav.endswith(srv.mixer.chime_out)
+
+
 async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
 ):

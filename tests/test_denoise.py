@@ -68,14 +68,12 @@ def test_preserves_length_and_format():
 
 
 @pytest.mark.parametrize("fn", [denoise.process, denoise.level])
-def test_odd_length_keeps_the_trailing_byte(fn):
-    """Output length equals input length; downstream timing depends on it."""
+def test_odd_length_drops_the_trailing_byte(fn):
+    """Whole samples out: chimes are appended after this, and must stay aligned."""
     src = speech_like()
-    odd = src + b"\x7f"
-    out = fn(odd, sample_rate=RATE)
-    assert len(out) == len(odd)
-    assert out[-1:] == b"\x7f"
-    assert out[:-1] == fn(src, sample_rate=RATE)
+    out = fn(src + b"\x7f", sample_rate=RATE)
+    assert len(out) % 2 == 0
+    assert out == fn(src, sample_rate=RATE)
 
 
 @pytest.mark.parametrize("bad", [b"", b"\x00", b"\x01\x02\x03"])

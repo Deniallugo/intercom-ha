@@ -201,7 +201,9 @@ button:
             - wait_until:
                 condition:
                   lambda: 'return !uploader_is_uploading();'
-                timeout: 15s
+                # Longer than the uploader's worst case (8 s connect + 8 s per
+                # send/recv), so this never gives up while it is still running.
+                timeout: 60s
             - logger.log: "mic test uploaded"
             - micro_wake_word.start:       # re-arm before releasing our slot
             - lambda: id(inmp441_mic).stop();

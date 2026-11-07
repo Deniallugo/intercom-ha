@@ -4,8 +4,8 @@ Stages, in order: high-pass, multiband noise subtraction, downward expander,
 level to TARGET_SPEECH_RMS behind a peak limiter. level() is the high-pass and
 level stages alone (the `denoise: false` path).
 
-Input is 16-bit mono PCM; length and format are preserved (an odd trailing byte
-passes through). The raw copy in recordings.py is never processed.
+Input is 16-bit mono PCM. Output is whole samples only: an odd trailing byte is
+dropped, since chimes are appended after it. The raw copy in recordings.py is never processed.
 """
 import array
 import logging
@@ -91,7 +91,7 @@ MAX_MAKEUP = 8.0
 
 
 def _unpack(pcm: bytes, tag: str):
-    """(samples, trailing odd byte) — or None if `pcm` cannot be read."""
+    """Samples (an odd trailing byte dropped), or None if `pcm` cannot be read."""
     n = len(pcm) // 2
     try:
         samples = array.array("h")
@@ -99,17 +99,16 @@ def _unpack(pcm: bytes, tag: str):
     except (ValueError, struct.error) as e:
         log.warning("%s: cannot unpack PCM (%s) — passing through", tag, e)
         return None
-    return samples, pcm[n * 2:]
+    return samples
 
 
 def process(pcm: bytes, *, sample_rate: int) -> bytes:
     """Full cleanup. Never raises: returns `pcm` unchanged if it cannot run."""
     if len(pcm) < 4:
         return pcm
-    unpacked = _unpack(pcm, "denoise")
-    if unpacked is None:
+    samples = _unpack(pcm, "denoise")
+    if samples is None:
         return pcm
-    samples, tail = unpacked
 
     work = _highpass(samples, sample_rate)
 
@@ -130,21 +129,20 @@ def process(pcm: bytes, *, sample_rate: int) -> bytes:
 
     log.info("denoise: floor %.0f  speech %.0f  thresh %.0f  level x%.2f",
              floor, speech, thresh, scale)
-    return to_pcm(work) + tail
+    return to_pcm(work)
 
 
 def level(pcm: bytes, *, sample_rate: int) -> bytes:
     """High-pass and level only (`denoise: false`). Hiss rises with the speech."""
     if len(pcm) < 4:
         return pcm
-    unpacked = _unpack(pcm, "level")
-    if unpacked is None:
+    samples = _unpack(pcm, "level")
+    if samples is None:
         return pcm
-    samples, tail = unpacked
     work = _highpass(samples, sample_rate)
     scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS, tag="level")
     log.info("level: x%.2f", scale)
-    return to_pcm(work) + tail
+    return to_pcm(work)
 
 
 def _highpass(samples: "array.array", sample_rate: int) -> "array.array":

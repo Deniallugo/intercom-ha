@@ -60,6 +60,7 @@ class ChimeMixer:
 
     def build_wav(self, pcm: bytes) -> bytes:
         """Return a full WAV byte string: header + chime_in + pcm + chime_out."""
+        pcm = self._whole_frames(pcm)   # else chime_out plays misaligned
         body = self.chime_in + pcm + self.chime_out
         return wav_header(
             len(body),
@@ -77,6 +78,10 @@ class ChimeMixer:
             channels=self.channels,
             sample_width=self.sample_width,
         ) + pcm
+
+    def _whole_frames(self, pcm: bytes) -> bytes:
+        frame = self.sample_width * self.channels
+        return pcm[: len(pcm) - len(pcm) % frame]
 
     def pcm_duration_seconds(self, pcm: bytes) -> float:
         return len(pcm) / (self.sample_rate * self.sample_width * self.channels)

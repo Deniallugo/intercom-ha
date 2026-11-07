@@ -7,6 +7,7 @@
 #include "esp_random.h"
 #include <cstdio>
 #include <cerrno>
+#include <fcntl.h>
 #include <cstring>
 #include <string>
 
@@ -26,7 +27,31 @@ static std::string _make_sid() {
   return std::string(s);
 }
 
-static const int UPL_TIMEOUT_S = 8;   // per send()/recv()/connect()
+static const int UPL_TIMEOUT_S = 8;   // per connect()/send()/recv()
+
+// connect() bounded by UPL_TIMEOUT_S. lwIP's blocking connect() ignores
+// SO_SNDTIMEO and waits out the SYN retries (a minute or more), so connect
+// non-blocking and wait for writability.
+static bool _connect_timeout(int sock, const struct sockaddr* addr, socklen_t len) {
+  int flags = ::fcntl(sock, F_GETFL, 0);
+  if (flags < 0 || ::fcntl(sock, F_SETFL, flags | O_NONBLOCK) < 0) return false;
+  int r = ::connect(sock, addr, len);
+  if (r != 0 && errno != EINPROGRESS) return false;
+  if (r != 0) {
+    fd_set wfds; FD_ZERO(&wfds); FD_SET(sock, &wfds);
+    struct timeval tv; tv.tv_sec = UPL_TIMEOUT_S; tv.tv_usec = 0;
+    if (::select(sock + 1, nullptr, &wfds, nullptr, &tv) <= 0) {
+      errno = ETIMEDOUT;
+      return false;
+    }
+    int err = 0; socklen_t elen = sizeof(err);
+    if (::getsockopt(sock, SOL_SOCKET, SO_ERROR, &err, &elen) != 0 || err != 0) {
+      errno = err ? err : errno;
+      return false;
+    }
+  }
+  return ::fcntl(sock, F_SETFL, flags) == 0;   // blocking again for send/recv
+}
 
 // send() until all `len` bytes are out; false on error or timeout.
 static bool _send_all(int sock, const void* buf, size_t len) {
@@ -91,12 +116,12 @@ static void _stream_task(void* arg) {
     return;
   }
   // Without timeouts a Wi-Fi drop blocks forever and every later PTT is refused
-  // until reboot. SO_SNDTIMEO also bounds connect().
+  // until reboot.
   struct timeval tv;
   tv.tv_sec = UPL_TIMEOUT_S; tv.tv_usec = 0;
   ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
   ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-  if (::connect(sock, res->ai_addr, res->ai_addrlen) != 0) {
+  if (!_connect_timeout(sock, res->ai_addr, res->ai_addrlen)) {
     ESP_LOGE(UPL_TAG, "connect to %s:%d failed: errno %d", host, port, errno);
     ::freeaddrinfo(res);
     _upl_finish(sock, false);
