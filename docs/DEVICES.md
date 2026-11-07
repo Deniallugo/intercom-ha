@@ -20,7 +20,7 @@ and is the only one whose mic and speaker sit on separate I²S peripherals.
 | Mic | Internal PDM (SPM1423) on GPIO23 |
 | Internal speaker | Internal NS4168 amp → built-in 0.5 W speaker on GPIO22 (disconnected — replaced by external amp) |
 | External amp | 1× MAX98357A as a passive parallel I²S listener on G19/G33/G22 (+12 dB) |
-| External speaker | One 4 Ω driver on the MAX98357A `+ / −` output |
+| External speaker | 2× 4 cm drivers wired in series on the MAX98357A `+ / −` output (see `hardware/kitchen-case/README.md`) |
 | Button | Built-in tactile on GPIO39 (active LOW) |
 | LED | Built-in SK6812 RGB on GPIO27 |
 | Power | USB-C |
@@ -430,6 +430,30 @@ the 3–8 kHz hiss signature in the INMP441 (see *how this mic fails* below):
   patch cable next to the power wiring, not around the far side of the box.
 - If ticking follows Wi-Fi traffic, add 100 µF across the devkit's 5V–GND.
 
+**Wi-Fi clicks in the mic, and how PTT avoids them.** Every Wi-Fi transmit
+burst reaches the INMP441 through the shared 3.3 V rail as a click — measured
+out of the case at ~30 clicks/s, 3 ms each, 24 dB over the floor, in the rhythm
+of the upload's own TCP packets. What the firmware does about it:
+
+- **`wifi: output_power: 8.5dB`** (default 20). A smaller transmit current step
+  is a smaller click. Measured in the case with the upload streaming: −44.2 dBFS
+  and 39 clicks/s at 20 dBm, −57.7 dBFS and 1.3 clicks/s at 8.5 dBm, against
+  −59.9 dBFS and none with nothing transmitted. The link had margin to spare
+  (−49 dBm at the AP); if the device starts dropping off Wi-Fi, raise this first.
+- **PTT records from the press, uploads from the hold.** The recorder starts at
+  the press, into a 30 s PSRAM buffer; once the hold is confirmed (1.2 s) the
+  upload starts, drains that buffer and then streams alongside the mic until the
+  release (+500 ms tail). So a broadcast keeps its first words, has no length
+  limit, and Wi-Fi only transmits once it is a broadcast — not during a tap. A
+  tap discards the take without sending anything.
+- **The mic test does not stream:** it records all 5 s, then uploads, so its
+  capture shows the mic and its supply without the upload's own bursts.
+
+If clicks remain audible, the fix is in hardware, not firmware: filter the
+mic's VDD — e.g. a 100 Ω series resistor from 3V3 with 10 µF + 100 nF to GND at
+the mic (the INMP441 draws ~1.4 mA, so it still sees ~3.15 V) — and keep its
+wires away from the antenna end of the devkit.
+
 #### INMP441 mic (I²S bus 1)
 
 | INMP441 pin | ESP32-S3 | Note |
@@ -457,8 +481,8 @@ gain lifts the noise floor with the signal. Measured SNR was 12-15 dB at unity,
 at `>> 13` (+18 dB) and at `>> 10` (+36 dB) alike. **This is level, not clarity;**
 expect a louder broadcast, not a cleaner one.
 
-+12 dB is the measured ceiling. Re-scaling the five unclipped captures in
-`tools/` by x2 from the old +6 dB gives 0.00% clipped and a worst-case peak of
++12 dB is the measured ceiling. Re-scaling five unclipped captures
+by x2 from the old +6 dB gives 0.00% clipped and a worst-case peak of
 −5.1 dBFS on the loudest close-range one; x4 (+18 dB) pins that capture at
 0.0 dBFS and begins to clip, and `>> 10` (+36 dB) clipped 12.3% outright.
 
@@ -470,8 +494,8 @@ expect a louder broadcast, not a cleaner one.
 
 The intercom figure is the level the device *uploads* at, not what a broadcast
 goes out at: the add-on levels every broadcast, cleanup on or off
-(`denoise.level()`, speech to −16 dBFS behind a −3 dBFS peak limiter). Measured
-on later captures the upload is −27 to −31 dBFS of speech, ~18 dB under the
+(`denoise.level()`, speech to −16 dBFS behind a −3 dBFS peak limiter). Measured,
+raw uploads carry speech at −21 to −33 dBFS, ~12-24 dB under the
 chime — fine through voice-s3's own amplifier, inaudible on the Atom Echo's
 speaker unless the talker was right on the mic.
 
@@ -494,7 +518,7 @@ noise is down rather than on top of it. Measured: hiss 7-12 dB down, and speech
 it (voice-s3 in its case: −60.2 dBFS against −57.8 raw).
 
 The absolute level target matters because the broadcast shares a media player
-with music: raw uploads land at −26 to −29 dBFS RMS against music masters near
+with music: raw uploads carry speech at −21 to −33 dBFS against music masters near
 −12 dBFS, so at one volume setting the chime is audible and the speech is not.
 
 The band subtraction is what makes it audible. This mic delivers only 10-13 dB
@@ -530,19 +554,23 @@ A real capture settles it where statistics mislead: **speech produces hundreds
 to thousands of zero-crossings per second.** Anything under ~50/s is not sound,
 whatever the level looks like.
 
-There are two ways to get one, chosen by the `mic_test_url` substitution — the
-address the **Mic test recording** button uploads to. It is deliberately
-separate from `intercom_url`, so aiming a mic test at a laptop never diverts PTT
-broadcasts away from the add-on.
+The **Mic test recording** button records 5 s and uploads it to the
+`mic_test_url` substitution. On voice-s3 nothing is sent until the 5 s are over,
+so Wi-Fi is quiet while the mic listens; the Atom Echo, with no PSRAM to hold
+the take, streams it. `mic_test_url` is deliberately separate from
+`intercom_url`, so aiming a mic test at a laptop never diverts PTT broadcasts
+away from the add-on.
 
-To simply *hear* the mic, point `mic_test_url` at the add-on and press the
-button: the add-on keeps the raw mic audio of the last `keep_recordings` uploads
-and lists them under **Mic recordings** in its side-panel, with an inline player
-and a download link.
+By default it points at the add-on: press the button and the test shows up
+under **Mic recordings** in the side-panel (the raw mic audio of the last
+`keep_recordings` uploads, with an inline player and a download link). It is
+handled like any upload, so it is **also played on that device's target
+speakers**.
 
 For the statistics — which is what settles the failures in the table above —
-`tools/mic-capture.py` stands in for the add-on's `/intercom` endpoint, writes a
-WAV next to itself, and prints the verdict:
+point `mic_test_url` at `tools/mic-capture.py` instead. It stands in for the
+add-on's `/intercom` endpoint, writes a WAV next to itself, and prints the
+verdict:
 
 ```bash
 python3 tools/mic-capture.py            # on any machine on the LAN
@@ -550,7 +578,7 @@ python3 tools/mic-capture.py            # on any machine on the LAN
 # and press the device's "Mic test recording" button in Home Assistant
 ```
 
-Either way the file is the same bytes the device streamed; only where it lands
+Either way the file is the same bytes the device uploaded; only where it lands
 differs. Flashing is only needed to change `mic_test_url`, not to listen.
 
 ```

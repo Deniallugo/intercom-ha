@@ -6,6 +6,10 @@ vertically** on the front baffle, dual mono (one amp channel each), in a **porte
 on top, a vented electronics bay below, split by a divider crossed by four sealed
 terminal bolts. Intercom (mic + PTT) is a secondary role; music playback is primary.
 
+> **Firmware status:** `devices/speaker-s3.yaml` is playback only. The case has the
+> ICS-43434 mic pocket and the PTT bore, but neither the mic nor the button is
+> implemented in the firmware yet.
+
 External size: **86 × 202 × 88 mm** (W × H × D).
 Net chamber volume: **0.7015 L** (≥ the 0.65 L `vol_target` floor in the asserts).
 
@@ -229,7 +233,7 @@ and keep ≥ 30 mm clear on the **+x port side**.
 - **Xmax and Vas** — never measured. Vas picks the box volume; Xmax sets every max-SPL
   number above. Measure both (added-mass or closed-box delta-Fs) before trusting them.
 - Driver cutout (46 mm), frame OD (53 mm), seated depth (28 mm)
-- Board footprints: S3 devkit (69 × 26), PCM5102 (27 × 27), PAM8406 (24 × 16)
+- Board footprints: S3 devkit (69 × 26 in `params.scad`; a real board measured 63 × 28 — check yours), PCM5102 (27 × 27), PAM8406 (24 × 16)
 - **Panel-mount USB-C socket**: body cutout (9.5 × 4.5 mm) and screw pitch (20 mm) vary
   a lot between modules — measure yours
 - PTT panel-mount switch thread (12 mm → 12.4 mm bore) and nut across flats (16.5 mm)

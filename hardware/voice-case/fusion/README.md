@@ -34,9 +34,9 @@ fusion/
 Parts: `all` (assembled preview) · `shell` · `base` · `button` · `holder` · `clamp` ·
 `coupon` · `fit` — the same names `-D part=` took.
 
-To pin a part and skip the prompt, or to export STLs, edit the flags at the top of
+To pin a part and skip the prompt, or to turn STL export off, edit the flags at the top of
 `VoiceCase.py` (`PART`, `ASK`, `NEW_DOCUMENT`, `USER_PARAMETERS`, `EXPORT_STL`).
-`EXPORT_STL` writes one file per component into `VoiceCase/stl/`, in each part's own print
+`EXPORT_STL` (on by default) writes one file per component into `VoiceCase/stl/`, in each part's own print
 orientation — the equivalent of `../build.sh`.
 
 **Hand edits do not come back as code.** The script is one-way: Python generates the model,
@@ -61,10 +61,10 @@ Two halves. First the **design checks** — `tests/asserts.scad` ported to Pytho
 neither CAD package:
 
 ```
-plan_x     = 74     min 73.6    boss line -> devkit -> shared wall -> DAC -> socket
-plan_y     = 75     min 74.2    (devkit length 74.2 | DAC vs bosses 66.2)
+plan_x     = 73     min 72.6    boss line -> devkit -> shared wall -> DAC -> socket
+plan_y     = 74     min 73.7    (devkit length 73.7 | DAC vs bosses 66.2)
 cavity     = 29     min 28.85   (bare 16.1 | mic 23.7 | button holder 28.85)
-outer      = 74 x 75 x 35 mm (41.5 over the button)
+outer      = 73 x 74 x 35 mm (41.5 over the button)
 ...
 OK — all design checks pass
 ```

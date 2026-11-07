@@ -22,16 +22,16 @@ Neither number is a free choice. Both have derived floors, and the asserts name 
 value they need rather than failing as a pile of unrelated collisions further down:
 
 ```
-plan_x_min = 72.8    one chain: boss line -> devkit -> shared wall -> DAC -> socket
-plan_y_min = 73.4    (devkit length 73.4 | DAC vs bosses 66.2)
-cavity_min = 27.25   (bare 16.1 | mic 23.7 | button holder 27.25)
+plan_x_min = 72.6    one chain: boss line -> devkit -> shared wall -> DAC -> socket
+plan_y_min = 73.7    (devkit length 73.7 | DAC vs bosses 66.2)
+cavity_min = 28.85   (bare 16.1 | mic 23.7 | button holder 28.85)
 ```
 
 **It is not square, because the two axes are not set by the same thing.** Depth is the 63 mm
-board plus two walls, two register lips and two pocket clearances — 73.4, and there is nothing
+board plus two walls, two register lips and two pocket clearances — 73.7, and there is nothing
 on that axis to save. Width is one chain read inward from the `+x` wall: the socket fixes the
 DAC, the DAC fixes the devkit one shared wall inboard of it, and `plan_x` only has to be big
-enough that the devkit's outer wall still clears the `-x` corner bosses — 72.8. Getting here
+enough that the devkit's outer wall still clears the `-x` corner bosses — 72.6. Getting here
 took five steps.
 
 It was **96** until the devkit stopped being centred. The old rule was that a board
@@ -65,11 +65,11 @@ VPE manages 86 mm with a purpose-built PCB; this undercuts it on two off-the-she
 at the cost of being 35 mm tall instead of flat.
 
 **Height (35).** Set by the devkit's 11 mm component stack — soldered 2.54 headers plus
-dressed wire — against the button module, which reaches **13.25 mm** down from the top face
+dressed wire — against the button module, which reaches **13.75 mm** down from the top face
 and has to clear it. The devkit alone would need only 16.1 mm of cavity; the button costs the
-other 12.25. `cavity_depth = 29` leaves 0.65 mm over the floor.
+other 12.75. `cavity_depth = 29` leaves 0.15 mm over the floor.
 
-Note *what* reaches 13.25: not the holder's floor, which stops at 11.35, but the **switch's
+Note *what* reaches 13.75: not the holder's floor, which stops at 11.85, but the **switch's
 four pins** hanging through it, whose solder joints are the lowest thing on the whole top-face
 assembly. Clip them shorter and `cavity_min()` drops with them.
 
@@ -129,7 +129,7 @@ base plate — both boards, looking down (73 x 74)      o = M3 screw
     force on us anyway, and it runs right along the devkit) and one in each bay fore and
     aft of the DAC. 428 mm2 of open area against the old eight slots' 564.
 
-    the devkit pocket is a SLOT, not a tray: 0.6 mm per side rather than the DAC's 1.0,
+    the devkit pocket is a SLOT, not a tray: 0.5 mm per side rather than the DAC's 1.0,
     a tab over the board's front edge that preloads it, and stops behind its rear corners.
     It goes in TILTED — rear up about 2 deg, front edge under the tab first, then push
     until the rear drops behind the stops. It cannot be dropped in flat, and it cannot be
@@ -154,16 +154,16 @@ section — through the boards                     +x to the right
      3  |      [ holder  ]                      |    collar top
      8  |      [  catch  ]                      |    cap's lip lands here, and
   3.55  |      [ switch  ]                      |    11x11 x 8 tall, standing ON
-  9.75  |      [ ffloorf ]                      |    the collar floor, reaching up
- 13.25  |       | |  | |                        |    four pins, soldered under it
-  15.9  | ---- devkit components ----           |    2.65 mm below those pins
+  10.25 |      [ ffloorf ]                      |    the collar floor, reaching up
+ 13.75  |       | |  | |                        |    four pins, soldered under it
+  15.9  | ---- devkit components ----           |    2.15 mm below those pins
   20.4  |                       +--socket--+  ]--    thinned panel + plug hole
   25.9  | +---- devkit PCB ----+  +--DAC--+     |
     31  +-+-----------------+----+--------+-----+    base plate
     34  =========================================
 
   the devkit's 11 mm component stack (headers + dressed wire) is what sets the
-  height: the button holder reaches 12.15 mm down and has to clear it
+  height: the button holder reaches 13.75 mm down and has to clear it
 ```
 
 | Feature | Where |
@@ -333,9 +333,9 @@ at 15.9. Standing the switch *inside* the guide puts the two side by side instea
 put a caliper across, and because it is the only thing the post's length depends on:
 
 ```
-plunger_z()  = bh_relief_z1() - sw_h          ->  9.75 - 8.0 = 1.75
+plunger_z()  = bh_relief_z1() - sw_h          ->  10.25 - 8.0 = 2.25
 btn_post_h() = plunger_z() + btn_preload - btn_ceil_z()
-             = 1.75 + 0.25 + 5.3 = 7.30
+             = 2.25 + 0.25 + 5.3 = 7.80
 ```
 
 The body/plunger split does not appear there. It only decides where `sw_top_z()` falls, and the
@@ -608,7 +608,7 @@ will name the collision rather than let you find it with a printed part.
    with its four pins through the four windows in the floor, until the body sits on the cross
    of floor between them and between the four locating ribs, which give it 0.4 mm of play and no
    more. It stands well proud of the collar — that is correct, it reaches up into the cap. Turn the holder over and **solder the leads to the pins from underneath**;
-   that is the only side you can reach them from, so do it now. Leads to **G38** and **GND**,
+   that is the only side you can reach them from, so do it now. Leads to **G18** and **GND**,
    left long.
 3. **Bench-test the whole action**: press the cap into the holder's bore until the lip
    catches. Now press the dome. You should get about half a millimetre of travel and a

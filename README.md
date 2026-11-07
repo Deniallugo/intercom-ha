@@ -152,9 +152,10 @@ the add-on, where there is CPU to spare and float headroom.
    lookahead limiter holding −3 dBFS peaks.
 
 Stage 4 has to use an absolute target because the broadcast shares a media
-player with music. Measured: a raw upload is −26 to −29 dBFS RMS and the cleanup
-takes it to −37, while music masters sit near −12 dBFS and the chime at −9.5. At
-one volume setting that makes the chime audible and the speech inaudible.
+player with music. Measured: raw uploads carry speech at −21 to −33 dBFS, while
+music masters sit near −12 dBFS and the chime near −9. At one volume setting
+that makes the chime audible and the speech inaudible. `denoise.level()` — the
+`denoise: false` path — is this same stage on its own.
 
 Raising the level is only legitimate **because it runs last**, on already-quiet
 noise. An earlier version normalised before the band subtraction existed and
@@ -170,10 +171,11 @@ left, subtracted from the residual — so with all gains at 1 the bands sum back
 to the input to within 2e-13. A conventional filter bank would leave crossover
 ripple that colours the voice even when nothing is being attenuated.
 
-Measured against a high-passed reference across eight real captures: **audible
-hiss (1-8 kHz median) 7-12 dB down, voice level within ±0.5 dB, and the gaps
-between words 11-14 dB quieter** without going dead. ~0.22 s of CPU per 5 s
-upload. Set `denoise: false` to take it out of the broadcast path.
+Measured against a high-passed reference across eight real captures, before
+the level stage: **audible hiss (1-8 kHz median) 7-12 dB down, voice level
+within ±0.5 dB, and the gaps between words 11-14 dB quieter** without going
+dead. ~0.22 s of CPU per 5 s upload, in a worker thread. Set `denoise: false`
+to take the noise reduction out of the broadcast path (the level stays).
 
 Both `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` are taste calls, swept and
 documented in the module: raise them if the gaps sound abrupt, lower them if
@@ -190,11 +192,17 @@ Every upload to `/intercom` — a PTT broadcast or a device's **Mic test
 recording** button — is also kept as a chime-free WAV of the raw mic audio in
 the add-on's `/data/recordings`, newest `keep_recordings` retained. The
 **Intercom** side-panel lists them with an inline player, a download link and a
-delete button, so a mic can be judged without repointing `mic_test_url` at
-`tools/mic-capture.py` and reflashing.
+delete button.
+
+The **Mic test recording** button (voice-s3, atom-echo) records 5 s and uploads
+it to the device's `mic_test_url` substitution — by default this add-on, so the
+test lands in the panel. It is handled like any other upload, so it is **also
+played on that device's target speakers**. For level / clipping / SNR
+statistics instead, point `mic_test_url` at `tools/mic-capture.py` on a LAN
+machine and reflash; `intercom_url`, and with it PTT, is unaffected.
 
 Set `keep_recordings: 0` if you'd rather nothing spoken over the intercom is
-retained on disk.
+retained on disk — it also deletes whatever an earlier setting kept.
 
 ### HTTP API
 
@@ -230,12 +238,17 @@ See [docs/DEVICES.md → Announcements](docs/DEVICES.md) for details.
 
 ## Development
 
-The add-on logic is plain Python with a pytest suite:
+The add-on logic is plain Python with a pytest suite. The system `python3` on
+macOS has no pytest, so use a virtualenv:
 
 ```bash
-pip install -r tests/requirements.txt
-pytest
+python3 -m venv .venv
+.venv/bin/pip install -r tests/requirements.txt
+.venv/bin/python -m pytest tests -q
 ```
+
+The voice-case design checks need no venv:
+`cd hardware/voice-case/fusion/VoiceCase && python3 -m vc.checks`.
 
 ## License
 

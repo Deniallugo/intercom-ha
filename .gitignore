@@ -5,8 +5,16 @@
 *.stl
 temp_auto_push.bat
 temp_interactive_push.bat
-.gitignore
+__pycache__/
+*.pyc
+# Slicer project files — exported from the CAD models, not sources.
+*.3mf
+.claude/*.lock
+# Fusion script folders: per-machine interpreter paths, nothing shared.
+hardware/**/.env
+hardware/**/.vscode/settings.json
 
 # Mic captures from tools/mic-capture.py and their tools/denoise-preview.py
 # output. Scoped rather than *.wav: sounds/chime.wav is a build asset.
 tools/mic-*.wav
+.venv/
