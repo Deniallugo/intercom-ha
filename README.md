@@ -23,7 +23,7 @@ The project has two halves:
 |---|---|---|
 | **Kitchen** — M5Stack Atom Echo + 1× MAX98357A | ESP32 (no PSRAM) | Button-PTT intercom, TTS announcements, DMA watchdog auto-reboot |
 | **Terrace** — M5Stack VoiceS3R + 2× MAX98357A (dual mono) | ESP32-S3 (8 MB PSRAM) | PTT intercom, wake word (`okay nabu`) + HA Assist, Spotify via Music Assistant, TTS announcements |
-| **Voice S3** — bare ESP32-S3 + PCM5102A + INMP441 + button | ESP32-S3 N16R8 (8 MB PSRAM) | Stereo Music Assistant player on a 3.5 mm line-out, wake word + HA Assist, tap-to-talk / hold-to-intercom. Mic and DAC on separate I²S peripherals, so it keeps listening while playing |
+| **Voice S3** — bare ESP32-S3 + PCM5102A + ZK-502MT amp + INMP441 + button | ESP32-S3 N16R8 (8 MB PSRAM) | One box on 24 V: stereo Music Assistant player with a built-in 2 × 50 W amp driving two passive speakers, wake word + HA Assist, tap-to-talk / hold-to-intercom. Mic and DAC on separate I²S peripherals, so it keeps listening while playing |
 
 See **[docs/DEVICES.md](docs/DEVICES.md)** for the full hardware reference:
 wiring diagrams, GPIO maps, the audio pipeline, and the key technical decisions
@@ -55,7 +55,7 @@ intercom/
 │   ├── intercom-s3.yaml       # Terrace VoiceS3R
 │   ├── intercom-s3-minimal.yaml
 │   ├── speaker-s3.yaml        # Bare S3 + PCM5102A, playback only
-│   ├── voice-s3.yaml          # Bare S3 + PCM5102A + INMP441 + button
+│   ├── voice-s3.yaml          # Bare S3 + PCM5102A + ZK-502MT amp + INMP441 + button
 │   └── listen_and_answer.yaml
 ├── include/              # Shared C++ — recorder.h (PCM ring + gain), uploader.h (chunked POST)
 ├── packages/base.yaml    # Shared logger/api/ota/wifi/captive_portal
@@ -107,15 +107,35 @@ tag (see `.github/workflows/build.yml`).
 | `channels` | `1` | Channel count |
 | `tts_engine` | `tts.piper` | HA TTS engine for text announcements |
 | `keep_recordings` | `10` | Mic recordings retained for playback in the panel (`0` disables) |
-| `denoise` | `true` | Clean up broadcast audio: high-pass, expander, normalise |
+| `denoise` | `false` | Clean up broadcast audio: high-pass, band subtraction, expander, level. Off — no noise reduction, but speech is still levelled to −16 dBFS |
 
 ### Broadcast cleanup
 
-The INMP441 has no gain control, and measurement showed device-side digital gain
-buys nothing: SNR was 13-15 dB at unity, at +18 dB and at +36 dB alike, because
-gain lifts the noise floor with the signal. So the device takes only a small
-fixed +6 dB that cannot clip, and the real work happens in the add-on, where
-there is CPU to spare and float headroom.
+**Off by default.** With `denoise: false` a broadcast gets no noise reduction,
+so a mic that has gone wrong is audible as a mic that has gone wrong. It still
+gets its **level** set (`denoise.level()`): a high-pass, then speech brought to
+−16 dBFS with a lookahead peak limiter holding −3 dBFS. Measured, raw uploads
+carry speech at −21 to −33 dBFS against a chime near −9; on the Atom Echo's
+small speaker that made a broadcast audible only if the talker had been right
+on the mic. The hiss comes up with the voice — there is no noise reduction to
+pay for the gain. The retained recording stays the raw upload either way.
+
+Everything below is what `denoise: true` turns on (to a gentler −20.8 dBFS,
+which keeps the noise floor below the raw original).
+
+Raw has one consequence worth knowing: without stage 4 nothing sets the level,
+so speech arrives wherever the device captured it — which is why the device-side
+gain is +12 dB rather than +6 (`devices/voice-s3.yaml`, `>> 14`). That puts a
+healthy capture at −20.8 dBFS, the same level stage 4 aims for, about 11 dB
+below the chime. Lower the chime amplitude in `chimes.py` rather than reaching
+for the cleanup if that gap is the only thing you want fixed.
+
+The INMP441 has no gain control, and device-side digital gain buys level but not
+clarity: SNR was 13-15 dB at unity, at +18 dB and at +36 dB alike, because gain
+lifts the noise floor with the signal. So the device takes a fixed +12 dB — the
+measured clipping-free ceiling, and enough to land speech at the same
+−20.8 dBFS the cleanup targets — while the noise work happens in the add-on,
+where there is CPU to spare and float headroom.
 
 `denoise.py` runs four stages over each upload before it is broadcast:
 
@@ -132,12 +152,18 @@ there is CPU to spare and float headroom.
    *geometric mean* of the measured floor and the measured speech level (their
    midpoint in dB); a fixed multiple of the floor landed above the speech on
    real captures and attenuated everything equally, achieving nothing.
-4. **level restore** — puts speech back at exactly the level it arrived at.
+4. **set level** — brings speech to `TARGET_SPEECH_RMS` (−20.8 dBFS).
 
-Stage 3 is deliberately **not** a normaliser. Raising the level lifts the
-suppressed noise with it, which sounds like "louder, including the noise" — the
-one thing this must not do. Set `MAKEUP_DB` if a broadcast genuinely needs more
-level; it is in dB so the cost is explicit.
+Stage 4 has to use an absolute target because the broadcast shares a media
+player with music. Measured: a raw upload is −26 to −29 dBFS RMS and the cleanup
+takes it to −37, while music masters sit near −12 dBFS and the chime at −9.5. At
+one volume setting that makes the chime audible and the speech inaudible.
+
+Raising the level is only legitimate **because it runs last**, on already-quiet
+noise. An earlier version normalised before the band subtraction existed and
+sounded like "louder, including the noise" — correctly, since the noise
+reduction then was 0.2 dB. Now speech ends up 1.6–5 dB above the untouched
+original while the noise floor sits 9–17 dB *below* it. Don't reorder these.
 
 The band split is complementary — each band is a one-pole low-pass of what is
 left, subtracted from the residual — so with all gains at 1 the bands sum back
@@ -147,13 +173,13 @@ ripple that colours the voice even when nothing is being attenuated.
 Measured against a high-passed reference across eight real captures: **audible
 hiss (1-8 kHz median) 7-12 dB down, voice level within ±0.5 dB, and the gaps
 between words 11-14 dB quieter** without going dead. ~0.22 s of CPU per 5 s
-upload. Set `denoise: false` to broadcast raw.
+upload. Set `denoise: true` to put it back in the broadcast path.
 
 Both `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` are taste calls, swept and
 documented in the module: raise them if the gaps sound abrupt, lower them if
 there is still too much hiss.
 
-The retained recordings stay **raw** either way — that copy exists to expose mic
+The retained recordings stay **raw** whatever this is set to — that copy exists to expose mic
 faults, and cleaning it would hide them. To hear what the cleanup does to a
 capture, run `tools/denoise-preview.py <wav>`; it writes a `-clean` sibling and
 prints the before/after statistics.

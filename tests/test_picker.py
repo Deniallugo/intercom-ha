@@ -408,24 +408,37 @@ async def test_intercom_wav_includes_chimes(
     assert len(payload) == len(pcm)
 
 
-async def test_intercom_wav_payload_is_verbatim_when_denoise_off(
+async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
 ):
-    """With cleanup disabled the broadcast carries the uploaded bytes untouched."""
+    """With cleanup disabled the broadcast skips the noise reduction but still
+    gets its level set — raw speech is far too quiet for a small speaker."""
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": [],
     }))
     monkeypatch.setattr(srv, "load_options",
                         lambda: {"ha_url": "http://ha.test:8123", "denoise": False})
+    calls = []
+
+    def no_cleanup(*a, **kw):
+        raise AssertionError("cleanup ran with denoise off")
+
+    def fake_level(pcm, *, sample_rate):
+        calls.append(pcm)
+        return b"\x11\x22" * (len(pcm) // 2)
+
+    monkeypatch.setattr(srv.denoise, "process", no_cleanup)
+    monkeypatch.setattr(srv.denoise, "level", fake_level)
     client = await aiohttp_client(lan_app)
     pcm = b"\xAA\xBB" * 100
     await client.post(
         "/intercom", data=pcm,
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
     )
+    assert calls == [pcm]
     wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
-    assert wav[44 + 3840:44 + 3840 + 200] == pcm
+    assert wav[44 + 3840:44 + 3840 + 200] == b"\x11\x22" * 100
 
 
 async def test_intercom_pauses_playing_target_then_resumes(

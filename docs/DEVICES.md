@@ -43,16 +43,21 @@ and is the only one whose mic and speaker sit on separate I²S peripherals.
 > volume; it needs 4× M3×35 screws and foam tape on the two new seams. See
 > `hardware/terrace-case/README.md`.
 
-### Voice S3 — bare ESP32-S3 + PCM5102A line-out + INMP441
+### Voice S3 — bare ESP32-S3 + PCM5102A + ZK-502MT amp + INMP441
+
+One box: voice satellite and stereo amplifier together, driving **two external
+passive speakers**. No drivers inside.
 
 | Item | Detail |
 |---|---|
 | MCU | Bare ESP32-S3 devkit, N16R8 (16 MB flash, 8 MB octal PSRAM @ 40 MHz) |
-| DAC | PCM5102A on I²S bus 0 (BCK G5, LCK G6, DIN G7) → 3.5 mm stereo jack |
+| DAC | PCM5102A on I²S bus 0 (BCK G5, LCK G6, DIN G7) → its own 3.5 mm socket |
+| Amplifier | ZK-502MT ("502MT"; Bluetooth 5.0 + AUX), fed from the DAC by a short internal 3.5 mm patch cable. 2 × 50 W into 4 Ω / 2 × 40 W into 8 Ω at 24 V |
+| Speakers | Two external passive speakers, 4–8 Ω, 15–100 W, on the amp's L± / R± terminals |
 | Mic | INMP441 MEMS on I²S bus 1 (SCK G10, WS G11, SD G12), left slot |
-| Amplification | None on board — the jack feeds a powered speaker or an external amp |
-| Button | One momentary switch on G21 to GND (active LOW, internal pull-up) |
-| Power | USB-C |
+| Button | One momentary switch on G18 to GND (active LOW, internal pull-up) |
+| Panel controls | Amp's volume, treble and bass knobs, plus power switch, all reachable from outside |
+| Power | 24 V / 3 A barrel → ZK-502MT direct; MP1584 buck → 5 V → devkit `5V` pin. USB-C is for flashing and logs only |
 
 Unlike the other two, capture and playback run on **two separate I²S
 peripherals**, so the mic never has to yield the bus to the speaker: the wake
@@ -63,6 +68,12 @@ The button does two jobs, split by hold time — tap (< 1.2 s) starts Assist
 without the wake word, hold (≥ 1.2 s) records and broadcasts over the intercom
 for as long as you hold it.
 
+> **The enclosure is being redesigned for the amp.** The puck below holds the
+> devkit and the DAC only; the ZK-502MT (74 × 60 mm board, 89 × 60 × 21 mm with
+> connectors and knobs, plus heatsink), the MP1584, the barrel jack and the
+> speaker-wire exit do not fit in it. The new layout comes after the boards are
+> measured; the puck notes stay until then as the reference for the parts that carry over.
+>
 > The 3D-printed enclosure is a **desk puck**, 96 × 96 × 34 mm — modelled on the Home
 > Assistant Voice PE, slightly broader because a 64 mm-deep devkit has to sit centred
 > between four full-depth corner bosses. Driver and grille are replaced by the
@@ -85,10 +96,10 @@ for as long as you hold it.
 | Music streaming from Spotify via Music Assistant | — | ✓ | ✓ (stereo) |
 | HA TTS announcements (`media_player.play_media`) | ✓ | ✓ | ✓ |
 | Text announcements (UI + automation TTS) | ✓ | ✓ | ✓ |
-| External larger-driver speakers | ✓ (1× MAX98357A) | ✓ (2× MAX98357A, dual mono) | ✓ (line-out to any amp) |
+| External larger-driver speakers | ✓ (1× MAX98357A) | ✓ (2× MAX98357A, dual mono) | ✓ (built-in 2 × 50 W amp → two passive speakers) |
 | Listens while playing (no shared-bus stall) | — | — | ✓ |
 | Internal speaker fallback | — (disconnected) | ✓ (HA-toggleable switch) |
-| Software mic gain | +6 dB (recorder.h) | n/a (codec PGA at 36 dB) |
+| Software mic gain | +12 dB (recorder.h) | n/a (codec PGA at 36 dB) | +12 dB (shift + `gain_factor`) |
 | DMA watchdog auto-reboot | ✓ | — |
 
 ---
@@ -318,15 +329,106 @@ are deliberately kept separate (see *Key technical decisions*).
 | **FMT** | GND | I²S format (not left-justified) |
 | **XMT** | 3V3 | Un-mute; tie high or the output stays soft-muted |
 | **FLT / DEMP** | GND | Normal filter, de-emphasis off |
-| **LROUT / RROUT** | *nothing* | The breakout's **onboard 3.5 mm socket** already carries them, and the puck uses that socket straight through the side wall. Wire these only on a board with no socket. |
+| **LROUT / RROUT** | *nothing* | The breakout's **onboard 3.5 mm socket** already carries them; a short patch cable runs from it to the ZK-502MT's AUX-IN. Wire these only on a board with no socket. |
 
 Everything above is a **strap**, not a signal — only BCK, LCK and DIN carry data.
 Four of the five straps have a failure mode that looks like a broken device:
 floating `SCK` is silent or noisy, floating `XMT` stays soft-muted, and `FMT`
 selects left-justified instead of I²S.
 
-The output is **line level**, not speaker level — it needs a powered speaker or
-an amp downstream.
+The output is **line level**, not speaker level. The ZK-502MT inside the box is
+the amp downstream of it.
+
+#### ZK-502MT amplifier — DAC in, speakers out
+
+| ZK-502MT | Connects to | Note |
+|---|---|---|
+| **AUX-IN** (3.5 mm) | PCM5102A socket, via a short TRS–TRS patch cable | The amp switches to AUX on its own when a plug is detected, so the patch cable keeps it on AUX permanently |
+| **DC-IN** | 24 V rail (see *Power*) | 9–24 V / 3 A+. 24 V is the top of its range, not headroom |
+| **L+ / L−** | left passive speaker | 4–8 Ω. Mind polarity, or the two speakers cancel in the bass |
+| **R+ / R−** | right passive speaker | Assume bridge-tied (neither terminal at ground): never join L− to R−, or either to chassis/GND |
+| **Volume / Treble / Bass** | panel | Shafts brought out through the wall |
+| Heatsink | on the amp chip | Fit it if supplied, and leave the case ventilated around it |
+
+**Which chip is on the board varies.** The EC Buying manual describes a
+TPA3116D2, but sellers' listings give the chip only as "domestic amplifier
+chip", which usually means a Chinese clone or equivalent. Read the marking on
+the chip on your board. Until that's done, treat the three chip-dependent claims
+in this section as unverified: the terminals are bridge-tied, there is no
+standby, and over-voltage is protected. The listing names only over-temperature,
+over-current and short-circuit protection, so treat 24 V as a hard ceiling and use
+a regulated supply.
+
+**Two volume controls are in series:** Home Assistant's player volume (digital, in
+the DAC path) and the amp's knob (analog, after it). Set the knob once so that
+Home Assistant at 100 % on loud music does not clip the amp, then leave volume to
+Home Assistant. The PCM5102A puts out about 2.1 V RMS at full scale, which is a hot
+signal for an AUX input. With the knob near the top, the amp clips before
+Home Assistant reaches 100 %.
+
+**The Bluetooth radio stays on.** The board advertises as `ZK-502MT`, and on these
+boards a paired Bluetooth source usually takes over from AUX. Anyone in range
+can pair with it and play through the speakers, interrupting Assist and the
+intercom. If that matters where it is installed, the module's Bluetooth chip can
+be disabled in hardware; there is no setting for it.
+
+**Expected: no auto-standby.** Neither the manual nor the listing mentions a
+standby or auto-off feature, and a bare TPA3116-class amp stays live on a silent
+input. If that holds for your board, the "lost first half-second" problem below,
+which a powered speaker caused, does not happen with this amp. To check, ask
+Assist something from a silent house and listen for the first word of the reply.
+
+#### Power — 24 V in, 5 V for the devkit
+
+```
+24 V / 3 A barrel ──► panel power switch ──┬──► ZK-502MT DC-IN
+                                           │
+                                           └──► MP1584 IN+ / IN−
+                                                  OUT 5.0 V ──► devkit 5V pin
+                                                  OUT GND   ──► devkit GND
+```
+
+| From | To | Note |
+|---|---|---|
+| Barrel jack + | power switch → ZK-502MT DC-IN + and MP1584 IN+ | One switch cuts both boards. The switch must carry 3 A |
+| Barrel jack − | ZK-502MT DC-IN − and MP1584 IN− | Run both returns **back to the jack separately**, not daisy-chained through the amp |
+| MP1584 OUT+ | devkit **5V** pin | **Set to 5.0 V with a meter BEFORE connecting the devkit.** The adjustable module ships at an arbitrary voltage, and its trimmer can put 20 V on the 5V pin |
+| MP1584 OUT− | devkit GND | |
+| Devkit 5V / 3V3 | PCM5102A, INMP441 | Unchanged: wired as in their own tables, from the devkit's rails |
+
+Two of these rules exist because the 24 V input is near the MP1584's limit:
+
+- **Input voltage margin.** The MP1584 is rated to 28 V. A 24 V supply leaves
+  4 V of margin, and hot-plugging the barrel can spike past that. Put a
+  ≥ 47 µF / 35 V electrolytic across MP1584 IN at the module. A 26 V TVS diode
+  (e.g. SMBJ26A) there as well makes the input robust. The ZK-502MT has its own bulk capacitance.
+- **The switch is on the 24 V side, ahead of both boards.** If the amp's own switch
+  is used instead (on some revisions it is on the volume pot), it cuts only the
+  amp: the devkit stays up and keeps reporting as a player with nothing behind it.
+  Check which kind your board has. Use the amp's switch only if that behaviour is
+  what you want.
+
+**USB-C while 24 V is on.** The devkit's 5V pin and its USB VBUS are the same
+net on most S3 devkits, so with both connected the buck and the laptop drive one
+rail. The buck at 5.0 V pushes current back into the laptop's port. Either:
+
+1. **Never plug USB in with 24 V on.** Flash over OTA, and for USB flashing or
+   serial logs, power the box off first. Simplest rule, nothing to add.
+2. **Or add a Schottky diode** (SS34 or similar) in series in MP1584 OUT+ → 5V,
+   with the buck trimmed to ~5.3 V to make up the drop. Then USB and the buck can be
+   connected together: whichever is higher feeds the rail, and neither feeds the other.
+
+**Noise.** The buck switches at about 1 MHz, and the ESP32's Wi-Fi bursts draw
+current pulses of several hundred mA. Both can show up as hiss or ticking on the speakers, or as
+the 3–8 kHz hiss signature in the INMP441 (see *how this mic fails* below):
+
+- Keep the MP1584 at the **far end of the box from the INMP441** and away from
+  the patch cable.
+- Keep the 5 V leads short and twisted (OUT+ with OUT−).
+- The patch cable's sleeve joins devkit ground to amp ground a second time, which makes
+  a small ground loop. That is expected inside one box. Keep the loop small by routing the
+  patch cable next to the power wiring, not around the far side of the box.
+- If ticking follows Wi-Fi traffic, add 100 µF across the devkit's 5V–GND.
 
 #### INMP441 mic (I²S bus 1)
 
@@ -343,33 +445,56 @@ The INMP441 is 24-bit left-justified in a 32-bit slot, so the mic is configured
 `bits_per_sample: 32bit`. Assist and the wake word get 16-bit via their
 microphone sources; the intercom's raw data callback converts itself.
 
-**It needs no gain.** Measured from a real capture, speech peaks at 5404/32767
-(≈ −15.7 dBFS) with `gain_factor: 1` and a plain `>> 16` on the intercom path.
+**It is a quiet mic.** Measured from a real capture, speech peaks at 5404/32767
+(≈ −15.7 dBFS) with `gain_factor: 1` and a plain `>> 16` on the intercom path,
+and a normal room capture sits lower still: peak −16.9 dBFS, speech −26.9 dBFS
+at the +6 dB this used to run. Against a music master near −12 dBFS that is
+inaudible, so **every path now takes +12 dB.**
 
 The INMP441 has no PGA and no GAIN pin (the GAIN references elsewhere in this
 file are the amplifier's, not the mic's), so every dB is digital — and digital
 gain lifts the noise floor with the signal. Measured SNR was 12-15 dB at unity,
-at `>> 13` (+18 dB) and at `>> 10` (+36 dB) alike; the loud settings only added
-clipping (12.3% of a capture at +36 dB, peak pinned at full scale). Louder, not
-clearer.
+at `>> 13` (+18 dB) and at `>> 10` (+36 dB) alike. **This is level, not clarity;**
+expect a louder broadcast, not a cleaner one.
 
-So the split is: **a small boost here, the level made up in the add-on.**
++12 dB is the measured ceiling. Re-scaling the five unclipped captures in
+`tools/` by x2 from the old +6 dB gives 0.00% clipped and a worst-case peak of
+−5.1 dBFS on the loudest close-range one; x4 (+18 dB) pins that capture at
+0.0 dBFS and begins to clip, and `>> 10` (+36 dB) clipped 12.3% outright.
 
-| Path | Gain | Why not more |
+| Path | Gain | Note |
 |---|---|---|
-| Intercom | +6 dB (`>> 15`) | 9.7 dB of headroom left; the add-on normalises after gating |
-| Wake word | +6 dB (`gain_factor: 2`) | detection is on-device, so this is its only lever |
-| Assist | unity | `auto_gain: 31dBFS` already AGCs this pipeline |
+| Intercom | +12 dB (`>> 14`) | 5.1 dB of headroom worst case; lands speech at −20.8 dBFS |
+| Wake word | +12 dB (`gain_factor: 4`) | detection is on-device, so this is its only lever |
+| Assist | +12 dB (`gain_factor: 2` × `volume_multiplier: 2.0`) | feeds `auto_gain`/VAD a signal already up |
 
-`>> 15` rather than `recorder_set_gain(2, 1)` because the shift spends bits a
-plain `>> 16` discards, so it costs no resolution; the multiply would amplify
-already-truncated samples for the same level.
+The intercom figure is the level the device *uploads* at, not what a broadcast
+goes out at: the add-on levels every broadcast, cleanup on or off
+(`denoise.level()`, speech to −16 dBFS behind a −3 dBFS peak limiter). Measured
+on later captures the upload is −27 to −31 dBFS of speech, ~18 dB under the
+chime — fine through voice-s3's own amplifier, inaudible on the Atom Echo's
+speaker unless the talker was right on the mic.
+
+Since then `recorder.h` also high-passes this path at 180 Hz
+(`recorder_set_highpass`): captures carried 1–10 Hz drift up to 12 dB LOUDER
+than the speech, which `correct_dc_offset` leaves in. The Atom Echo gets 100 Hz,
+drops its first 100 ms (`recorder_set_skip_ms`, a full-scale PDM start-up
+burst), and runs at ×8 behind the filter.
+
+`>> 14` rather than `recorder_set_gain(4, 1)` because the shift spends bits a
+plain `>> 16` discards, so it costs no resolution — the 24-bit sample occupies
+bits 31..8, and anything down to `>> 8` still reads real bits. The multiply
+would amplify already-truncated samples for the same level.
 
 The add-on's `denoise.py` then high-passes, subtracts each of 8 bands' own
-estimated noise, expands the gaps, and puts speech back at the level it arrived
-at — quieter noise at the same loudness, which is the thing device-side gain
-cannot do. Measured across eight captures: **hiss 7-12 dB down, voice within
-±0.5 dB.**
+estimated noise, expands the gaps, and brings speech to −20.8 dBFS — which is
+the thing device-side gain cannot do, because the level is spent *after* the
+noise is down rather than on top of it. Measured: hiss 7-12 dB down, and speech
+1.6-5 dB LOUDER than the raw original with the noise floor 9-17 dB below it.
+
+The absolute level target matters because the broadcast shares a media player
+with music: raw uploads land at −26 to −29 dBFS RMS against music masters near
+−12 dBFS, so at one volume setting the chime is audible and the speech is not.
 
 The band subtraction is what makes it audible. This mic delivers only 10-13 dB
 of in-band SNR with the noise present continuously, and 67% of frames carry
@@ -398,6 +523,7 @@ and the raw sample words distinguish them faster than any level meter:
 | Peak pinned at `32768` (`0x8000`) while the mean stays near 0 | Floating data line latched at the MSB — the mic goes high-Z outside its slot |
 | Long runs of zeros interrupted by full-scale bursts | Intermittent connection; the bursts are contact noise, not audio |
 | Smooth ramps of a constant step, ~4 Hz, heavily clipped | Sub-audio wander, usually too much digital gain applied to a DC-ish signal |
+| Isolated single-sample spikes at power-of-two magnitudes (512, 1024, 16384) on a few % of samples | Bit errors in the I²S word — `SD`/`SCK`/`WS` wiring, or `L/R` left floating. They inflate RMS **and** the noise floor together, so it reads as "suddenly +18 dB of gain"; it is not a gain problem |
 
 A real capture settles it where statistics mislead: **speech produces hundreds
 to thousands of zero-crossings per second.** Anything under ~50/s is not sound,
@@ -428,7 +554,7 @@ differs. Flashing is only needed to change `mic_test_url`, not to listen.
 
 ```
 peak 5404  mean 824  dc -7
-clipped 0.00%   impossible jumps 0
+clipped 0.00%   isolated spikes 0.00% (2 of 3 on a power of two)
 zero crossings 564/s
 noise floor 699  loudest 1074  SNR ~4 dB
 --> looks like real audio.
@@ -445,6 +571,12 @@ mic's ground alongside the data line, and add 10 kΩ from SD to GND so the line
 is defined while the mic isn't driving it.
 
 #### The lost first half-second — it was the powered speaker
+
+> This happened on the earlier line-out build, which fed a JBL powered speaker. The
+> built-in ZK-502MT is expected to have no standby, so the current build should
+> not show it (to verify, see *ZK-502MT amplifier* above). The
+> ducking schedule below stays because it is harmless and still protects any
+> line-out build.
 
 Symptom: every Assist reply arrived with roughly its first 0.5 s missing, so
 "02:05" was heard as "05". **The cause was outside the device**: JBL powered
@@ -499,23 +631,25 @@ lands on silence rather than on the sound. Regenerate with `tools/make-chime.py`
 
 | Pin | Wiring |
 |---|---|
-| **G21** | one leg of a momentary switch; other leg to **GND** (internal pull-up, active LOW) |
+| **G18** | one leg of a momentary switch; other leg to **GND** (internal pull-up, active LOW) |
 
 #### Pins to avoid on this board
 
 G26–G32 are the SPI flash and **G33–G37 the octal PSRAM** — using any of them
 kills the board's memory. G19/G20 are USB, G43/G44 are UART0, and G0/G3/G45/G46
-are strapping pins. The G5–G12 block and G21 used here are clear of all of that.
+are strapping pins. The G5–G12 block and G18 used here are clear of all of that.
 
 **Do not put the button on G38 or G39.** Measured: with the switch open both
 flicker at 20–30 edges/s, continuously, sub-2 ms glitches included — a floating
 input, not contact bounce. They are the first pads past the MSPI block (G26–G37,
 per `soc/esp32s3/spi_pins.h`), and this module's octal PSRAM keeps that bus
 switching at 40 MHz, which a pin held only by the ~45 kΩ internal pull-up is too
-high-impedance to sit beside. **G21** is the last RTC-domain pad
-(`SOC_RTCIO_PIN_COUNT 22`), well away from MSPI, and reads rock-solid. Caveat:
-G38–G42 *and* G21 are the external USB PHY signals (`soc/esp32s3/usb_pins.h`) —
-irrelevant with the internal PHY, which is what `USB_SERIAL_JTAG` logging uses.
+high-impedance to sit beside. **G18** is an RTC-domain pad — `SOC_RTCIO_PIN_COUNT
+22` covers G0–G21 — well away from MSPI. Any free RTC pad behaves the same:
+G1, G2, G4, G8, G9, G13–G18, G21 (G5–G12 are the I²S buses, G0/G3 strapping,
+G19/G20 USB, and G22–G25 do not exist on the S3). Caveat: G38–G42 *and* G21 are
+the external USB PHY signals (`soc/esp32s3/usb_pins.h`) — irrelevant with the
+internal PHY, which is what `USB_SERIAL_JTAG` logging uses.
 
 ---
 
@@ -529,7 +663,7 @@ intercom/
 │   ├── intercom-s3.yaml            # Terrace VoiceS3R (intercom + wake-word + music)
 │   ├── intercom-s3-minimal.yaml    # Bare-boot diagnostic config
 │   ├── speaker-s3.yaml             # Bare S3 + PCM5102A — playback only, no mic
-│   ├── voice-s3.yaml               # Bare S3 + PCM5102A + INMP441 + button
+│   ├── voice-s3.yaml               # Bare S3 + PCM5102A + ZK-502MT amp + INMP441 + button
 │   ├── secrets-atom.yaml           # Atom Echo's API key (gitignored)
 │   ├── secrets-s3.yaml             # VoiceS3R's API key (gitignored)
 │   └── secrets-voice.yaml          # Voice S3's API key (gitignored)
@@ -550,8 +684,10 @@ intercom/
 - **Per-device secrets** — each device loads its own `secrets-<name>.yaml`
   via packages, so kitchen and terrace have separate HA API keys.
 - **Shared C++ glue** — `recorder.h` and `uploader.h` work for both devices
-  unchanged; software gain in `recorder.h` boosts Atom Echo's PDM mic +6 dB
-  (`recorder_set_gain(2, 1)`).
+  unchanged; software gain in `recorder.h` boosts Atom Echo's PDM mic +12 dB
+  (`recorder_set_gain(4, 1)`) — matching Voice S3's `>> 14`, though unmeasured
+  on this mic: it saturates rather than wraps, so drop back to `(2, 1)` if a
+  close talker comes through distorted.
 - **Two I²S buses on the VoiceS3R** — Bus 1 (internal, hard-wired) handles
   the ES8311 codec for mic; Bus 2 (G5/G6/G7) handles the external MAX98357A
   amps. They run independently so wake-word listening doesn't conflict with

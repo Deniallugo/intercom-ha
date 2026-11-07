@@ -112,19 +112,37 @@ def speech_level(b):
     return rms[int(len(rms) * denoise.SPEECH_PERCENTILE)]
 
 
-def test_preserves_speech_level():
-    """The point of this module is quieter noise at the SAME loudness — it must
-    not make the broadcast louder. Compared against a high-passed reference, so
-    the sub-80 Hz rumble the filter legitimately removes is not counted as lost
-    speech."""
+def test_brings_speech_to_the_target_level():
+    """Speech must land near TARGET_SPEECH_RMS regardless of how quiet it
+    arrived, because the broadcast shares a media player with music: a raw
+    upload is ~25 dB below a music master and is simply inaudible at the volume
+    music is set to."""
+    for level in (600, 1200, 3000):
+        out = denoise.process(speech_like(level=level), sample_rate=RATE)
+        ratio = speech_level(out) / denoise.TARGET_SPEECH_RMS
+        # The peak ceiling can legitimately hold it short of the target.
+        assert 0.5 < ratio <= 1.2, f"level={level}: speech at x{ratio:.2f} of target"
+
+
+def test_gain_does_not_undo_the_noise_reduction():
+    """The one property that makes raising the level legitimate: after the
+    make-up, the noise floor must still sit BELOW the untouched original. If
+    this fails the module is back to being "louder, including the noise"."""
     import array as _array
-    src = speech_like(level=1200)
+    src = speech_like(level=1200, noise=200)
     raw = _array.array("h")
     raw.frombytes(src)
-    reference = denoise.to_pcm(denoise._highpass(raw, RATE))
+
+    def floor_of(b):
+        s = unpack(b)
+        win = RATE // 4
+        return min(sum(abs(x) for x in s[i:i + win]) / win
+                   for i in range(0, max(len(s) - win, 1), win))
+
     out = denoise.process(src, sample_rate=RATE)
-    ratio = speech_level(out) / speech_level(reference)
-    assert 0.85 < ratio < 1.15, f"speech level moved by x{ratio:.2f}"
+    assert floor_of(out) < floor_of(src), (
+        "noise floor is not below the raw original after make-up gain")
+    assert speech_level(out) > speech_level(src), "speech should end up louder"
 
 
 def test_lowers_the_noise_floor():
@@ -191,3 +209,44 @@ def test_highpass_response():
 def test_is_deterministic():
     src = speech_like()
     assert denoise.process(src, sample_rate=RATE) == denoise.process(src, sample_rate=RATE)
+
+
+# ── level(): the stage a broadcast gets with the cleanup off ─────────────────
+
+def test_level_brings_quiet_speech_to_its_target():
+    """Raw uploads arrive ~18 dB under the chime; level() must close that gap
+    even though nothing else in the cleanup runs."""
+    # 900 is about the quietest real upload (Atom across a room); anything much
+    # quieter needs more than MAX_MAKEUP and is held short of the target.
+    for lvl in (900, 1500, 4000):
+        out = denoise.level(speech_like(level=lvl), sample_rate=RATE)
+        ratio = speech_level(out) / denoise.LEVEL_SPEECH_RMS
+        assert 0.7 < ratio <= 1.2, f"level={lvl}: speech at x{ratio:.2f} of target"
+
+
+def test_level_limiter_holds_the_peak_ceiling():
+    """Reaching the target takes more gain than the crest factor allows; the
+    limiter, not a smaller factor, must keep every sample under TARGET_PEAK."""
+    src = speech_like(level=2500)
+    # A plosive-like spike far above the speech, which a plain scale factor
+    # would have had to respect at the cost of the whole broadcast's level.
+    s = list(unpack(src))
+    for i in range(8000, 8040):
+        s[i] = 20000 if i % 2 else -20000
+    src = struct.pack("<%dh" % len(s), *s)
+    out = denoise.level(src, sample_rate=RATE)
+    assert peak(out) <= denoise.TARGET_PEAK + 1
+    assert speech_level(out) > 0.7 * denoise.LEVEL_SPEECH_RMS
+
+
+def test_level_leaves_silence_alone():
+    src = speech_like(noise=20, duty=0)
+    out = denoise.level(src, sample_rate=RATE)
+    # No make-up gain: only the high-pass's own few-LSB overshoot may show.
+    assert peak(out) <= peak(src) * 1.5
+
+
+def test_level_preserves_length_and_passes_bad_input_through():
+    src = speech_like()
+    assert len(denoise.level(src, sample_rate=RATE)) == len(src)
+    assert denoise.level(b"\x01", sample_rate=RATE) == b"\x01"

@@ -36,8 +36,11 @@ OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 PICKER_HTML_FILE = Path(__file__).parent / "picker.html"
 
-# Whether to clean up broadcast audio when the option is absent.
-DEFAULT_DENOISE = True
+# Whether to clean up broadcast audio when the option is absent. Off: no noise
+# reduction, so a mic fault reaches the speakers plainly instead of being
+# half-hidden by processing. The LEVEL is still set either way
+# (denoise.level) — the raw upload is far too quiet for a small speaker.
+DEFAULT_DENOISE = False
 
 # How many mic recordings to retain when the option is absent. 0 disables
 # retention entirely.
@@ -179,8 +182,13 @@ async def handle_intercom(request: web.Request) -> web.Response:
     # raw bytes — that copy exists to expose mic faults, and processing it would
     # hide them. Failure here must not cost the broadcast, so fall back to raw.
     try:
-        clean = denoise.process(pcm, sample_rate=mixer.sample_rate,
-                                enabled=denoise_enabled())
+        if denoise_enabled():
+            clean = denoise.process(pcm, sample_rate=mixer.sample_rate)
+        else:
+            # No cleanup, but still the level: raw speech arrives ~18 dB under
+            # the chime, which a small speaker cannot make up. See
+            # denoise.TARGET_SPEECH_RMS.
+            clean = denoise.level(pcm, sample_rate=mixer.sample_rate)
     except Exception:
         log.exception("denoise failed — broadcasting raw audio")
         clean = pcm
