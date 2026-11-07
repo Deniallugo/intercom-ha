@@ -464,7 +464,7 @@ expect a louder broadcast, not a cleaner one.
 
 | Path | Gain | Note |
 |---|---|---|
-| Intercom | +12 dB (`>> 14`) | 5.1 dB of headroom worst case; lands speech at −20.8 dBFS |
+| Intercom | +12 dB (`>> 14`) | 5.1 dB of headroom worst case; the add-on takes it on to −16 dBFS |
 | Wake word | +12 dB (`gain_factor: 4`) | detection is on-device, so this is its only lever |
 | Assist | +12 dB (`gain_factor: 2` × `volume_multiplier: 2.0`) | feeds `auto_gain`/VAD a signal already up |
 
@@ -487,10 +487,11 @@ bits 31..8, and anything down to `>> 8` still reads real bits. The multiply
 would amplify already-truncated samples for the same level.
 
 The add-on's `denoise.py` then high-passes, subtracts each of 8 bands' own
-estimated noise, expands the gaps, and brings speech to −20.8 dBFS — which is
+estimated noise, expands the gaps, and brings speech to −16 dBFS — which is
 the thing device-side gain cannot do, because the level is spent *after* the
 noise is down rather than on top of it. Measured: hiss 7-12 dB down, and speech
-1.6-5 dB LOUDER than the raw original with the noise floor 9-17 dB below it.
+11-15 dB LOUDER than the raw original with the floor between words 1-4 dB below
+it (voice-s3 in its case: −60.2 dBFS against −57.8 raw).
 
 The absolute level target matters because the broadcast shares a media player
 with music: raw uploads land at −26 to −29 dBFS RMS against music masters near

@@ -22,7 +22,7 @@ options:
   channels: 1
   tts_engine: "tts.piper"
   keep_recordings: 10
-  denoise: false
+  denoise: true
 schema:
   ha_url: str
   port: int
