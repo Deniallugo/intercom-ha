@@ -3,8 +3,10 @@ import json
 import logging
 import re
 import signal
+import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from aiohttp import web
 
@@ -12,6 +14,7 @@ from ha_client import HAClient
 from chimes import ChimeMixer
 from ducking import Ducker
 from talkback import TalkbackWindows
+import channel
 import players
 import announce
 import denoise
@@ -24,6 +27,13 @@ ha = HAClient()
 mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
 ducker = Ducker(ha)
 talkback = TalkbackWindows()
+
+# In-memory, per source: {"last_seen": unix_ts, "last_broadcast": {...}}.
+activity: dict[str, dict] = {}
+
+# An unknown X-Device-Name forces a registry refresh, at most this often.
+FORCED_REFRESH_INTERVAL = 30.0
+_last_forced_refresh: float = float("-inf")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -105,10 +115,13 @@ async def handle_picker_get(request: web.Request) -> web.Response:
         "default":   state["default"],
         "aliases":   state["aliases"],
         "selves":    state["selves"],
+        "muted":     state["muted"],
+        "excluded":  state["excluded"],
     })
 
 
 async def handle_picker_post(request: web.Request) -> web.Response:
+    """Legacy picker save. Fields it does not send (muted, excluded) are kept."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -118,18 +131,56 @@ async def handle_picker_post(request: web.Request) -> web.Response:
     if err:
         return web.json_response({"error": err}, status=400)
 
-    players.save_players({
+    state = players.load_players()
+    state.update({
         "routes":  body["routes"],
         "default": body["default"],
         "aliases": body.get("aliases", {}),
         "selves":  body.get("selves", {}),
     })
+    for key in ("muted", "excluded"):
+        if key in body:
+            state[key] = body[key]
+    players.save_players(state)
     return web.Response(status=204)
 
 
+async def registry_members(source: Optional[str] = None) -> tuple[list, Optional[str]]:
+    """Intercom devices from HA's registry, and an error string if it could
+    not be read. A `source` the cached registry cannot place forces a
+    refresh (rate-limited): a newly adopted device is heard at once."""
+    global _last_forced_refresh
+    try:
+        registry = await ha.get_registry()
+        members = channel.build_members(registry)
+        if source and source != "unknown" and channel.match_source(source, members) is None:
+            now = time.monotonic()
+            if now - _last_forced_refresh >= FORCED_REFRESH_INTERVAL:
+                _last_forced_refresh = now
+                log.info("source=%s not in registry cache; refreshing", source)
+                registry = await ha.get_registry(force=True)
+                members = channel.build_members(registry)
+        return members, None
+    except Exception as e:
+        log.warning("device registry unavailable (%s); channel falls back to "
+                    "the 'default' players", e)
+        return [], str(e)
+
+
+def _truthy(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 async def handle_intercom(request: web.Request) -> web.Response:
+    """POST /intercom — a PTT upload, heard by every other intercom device.
+
+    POST /intercom/reply (or X-Intercom-Reply: 1) asks to answer whoever
+    last spoke to this device within talkback.WINDOW_SECONDS; with nobody to
+    answer it goes to the channel like a plain PTT."""
     session_id = safe_session_id(request.headers.get("X-Session-ID", ""))
     source = (request.headers.get("X-Device-Name") or "unknown").strip() or "unknown"
+    want_reply = (request.path.rstrip("/").endswith("/reply")
+                  or _truthy(request.headers.get("X-Intercom-Reply")))
 
     pcm = await request.read()
     # Whole frames only: a stray odd byte would shift the closing chime by one
@@ -157,26 +208,35 @@ async def handle_intercom(request: web.Request) -> web.Response:
     except OSError as e:
         log.warning("could not keep recording: %s", e)
 
-    state = players.load_players()
+    received_at = time.time()
+    activity.setdefault(source, {})["last_seen"] = received_at
 
-    # A live reply window routes only to the original sender's own player.
-    reply_to = talkback.reply_target(source)
-    if reply_to is not None:
-        log.info("talkback  source=%s  reply-to=%s", source, reply_to)
-        targets = [reply_to]
-    elif source in state["routes"]:
-        targets = state["routes"][source]
-    else:
+    state = players.load_players()
+    if source not in state["routes"]:
+        # [] = the channel; listed so the device shows up in the UI.
         state["routes"][source] = []
         players.save_players(state)
-        log.info("enrolled new source=%s; using default targets", source)
-        targets = state["default"]
+        log.info("enrolled new source=%s (channel)", source)
 
-    talkback.record_broadcast(
-        source=source,
-        targets=targets,
-        selves=state["selves"],
-    )
+    members, _ = await registry_members(source)
+
+    me = channel.self_player(source, state, members)
+    reply_to = None
+    if want_reply:
+        # Windows are keyed by the receiving device's own player.
+        reply_to = talkback.reply_target(me) if me else None
+        if reply_to is None:
+            log.info("reply from %s: nobody to answer; using the channel", source)
+
+    plan = channel.plan(source, state, members, reply_to=reply_to)
+    targets = plan.targets
+    if me is None and source != "unknown":
+        log.warning("source=%s matches no HA device; it may hear itself "
+                    "(set its speaker in 'selves')", source)
+    log.info("route  source=%s  mode=%s  targets=%s", source, plan.mode, targets)
+
+    if me:
+        talkback.record(me, targets)
 
     # Only the broadcast is cleaned; the saved recording stays raw. Pure-Python
     # DSP takes seconds, hence the thread. A failure falls back to raw audio.
@@ -195,9 +255,15 @@ async def handle_intercom(request: web.Request) -> web.Response:
     total_duration = mixer.total_duration_seconds(clean)
     log.info("WAV built  %s  (%.2fs incl. chimes)", session_id[:8], total_duration)
 
-    await _play_on_targets(
+    results = await _play_on_targets(
         wav, "wav", total_duration, targets, name=f"intercom-{session_id}"
     )
+    activity[source]["last_broadcast"] = {
+        "ts": received_at,
+        "mode": plan.mode,
+        "targets": list(targets),
+        "results": results,
+    }
     return web.Response(status=204)
 
 
@@ -249,6 +315,93 @@ async def handle_announce(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+async def handle_devices_get(request: web.Request) -> web.Response:
+    """GET /api/devices — every intercom device and how it is routed."""
+    state = players.load_players()
+    members, registry_error = await registry_members()
+    try:
+        entity_states = {s.get("entity_id"): s for s in await ha.get_states()}
+        states_error = None
+    except Exception as e:
+        log.warning("devices: could not read player states: %s", e)
+        entity_states, states_error = None, str(e)
+    return web.json_response({
+        "devices": channel.describe(state, members, activity, entity_states),
+        "channel": channel.channel_players(state, members),
+        "registry": {
+            "ok": registry_error is None,
+            "error": registry_error,
+            "fetched_at": ha.registry_fetched_at,
+        },
+        "states_error": states_error,
+    })
+
+
+async def handle_device_patch(request: web.Request) -> web.Response:
+    """PATCH /api/devices/{key} — key is a device name (X-Device-Name) or an
+    HA device_id. Body, all optional:
+      alias: str | null          display name (null clears)
+      override: [media_player] | null   explicit targets (null/[] = channel)
+      muted: bool                this device's PTT goes nowhere
+      listen: bool               false = never receives channel audio
+    """
+    key = request.match_info.get("key", "")
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "body must be an object"}, status=400)
+
+    state = players.load_players()
+    members, _ = await registry_members()
+    member = next((m for m in members if m.device_id == key), None)
+    name = (member.node_name if member else None) or (None if member else key)
+    if member and not name:
+        # Registry device whose node name is unknown: use the source it matched.
+        name = next((s for s in channel.known_sources(state, activity)
+                     if channel.match_source(s, members) is member), None)
+
+    source_fields = {"alias", "override", "muted"} & set(body)
+    if source_fields and not name:
+        return web.json_response(
+            {"error": f"{sorted(source_fields)} need a device name; this device "
+                      "has not talked yet"}, status=400)
+
+    if "alias" in body:
+        alias = body["alias"]
+        if alias is None or alias == "":
+            state["aliases"].pop(name, None)
+        elif isinstance(alias, str):
+            state["aliases"][name] = alias
+        else:
+            return web.json_response({"error": "'alias' must be a string or null"}, status=400)
+    if "override" in body:
+        override = body["override"] or []
+        if not players._is_entity_list(override):
+            return web.json_response(
+                {"error": "'override' must be a list of media_player.* entity ids or null"},
+                status=400)
+        state["routes"][name] = override
+    if "muted" in body:
+        if not isinstance(body["muted"], bool):
+            return web.json_response({"error": "'muted' must be a boolean"}, status=400)
+        muted = [s for s in state["muted"] if s != name]
+        state["muted"] = muted + [name] if body["muted"] else muted
+    if "listen" in body:
+        if not isinstance(body["listen"], bool):
+            return web.json_response({"error": "'listen' must be a boolean"}, status=400)
+        mp = (channel.self_player(name, state, members) if name else None) \
+            or (member.media_player if member else None)
+        if not mp:
+            return web.json_response({"error": "device has no known media_player"}, status=400)
+        excluded = [e for e in state["excluded"] if e != mp]
+        state["excluded"] = excluded if body["listen"] else excluded + [mp]
+
+    players.save_players(state)
+    return web.Response(status=204)
+
+
 async def handle_recordings_list(request: web.Request) -> web.Response:
     return web.json_response({
         "keep": keep_recordings(),
@@ -271,19 +424,21 @@ async def handle_recording_delete(request: web.Request) -> web.Response:
 
 async def _play_on_targets(
     wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str
-) -> None:
+) -> dict:
     """Write the media to /config/www and play it on `targets`, pausing and
-    later restoring whatever they were playing."""
+    later restoring whatever they were playing. Returns per-target results:
+    {entity_id: {"ok": bool, "status": int} | {"ok": False, "error": str}}."""
     filename = f"{name}.{ext}"
     filepath = Path(CONFIG_WWW) / filename
     filepath.parent.mkdir(parents=True, exist_ok=True)
     filepath.write_bytes(wav_bytes)
     log.info("media written  %s  (%.2fs)", filepath, duration)
 
+    results: dict = {}
     if not targets:
         log.warning("no targets; skipping play for %s", filename)
         _spawn(_delete_after(filepath, duration + 10))
-        return
+        return results
 
     # Restore in `finally`, or a failure leaves music paused and a stale
     # snapshot in the Ducker.
@@ -297,11 +452,14 @@ async def _play_on_targets(
             try:
                 status = await ha.play_media(player, media_url)
                 log.info("HA API  player=%s  status=%d", player, status)
+                results[player] = {"ok": 200 <= status < 300, "status": status}
             except Exception as e:
                 log.error("play_media failed for %s: %s", player, e)
+                results[player] = {"ok": False, "error": str(e)}
     finally:
         ducker.schedule_restore(list(targets), duration + 1.5)
         _spawn(_delete_after(filepath, duration + 10))
+    return results
 
 
 # The loop holds tasks weakly; keep them alive until done.
@@ -327,6 +485,7 @@ async def _delete_after(filepath: Path, delay: float) -> None:
 def make_lan_app() -> web.Application:
     app = web.Application(client_max_size=10 * 1024 * 1024)
     app.router.add_post("/intercom", handle_intercom)
+    app.router.add_post("/intercom/reply", handle_intercom)
     app.router.add_post("/announce", handle_announce)
     return app
 
@@ -336,6 +495,8 @@ def make_ingress_app() -> web.Application:
     app.router.add_get("/", handle_picker_index)
     app.router.add_get("/api/players", handle_picker_get)
     app.router.add_post("/api/players", handle_picker_post)
+    app.router.add_get("/api/devices", handle_devices_get)
+    app.router.add_patch("/api/devices/{key}", handle_device_patch)
     app.router.add_post("/api/announce", handle_announce)
     app.router.add_get("/api/recordings", handle_recordings_list)
     app.router.add_get("/api/recordings/{name}", handle_recording_get)
@@ -364,6 +525,11 @@ async def _run() -> None:
         sample_width=bits // 8,
         channels=channels,
     )
+
+    try:
+        players.migrate_file()
+    except OSError as e:
+        log.error("could not migrate players.json: %s", e)
 
     log.info("starting intercom relay on port %d (LAN)", port)
     log.info("starting picker UI on port %d (ingress)", ingress_port)

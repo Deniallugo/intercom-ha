@@ -67,6 +67,16 @@ def test_no_window_when_sender_has_no_selves_entry():
     assert tw.reply_target("B") is None
 
 
+def test_record_keys_windows_by_receiver_player_and_skips_sender():
+    tw = make(now=0)
+    tw.record("media_player.a", ["media_player.a", "media_player.b", "media_player.c"])
+    assert tw.reply_target("media_player.b") == "media_player.a"
+    assert tw.reply_target("media_player.c") == "media_player.a"
+    assert tw.reply_target("media_player.a") is None
+    tw.t = 31
+    assert tw.reply_target("media_player.b") is None
+
+
 def test_pingpong_A_to_B_then_B_to_A():
     tw = make(now=0)
     selves = {"A": "media_player.a", "B": "media_player.b"}

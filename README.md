@@ -98,6 +98,28 @@ tag (see `.github/workflows/build.yml`).
 | `keep_recordings` | `10` | Mic recordings retained for playback in the panel (`0` disables) |
 | `denoise` | `true` | Clean up broadcast audio: high-pass, band subtraction, expander, level to −16 dBFS. Off — no noise reduction, but speech is still levelled to −16 dBFS |
 
+### Who hears whom
+
+One channel, no setup: a PTT upload plays on every intercom device except the
+one talking. Intercom devices are the ESPHome devices with a `media_player`,
+read from HA's device/entity registry (WebSocket API, cached 5 min; an unknown
+`X-Device-Name` forces a refresh, at most every 30 s). Speaker-only devices
+(speaker-s3) just listen.
+
+A device's `X-Device-Name` (its ESPHome node name) is tied to its HA device by
+the ESPHome config entry's `device_name` (read from
+`/config/.storage/core.config_entries`), else by the device name
+(`atom-echo` ~ "Atom Echo"), else by a manual `selves` entry.
+
+Per device, in `/data/players.json` (set via `PATCH /api/devices/{name}`):
+an explicit target list (`override`), `muted` (its PTT goes nowhere), or
+`listen: false` (never receives the channel). If the registry is unreachable,
+the channel falls back to the `default` players, still minus the talker.
+
+Replies: a plain PTT always goes to the channel. `POST /intercom/reply` (or
+`X-Intercom-Reply: 1`) goes only to whoever last spoke to this device in the
+past 30 s, or to the channel if nobody did.
+
 ### Broadcast cleanup
 
 `denoise.py` processes each upload before broadcast (the stored recording stays raw):
@@ -138,7 +160,8 @@ The add-on listens on `port` (default `9999`):
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/intercom` | Receive a PCM audio upload from a device and broadcast it |
+| `POST` | `/intercom` | Receive a PCM audio upload from a device and broadcast it to the channel |
+| `POST` | `/intercom/reply` | Same, but only to whoever last spoke to this device (30 s window) |
 | `POST` | `/announce` | Render text via TTS and play on targets (omit `targets` → all players) |
 
 Trigger an announcement from a Home Assistant automation with a `rest_command`:

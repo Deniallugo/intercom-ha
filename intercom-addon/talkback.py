@@ -8,15 +8,29 @@ WINDOW_SECONDS = 30
 
 
 class TalkbackWindows:
-    """After a broadcast, a receiving device's next upload within
-    WINDOW_SECONDS goes back to the sender only. Windows expire or are
-    overwritten; they are not consumed on use.
+    """Remembers who last spoke to each device, for WINDOW_SECONDS.
+
+    Consulted only when an upload explicitly asks for a reply
+    (POST /intercom/reply or X-Intercom-Reply: 1); a plain PTT always goes to
+    the channel. Windows expire or are overwritten; not consumed on use.
     """
 
     def __init__(self, now_func: Callable[[], float] = time.monotonic):
         self._now = now_func
-        # device_name -> (sender_self_player_entity, expires_at_monotonic)
+        # receiver key -> (sender_self_player_entity, expires_at_monotonic).
+        # The add-on keys receivers by their own media_player, so a device
+        # that has never talked (name unknown yet) still gets a window.
         self._windows: dict[str, tuple[str, float]] = {}
+
+    def record(self, sender_player: str, receivers: list[str]) -> None:
+        """Open a window on each receiver key pointing back at `sender_player`."""
+        expires = self._now() + WINDOW_SECONDS
+        for receiver in receivers:
+            if receiver == sender_player:
+                continue
+            self._windows[receiver] = (sender_player, expires)
+            log.info("talkback  %s reply-window → %s  (expires in %.0fs)",
+                     receiver, sender_player, WINDOW_SECONDS)
 
     def record_broadcast(
         self,

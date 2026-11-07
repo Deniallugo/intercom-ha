@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -6,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "intercom-addon"))
+import ha_client  # noqa: E402
 from ha_client import HAClient  # noqa: E402
 
 
@@ -128,6 +130,142 @@ async def test_tts_get_audio_raises_on_missing_path(env_token):
     client = HAClient(session=fake_session)
     with pytest.raises(RuntimeError):
         await client.tts_get_audio("tts.piper", "hi")
+
+
+class FakeWS:
+    """Scripted WebSocket: replies to auth and to each command by type."""
+
+    def __init__(self, replies, auth_ok=True):
+        self.sent = []
+        self._queue = [{"type": "auth_required", "ha_version": "2026.11.0"}]
+        self._replies = replies
+        self._auth_ok = auth_ok
+
+    async def receive_json(self, timeout=None):
+        return self._queue.pop(0)
+
+    async def send_json(self, msg):
+        self.sent.append(msg)
+        if msg["type"] == "auth":
+            self._queue.append({"type": "auth_ok" if self._auth_ok else "auth_invalid",
+                                "message": "bad token"})
+            return
+        # An unrelated message first: the client must skip it.
+        self._queue.append({"id": 999, "type": "event", "event": {}})
+        result = self._replies[msg["type"]]
+        if isinstance(result, Exception):
+            self._queue.append({"id": msg["id"], "type": "result", "success": False,
+                                "error": {"code": "x", "message": str(result)}})
+        else:
+            self._queue.append({"id": msg["id"], "type": "result", "success": True,
+                                "result": result})
+
+
+def ws_session(*sockets):
+    session = MagicMock()
+    connects = []
+
+    def ws_connect(url, **kw):
+        connects.append(url)
+        ws = sockets[len(connects) - 1]
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=ws)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    session.ws_connect = ws_connect
+    session.connects = connects
+    return session
+
+
+DEVICES = [{"id": "d1", "name": "Atom Echo", "config_entries": ["e1"]}]
+ENTITIES = [{"entity_id": "media_player.atom_echo_player", "device_id": "d1",
+             "platform": "esphome"}]
+REPLIES = {"config/device_registry/list": DEVICES,
+           "config/entity_registry/list": ENTITIES}
+
+
+@pytest.fixture
+def no_config_entries(monkeypatch, tmp_path):
+    monkeypatch.setattr(ha_client, "CONFIG_ENTRIES_FILE", str(tmp_path / "missing"))
+
+
+async def test_ws_commands_authenticates_and_returns_results(env_token):
+    ws = FakeWS(REPLIES)
+    client = HAClient(session=ws_session(ws))
+    devices, entities = await client.ws_commands(
+        "config/device_registry/list", "config/entity_registry/list")
+    assert devices == DEVICES and entities == ENTITIES
+    assert client.session.connects == ["ws://supervisor/core/websocket"]
+    assert ws.sent[0] == {"type": "auth", "access_token": "tok"}
+    assert ws.sent[1] == {"id": 1, "type": "config/device_registry/list"}
+    assert ws.sent[2] == {"id": 2, "type": "config/entity_registry/list"}
+
+
+async def test_ws_commands_raises_on_bad_auth(env_token):
+    client = HAClient(session=ws_session(FakeWS(REPLIES, auth_ok=False)))
+    with pytest.raises(RuntimeError, match="auth"):
+        await client.ws_commands("config/device_registry/list")
+
+
+async def test_ws_commands_raises_on_failed_command(env_token):
+    client = HAClient(session=ws_session(FakeWS(
+        {"config/device_registry/list": RuntimeError("unauthorized")})))
+    with pytest.raises(RuntimeError, match="unauthorized"):
+        await client.ws_commands("config/device_registry/list")
+
+
+async def test_get_registry_caches_until_forced(env_token, no_config_entries):
+    client = HAClient(session=ws_session(FakeWS(REPLIES), FakeWS(REPLIES)))
+    first = await client.get_registry()
+    assert first["devices"] == DEVICES and first["entities"] == ENTITIES
+    assert first["esphome_names"] == {}
+    assert await client.get_registry() is first
+    assert len(client.session.connects) == 1
+    await client.get_registry(force=True)
+    assert len(client.session.connects) == 2
+
+
+async def test_get_registry_invalidate_refetches(env_token, no_config_entries):
+    client = HAClient(session=ws_session(FakeWS(REPLIES), FakeWS(REPLIES)))
+    await client.get_registry()
+    client.invalidate_registry()
+    await client.get_registry()
+    assert len(client.session.connects) == 2
+
+
+async def test_get_registry_serves_stale_copy_when_refresh_fails(
+    env_token, no_config_entries,
+):
+    broken = FakeWS({"config/device_registry/list": RuntimeError("down")})
+    client = HAClient(session=ws_session(FakeWS(REPLIES), broken))
+    first = await client.get_registry()
+    assert await client.get_registry(force=True) is first
+
+
+async def test_get_registry_raises_without_cache(env_token, no_config_entries):
+    broken = FakeWS({"config/device_registry/list": RuntimeError("down")})
+    client = HAClient(session=ws_session(broken))
+    with pytest.raises(RuntimeError):
+        await client.get_registry()
+
+
+def test_read_esphome_node_names(tmp_path):
+    f = tmp_path / "core.config_entries"
+    f.write_text(json.dumps({"version": 1, "data": {"entries": [
+        {"entry_id": "e1", "domain": "esphome",
+         "data": {"host": "10.0.0.5", "device_name": "esphome-web-0f4600"}},
+        {"entry_id": "e2", "domain": "esphome", "data": {"host": "10.0.0.6"}},
+        {"entry_id": "e3", "domain": "hue", "data": {"device_name": "bridge"}},
+    ]}}))
+    assert ha_client.read_esphome_node_names(str(f)) == {"e1": "esphome-web-0f4600"}
+
+
+def test_read_esphome_node_names_missing_or_garbage(tmp_path):
+    assert ha_client.read_esphome_node_names(str(tmp_path / "nope")) == {}
+    bad = tmp_path / "bad"
+    bad.write_text("{not json")
+    assert ha_client.read_esphome_node_names(str(bad)) == {}
 
 
 async def test_tts_get_audio_raises_when_audio_fetch_fails(env_token):
