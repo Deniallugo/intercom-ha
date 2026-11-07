@@ -1,18 +1,9 @@
-"""An adsk stand-in that EMITS OpenSCAD, so the Fusion port can be rendered offline.
+"""adsk stand-in that emits OpenSCAD, so the Fusion port renders without Fusion.
 
-Fusion has no headless mode, so the only way to see what `vc/*.py` actually builds without
-clicking Run is to implement the slice of the API it uses and have each feature write the
-equivalent OpenSCAD. It is a real emulation, not a mock:
-
-  * planes carry a model-space origin and u/v axes, and `worldGeometry` reports them — so
-    `Part._frame`'s probe gets the same answer Fusion's conventions would give
-  * sketch curves are recorded in SKETCH coordinates and transformed back to model space
-    by the plane's own frame at extrude time, exactly as Fusion would
-  * extrude -> multmatrix + linear_extrude, revolve -> rotate_extrude, loft -> hull(),
-    combine -> union / difference / intersection
-
-So if the port's coordinate math or its plane mapping is wrong, the rendered result is
-wrong in the same way it would be in Fusion.
+Planes carry real origins and u/v axes (so `Part._frame` probes them as in Fusion), sketch
+curves are stored in sketch coordinates and mapped to model space at extrude time, and
+features map to OpenSCAD: extrude -> linear_extrude, revolve -> rotate_extrude,
+loft -> hull, combine -> union / difference / intersection.
 """
 
 import math
@@ -25,9 +16,8 @@ S = 10.0           # emit millimetres (the API works in cm)
 X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
 NX, NY, NZ = (-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)
 
-# The (u, v) axes the three base planes hand a sketch. Fusion's real answer is not
-# obvious — the XZ plane's v axis points along model -Z, which is what turned the button
-# cap inside out — so render.py overrides this to check the port is INVARIANT to it.
+# (u, v) axes the base planes give a sketch. Fusion's XZ has v along model -Z;
+# render_diff.py overrides this to check the port is invariant to it.
 PLANES = {'xy': (X, Y), 'yz': (Y, Z), 'xz': (X, Z)}
 
 
@@ -341,9 +331,8 @@ class Features:
                     % (SEG, ', '.join('[%.6f, %.6f]' % p for p in pts)))
             return FeatureResult([self.comp.bodies.add(self._auto(), scad)])
         if isinstance(inp, LoftInput):
-            # hull of the two sections, each given a hair of thickness — which is exactly
-            # how the OpenSCAD built its chamfer. The hair is CENTRED on the section plane,
-            # so which way the plane's normal points cannot change the result by half of it.
+            # hull of the two sections, each a hair thick and centred on its plane, so the
+            # normal's direction can't shift the result.
             parts = []
             for i in range(inp.loftSections.count):
                 sk = inp.loftSections.item(i)
@@ -401,8 +390,7 @@ class Component:
         self.sketches = Sketches(self)
         self.features = Features(self)
         self.constructionPlanes = Planes(self)
-        # Fusion's own conventions for the three base planes. The port does not rely on
-        # these being right — it probes them — but they are what it will meet.
+        # Fusion's actual base-plane conventions (the port probes rather than relies on them).
         self.xYConstructionPlane = Plane('XY', (0, 0, 0), *PLANES['xy'])
         self.yZConstructionPlane = Plane('YZ', (0, 0, 0), *PLANES['yz'])
         self.xZConstructionPlane = Plane('XZ', (0, 0, 0), *PLANES['xz'])

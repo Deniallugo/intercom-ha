@@ -2,11 +2,8 @@ substitutions:
   name: atom-echo
   friendly_name: Atom Echo
   intercom_url: "http://homeassistant.local:9999/intercom"
-  # Where the "Mic test recording" button uploads to. Defaults to the add-on:
-  # the test is saved in its panel's recordings — and, like any broadcast, also
-  # played on the target speakers. For level / clipping / SNR statistics point
-  # this at tools/mic-capture.py on a LAN machine (http://<laptop-ip>:9999/intercom).
-  # Separate from ${intercom_url} so doing that does not divert PTT broadcasts.
+  # Mic test target. Default: the add-on (saved in its panel, also played on the
+  # targets). Point at tools/mic-capture.py for stats; PTT is unaffected.
   mic_test_url: "http://homeassistant.local:9999/intercom"
 
 packages:
@@ -25,18 +22,11 @@ esphome:
       then:
         - lambda: |-
             recorder_init();
-            // PDM mic on the Atom Echo has no PGA; boost recorded audio in
-            // software, AFTER the high-pass below (recorder.h filters first).
-            // 8/1 = +18 dB. Measured on this mic's captures: with the
-            // drift and the start-up burst gone, the loudest capture peaks at
-            // 7833 at x4 and speech sits at -37..-40 dBFS — too quiet next to
-            // voice-s3. x8 puts that peak at ~15700, still 6 dB clear. The gain
-            // saturates rather than wraps, so a close talker clips cleanly.
+            // No PGA on the PDM mic. +18 dB: the loudest capture peaks ~6 dB
+            // under full scale; speech was -37..-40 dBFS at x4.
             recorder_set_gain(8, 1);
-            // Measured on this mic: 1-10 Hz drift up to 8 dB louder than the
-            // speech, and a ~50 ms full-scale burst while the PDM filter settles
-            // after id(atom_mic).start() — a click at the start of every
-            // broadcast. 100 Hz keeps the whole voice.
+            // 1-10 Hz drift louder than speech, and a ~50 ms full-scale burst
+            // while the PDM filter settles after mic start.
             recorder_set_highpass(100);
             recorder_set_skip_ms(100);
     - priority: 200.0
@@ -50,8 +40,6 @@ esp32:
   board: m5stack-atom
   framework:
     type: esp-idf
-
-# logger / api / ota / wifi / captive_portal come from packages/base.yaml
 
 # ── Audio hardware ─────────────────────────────────────────────────────────────
 
@@ -91,40 +79,26 @@ speaker:
     dac_type: external
     bits_per_sample: 16bit
     sample_rate: 16000
-    # The speaker task allocates this as ONE contiguous internal-RAM block
-    # (500 ms default = 16 KB at 16 kHz/16-bit mono) and it is the LAST thing
-    # allocated when a broadcast starts — after the media player's reader and
-    # decoder tasks have already taken their share. On this no-PSRAM ESP32 that
-    # request is the one that fails, and the whole failure surfaces as:
-    #   [E][i2s_audio.speaker]: Speaker task setup failed (allocation, preload,
-    #                           or channel enable)
-    #   E i2s_common: i2s_channel_disable(): the channel has not been enabled yet
-    # (the second line is only cleanup noise — the task bailed before enabling).
-    # 200 ms = 6.4 KB. It only has to cover decoder scheduling jitter; network
-    # jitter is absorbed upstream by the media player's buffer_size below.
+    # One contiguous internal-RAM block, allocated last. The 500 ms default
+    # (16 KB) fails on this no-PSRAM chip: "Speaker task setup failed".
     buffer_duration: 200ms
 
-# ── Media player (HA-controllable playback) ────────────────────────────────────
+# ── Media player ───────────────────────────────────────────────────────────────
 
 media_player:
   - platform: speaker
     id: atom_player
     name: "${friendly_name} Player"
-    # 8 KB = 0.25 s at 16 kHz/16-bit mono — plenty for announcements. Kept small
-    # because this is a no-PSRAM ESP32 and the I2S DMA descriptors must come from
-    # the same scarce internal DMA-capable RAM. A large ring buffer here starves
-    # the speaker's DMA alloc and wedges it in a "retry forever" loop (needs reboot).
+    # Keep small: a larger buffer starves the I2S DMA alloc in internal RAM and
+    # wedges the speaker until reboot.
     buffer_size: 8192
     announcement_pipeline:
       speaker: atom_speaker
       format: WAV
 
 # ── Memory diagnostics + DMA watchdog ──────────────────────────────────────────
-# I2S DMA descriptors must be allocated from internal DMA-capable RAM. On this
-# no-PSRAM ESP32 that pool fragments over time; once it can't satisfy the
-# speaker's DMA alloc, the speaker task retries forever and only a reboot
-# recovers it. The sensor lets us watch the pool; the interval auto-reboots
-# before it wedges so no manual restart is needed.
+# Internal DMA RAM fragments over time until the speaker can't allocate and
+# wedges. Reboot before that happens.
 
 sensor:
   - platform: template
@@ -132,9 +106,7 @@ sensor:
     unit_of_measurement: "B"
     update_interval: 10s
     lambda: 'return heap_caps_get_free_size(MALLOC_CAP_DMA);'
-  # The metric that actually predicts an i2s_alloc_dma_desc failure: the largest
-  # *contiguous* DMA-capable block. Total free can be high (e.g. 135 KB) while
-  # this drops to a few KB under fragmentation, which is what wedges the speaker.
+  # This, not total free, predicts the failure.
   - platform: template
     name: "Largest DMA block"
     unit_of_measurement: "B"
@@ -146,14 +118,8 @@ interval:
     then:
       - lambda: |-
           static uint8_t lowhits = 0;
-          // Watch the largest contiguous block, not total free — fragmentation,
-          // not exhaustion, is what starves the I2S DMA descriptor allocation.
           size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
-          // Threshold must exceed the largest single contiguous block a
-          // broadcast asks for, or the watchdog stays happy while playback
-          // fails. That is the media player's 8192 B file ring buffer (the
-          // speaker's is 6.4 KB after buffer_duration: 200ms), so 12000 B
-          // leaves headroom above it rather than sitting just under it.
+          // Above the largest block a broadcast needs (8192 B media buffer).
           if (block < 12000) {
             if (++lowhits >= 3) {
               ESP_LOGE("watchdog", "Largest DMA block too small (%u B), rebooting", (unsigned) block);
@@ -176,12 +142,8 @@ light:
     restore_mode: ALWAYS_OFF
 
 # ── Mic diagnostics ────────────────────────────────────────────────────────────
-# Records 5 s to ${mic_test_url} (the add-on by default — see substitutions):
-# no hold timing to get right. Unlike voice-s3 it streams while recording: with
-# no PSRAM the recorder's buffer holds only ~1 s, so it cannot hold the take back.
-#
-# Mic test and PTT share the one recorder and refuse to start while the other
-# owns it — recorder_start() from either would wipe the other's take.
+# Records 5 s to ${mic_test_url}, streaming (no PSRAM to hold the take).
+# Mic test and PTT share the recorder, so each refuses while the other runs.
 
 button:
   - platform: template
@@ -229,9 +191,8 @@ globals:
     type: bool
     restore_value: false
     initial_value: 'false'
-  # True from a press that actually started a recording until its release.
-  # A press refused because the recorder was busy leaves it false, so that
-  # press's release does not stop someone else's recording or mic.
+  # Set only by a press that started a recording, so a refused press's
+  # release doesn't stop someone else's.
   - id: ptt_recording
     type: bool
     restore_value: false
@@ -268,9 +229,7 @@ binary_sensor:
                 id(atom_mic).start();
                 uploader_start("${intercom_url}", App.get_name().c_str());
     on_release:
-      # Only the release of a press that started a recording closes it out.
-      # Cleared before the tail, so a second press-and-release inside it
-      # (refused: the upload is still running) cannot close it out twice.
+      # Cleared before the tail so a press inside it can't close it twice.
       - if:
           condition:
             lambda: 'return id(ptt_recording);'

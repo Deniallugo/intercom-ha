@@ -1,20 +1,16 @@
 # Speaker case — 53 mm vertical pair, ported, intercom-capable
 
 Wall-mounted enclosure for **two AIYIMA 53 mm (2") full-range drivers stacked
-vertically** on the front baffle, dual mono (one amp channel each), in a **ported
-0.70 L chamber tuned to ~145 Hz**. A vertical stack: the sealed/ported speaker chamber
-on top, a vented electronics bay below, split by a divider crossed by four sealed
-terminal bolts. Intercom (mic + PTT) is a secondary role; music playback is primary.
+vertically**, dual mono, in a **ported 0.70 L chamber tuned to ~145 Hz**. Speaker
+chamber on top, vented electronics bay below, split by a divider with four sealed
+terminal bolts. Music first; intercom (mic + PTT) second.
 
 > **Firmware status:** `devices/speaker-s3.yaml` is playback only. The case has the
 > ICS-43434 mic pocket and the PTT bore, but neither the mic nor the button is
 > implemented in the firmware yet.
 
 External size: **86 × 202 × 88 mm** (W × H × D).
-Net chamber volume: **0.7015 L** (≥ the 0.65 L `vol_target` floor in the asserts).
-
-Design rationale, the acoustic arithmetic, and the honest performance limits:
-`docs/superpowers/specs/2026-07-29-speaker-case-53mm-review.md`
+Net chamber volume: **0.7015 L** (asserted ≥ 0.65 L).
 
 ## What this box can and cannot do
 
@@ -25,49 +21,32 @@ Design rationale, the acoustic arithmetic, and the honest performance limits:
 | Max SPL at 150 Hz | **~85 dB @ 1 m (excursion-limited)** |
 | Max SPL at 60 Hz | ~69 dB — inaudible under music |
 
-Bass is displacement, and two cones at Xmax give Vd ≈ 2.9 cm³. **No enclosure choice
-reaches below ~120 Hz.** The levers that do work, best value first: corner or
-wall-junction placement (+6 to +9 dB below 250 Hz, free), the port (+3 dB at 140–170 Hz),
-a +4 dB low shelf in Music Assistant (free at sane listening levels), and a powered
-subwoofer on the line-out for anything below 120 Hz.
-
----
+Two cones give Vd ≈ 2.9 cm³: **no enclosure reaches below ~120 Hz.** What helps, best
+first: corner placement (+6 to +9 dB below 250 Hz), the port (+3 dB at 140–170 Hz), a
++4 dB low shelf in Music Assistant, a powered sub on the line-out.
 
 ## Parts
 
-- `body` — shell with the ported chamber (two drivers on the front baffle with local
-  stiffening pads, tuned port on the +x side wall), the sealing divider + four sealed
-  terminal bolts, and the electronics bay (S3 friction pocket, PTT bore and mic pocket
-  on the front baffle, bottom-wall USB-C socket / sub jack, +x service slot)
-- `rear` — flat gasketed lid with recessed keyhole wall-mount bosses + inner DAC and
-  amp standoffs
-- `port` — the tuned port tube, printed separately **so Fb is tunable**
+- `body` — chamber, divider, electronics bay (devkit pocket, PTT bore, mic pocket,
+  bottom USB-C / sub jack, +x service slot)
+- `rear` — gasketed lid with keyhole bosses and DAC / amp standoffs
+- `port` — tuned port tube, separate so Fb can be changed
 
-There is no `grille` part. A 22 %-open perforated disc 4 mm off a cone that runs to
-15 kHz costs more than it protects. Use open metal mesh if you need protection.
+No grille part: a perforated disc hurts the treble more than it protects. Use open mesh.
 
 ## Build
 
 ```bash
-# render all three parts
 ./build.sh            # -> stl/{body,rear,port}.stl
-
-# or render one at a time
-/Applications/OpenSCAD-2021.01.app/Contents/MacOS/OpenSCAD \
-  -D 'part="body"' -o stl/body.stl speaker-case.scad
-
-# run the assert harness + render smoke checks
-./test.sh
+./test.sh             # asserts + render checks
+"$OPENSCAD" -D 'part="body"' -o stl/body.stl speaker-case.scad   # one part
 ```
 
-Assembled preview: open `speaker-case.scad` in the OpenSCAD GUI with the default
-`part="all"`.
-
----
+`part="all"` (the default) is the assembled preview.
 
 ## Tuning the port
 
-Print a different `port` — that is the whole point of it being a separate part.
+Reprint `port` with a different `port_len`:
 
 | `port_len` | Fb |
 |---|---|
@@ -78,19 +57,13 @@ Print a different `port` — that is the whole point of it being a separate part
 
 `Lv = 23562.5·d²/(Fb²·Vb) − 0.732·d` (d in cm, Vb in litres).
 
-**Do not tune lower than ~130 Hz.** Below Fs (145 Hz) the cones cannot drive the port
-and the box unloads — that is exactly the mistake the superseded 75 Hz passive radiator
-made. Port area is 3.14 cm² (≥ 10 % of total cone area); peak air velocity at Xmax is
-~8.4 m/s, well under the ~17 m/s chuffing threshold.
-
----
+**Don't tune below ~130 Hz:** under Fs (145 Hz) the cones can't drive the port and the
+box unloads. Peak port air speed at Xmax is ~8.4 m/s, under the ~17 m/s chuffing limit.
 
 ## Electronics bay — boards and wiring
 
-The 15 V PD tree is gone. A 4 Ω 53 mm driver wants 3–5 W; TPA3116 on 15 V into 4 Ω
-delivers ~40 W and would destroy it on one full-scale sample. PAM8406 on plain 5 V gives
-2 × 3 W and **clips before the driver dies** — the amp's ceiling is free protection.
-That deletes the CH224K, the MP1584 and the TPA3116: five boards down to three.
+PAM8406 on 5 V gives 2 × 3 W and clips before a 3–5 W driver dies. A bigger amp
+(e.g. TPA3116 on 15 V, ~40 W) would destroy it on one full-scale sample.
 
 | Board | Mount | Location |
 |---|---|---|
@@ -100,23 +73,11 @@ That deletes the CH224K, the MP1584 and the TPA3116: five boards down to three.
 | ICS-43434 I²S MEMS mic | friction pocket + gasket seat | front baffle, left of the PTT |
 
 Front-baffle features (all in the bay):
-- **PTT panel-mount momentary switch** — 12.4 mm bore through a locally thinned
-  (2.5 mm) panel, bottom-center, with a nut counterbore behind and a tactile halo ring
-  on the outer face.
-- **ICS-43434 I²S MEMS mic** — friction pocket + gasket seat + **one 2 mm port**, left
-  of the PTT. You talk to the front of an intercom. Press the mic's port onto the
-  gasket: near-zero front volume puts the port resonance at ~14 kHz. (The superseded
-  7 × 1.5 mm cluster was a ~5.7 kHz resonator sitting on top of speech.)
-
-Bottom wall — **cable exits point straight down**:
-- **USB-C 5 V power IN** — a **panel-mount socket**, not a breakout board. A flat
-  breakout facing the side wall has to sit at x ≈ −30 to reach it, which is exactly
-  where a corner lid boss runs: the receptacle ended up 2.8 mm *inside* the boss.
-- **3.5 mm sub line-out** — see below.
-
-Also:
-- **+x side-wall service slot** — exposes the devkit's own USB-C ports for the first
-  flash and serial logs.
+- **PTT** panel-mount switch: 12.4 mm bore in a 2.5 mm thinned panel, nut counterbore behind.
+- **Mic**: one 2 mm port with the mic pressed onto a gasket — resonance ~14 kHz, clear of speech.
+- **Bottom wall**, cables straight down: panel-mount USB-C 5 V in (a breakout board would
+  collide with a lid boss) and the 3.5 mm sub line-out.
+- **+x service slot**: the devkit's own USB-C, for flashing and logs.
 
 ### Wiring map
 
@@ -136,62 +97,42 @@ PAM8406 OUT B ── 330 uF ──► divider terminals ──► driver 2 (lowe
 
 **Three things that bite if skipped:**
 
-1. **The 330 µF series caps are not optional.** One per driver leg, bipolar/NP,
-   ≈120 Hz corner into 4 Ω. Both design docs called a high-pass "mandatory" because TTS
-   and wake-word bypass Music Assistant's DSP, and then shipped no hardware backstop.
-   This is it. Its bigger payoff is cutting intermodulation distortion — unchecked LF
-   excursion modulates the midrange the same cone is reproducing.
+1. **The 330 µF series caps are required.** One per driver, bipolar/NP, ≈120 Hz corner
+   into 4 Ω. TTS and chimes bypass Music Assistant's EQ; these are the only high-pass
+   they get, and they also cut LF intermodulation.
 2. **Attenuate the DAC before the amp.** PCM5102 full-scale is ~2.1 Vrms; PAM8406's
    fixed ~24 dB gain would ask for 33 V from a 5 V rail and clip continuously. Use the
    module's onboard pot or a 10 kΩ/1.2 kΩ divider (≈ −19 dB).
 3. **Do not power the amp through the devkit's USB port.** Peak draw is ~2 A; that path
    goes through the devkit's Schottky and a thin trace. Feed both from the USB-C socket.
 
-Passive L+R summing means **`devices/speaker-s3.yaml` needs no change** — it stays
-`channel: stereo`, and both drivers and the sub get a true mono mix instead of one
-arbitrary channel.
+Passive L+R summing keeps the firmware at `channel: stereo` and gives drivers and sub a
+true mono mix.
 
-Driver wires cross the divider through **four M3 brass terminal bolts** with an O-ring
-under each washer — not a wire pass. Dual mono on a BTL amp has no common return, so
-all four conductors are independent, and in a 0.7 L box a silicone-smeared hole is the
-leak that ruins Qtc. Solder each series cap between the amp output and its bay-side
-terminal.
-
----
+Driver wires cross the divider through **four M3 brass terminal bolts** with O-rings, not
+a wire hole: a leak in a 0.7 L box ruins the tuning. BTL outputs have no common return,
+so all four conductors are separate. Solder each series cap between amp and terminal.
 
 ## Print & assembly notes
 
 **Printing:**
-- Orient **back-down**: flat baffle up, open back on the plate, no supports. The front
-  edge is a 6 mm **chamfer** rather than a fillet precisely so it prints support-free in
-  this orientation (a tangent fillet would start as a 90° overhang).
-- **PETG or ASA**, not PLA, if the wall ever sees sun — PLA's Tg ≈ 60 °C creeps under
-  sustained load. PLA-CF is a good compromise: higher internal damping than plain PLA,
-  which lowers panel Q.
-- 0.6 mm nozzle, 0.24 mm layers, **5 perimeters**, "ensure vertical shell thickness:
-  all", 25 % gyroid. Airtightness comes from perimeters, not infill — with normal
-  infill, air migrates through the infill matrix from the chamber into the bay and out
-  the PTT/USB breaches.
+- **Back down**, no supports (the 6 mm front chamfer allows it).
+- **PETG or ASA** if it ever sees sun (PLA creeps at ~60 °C). PLA-CF damps panels better.
+- 0.6 mm nozzle, 0.24 mm layers, **5 perimeters**, "ensure vertical shell thickness",
+  25 % gyroid. Perimeters make it airtight; infill leaks.
 - Brush a coat of 2-part epoxy or shellac inside the chamber.
 - **Pressure-test before assembly:** seal the drivers and the port, blow into a terminal
   bore, and soap the seams. A leak invalidates the whole alignment.
 
 **Drivers:**
-- Punched foam ring in the baffle recess under each flange; 4 × M2 self-tap into the
-  blind pilots. The pilots leave 1.5 mm of solid floor — do not chase them deeper.
-- Both drivers **same polarity**. They are a coherent vertical pair, not stereo.
-- The vertical stack is deliberate: comb filtering lands in the vertical plane, where
-  nobody moves, and the horizontal polar response stays clean. Never mount them
-  side by side.
+- Foam ring under each flange; 4 × M2 self-tap. Don't drill the blind pilots deeper.
+- Both drivers **same polarity**.
+- Keep them stacked vertically: comb filtering then lands in the vertical plane.
 
 **Rear lid:**
-- **M3 heat-set inserts** in the four body corner bosses (4.0 mm bore). This is the
-  joint opened repeatedly for wiring and polyfill; self-tap would strip. The drivers
-  keep self-tap pilots because the *port*, not the driver, is the tuning element here.
-- Foam strip in the lid perimeter gasket groove; foam tape on the divider's back edge.
-  The groove is centred on the 4 mm shell rim (`lid_gasket_inset = wall/2`). It used to
-  sit at `wall + 3`, which put it 3 mm inboard of the rim — hanging over the open cavity,
-  compressing against nothing. If you change it, the assert will tell you.
+- **M3 heat-set inserts** in the corner bosses (4.0 mm bore): the lid is opened often and
+  self-tap would strip.
+- Foam strip in the lid gasket groove; foam tape on the divider's back edge.
 
 **Polyfill:** loosely in the speaker chamber only, and keep it clear of the port's inner
 mouth.
@@ -203,38 +144,22 @@ mouth.
 | Protect excursion | High-pass | ~130 Hz | 12–24 dB/oct | — |
 | Body | Low shelf | ~250 Hz | — | +4 dB |
 
-The shelf is free at normal listening levels (at 75 dB you have ~10 dB of excursion
-headroom at 150 Hz) and must be paired with the high-pass. The 330 µF caps are the
-hardware backstop for everything that bypasses this DSP.
-
----
+Always pair the shelf with the high-pass.
 
 ## Wall mount
 
-Two recessed keyhole bosses on the lid's outer face, **stacked vertically** 50 mm apart
-over the chamber. 120 mm side-by-side spacing cannot fit an 86 mm lid, and on a 194 mm
-tall box two vertically-spaced screws resist the tip-out moment far better than two at
-the same height. Each boss has a wall-side retaining plate with the keyhole cut through
-it, backing onto a head-clearance cavity floored by the solid lid panel — so the head is
-captured while the panel stays solid and the chamber sealed. The head-circle sits at the
-bottom: pass the heads through, then let the box settle so the shanks ride up the slots.
+Two recessed keyholes on the lid, 50 mm apart **vertically**. Pass the screw heads
+through the round end at the bottom, then let the box drop onto the slots.
 
-Mount it **flush to the wall** (a 100 mm standoff puts a cancellation notch at ~857 Hz)
-and keep ≥ 30 mm clear on the **+x port side**.
-
----
+Mount **flush to the wall** (a gap notches the response) and leave ≥ 30 mm free on the
+**+x port side**.
 
 ## Confirm before printing `[confirm vs hardware]`
 
-- **Driver bolt circle (49 mm).** The published "4 × on a 43 mm square (60 mm diagonal)"
-  is self-contradictory for a 53 mm frame: a 43 mm *square* puts screws at r = 30.4
-  (outside the frame), a 43 mm bolt *circle* puts them at r = 21.5 (inside the 46 mm
-  cutout). Measure yours. The asserts enforce that it lands between the two.
-- **Xmax and Vas** — never measured. Vas picks the box volume; Xmax sets every max-SPL
-  number above. Measure both (added-mass or closed-box delta-Fs) before trusting them.
+- **Driver bolt circle (49 mm).** The datasheet figure is self-contradictory; measure yours.
+- **Xmax and Vas** — not measured; they set the box volume and every SPL figure above.
 - Driver cutout (46 mm), frame OD (53 mm), seated depth (28 mm)
 - Board footprints: S3 devkit (69 × 26 in `params.scad`; a real board measured 63 × 28 — check yours), PCM5102 (27 × 27), PAM8406 (24 × 16)
-- **Panel-mount USB-C socket**: body cutout (9.5 × 4.5 mm) and screw pitch (20 mm) vary
-  a lot between modules — measure yours
+- Panel-mount USB-C socket: cutout (9.5 × 4.5 mm) and screw pitch (20 mm) vary by module
 - PTT panel-mount switch thread (12 mm → 12.4 mm bore) and nut across flats (16.5 mm)
 - Wall-mount screw head diameter vs the keyhole geometry

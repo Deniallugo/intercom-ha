@@ -31,20 +31,17 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    # Cache layout — required to avoid boot loops on the EchoS3R / VoiceS3R
-    # per M5Stack's reference YAML.
+    # Boot-loops without this cache layout (M5Stack reference config).
     sdkconfig_options:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
 
-# 8 MB octal PSRAM on the S3-PICO module.
 psram:
   mode: octal
   speed: 80MHz
 
-# Override base.yaml's empty logger — VoiceS3R has no UART pins broken out,
-# so logs go through USB CDC.
+# No UART pins broken out.
 logger:
   hardware_uart: USB_CDC
   level: DEBUG
@@ -66,11 +63,9 @@ audio_dac:
     id: es8311_dac
     bits_per_sample: 16bit
     sample_rate: 48000
-    mic_gain: 18DB              # was default 42DB — far too sensitive
+    mic_gain: 18DB              # default 42DB is far too sensitive
 
-# ── NS4150 internal Class-D amp enable ───────────────────────────────────────
-# GPIO18 controls the NS4150 amp on the VoiceS3R. Without this, the codec's
-# analog output reaches the amp but the amp is off → no sound from the speaker.
+# ── NS4150 amp enable — off means no sound from the internal speaker ─────────
 
 switch:
   - platform: gpio
@@ -107,10 +102,10 @@ speaker:
     dac_type: external
     bits_per_sample: 16bit
     sample_rate: 48000
-    channel: left                  # VoiceS3R has only one internal speaker
+    channel: left
     audio_dac: es8311_dac
 
-# ── Media player (HA-controllable playback) ──────────────────────────────────
+# ── Media player ─────────────────────────────────────────────────────────────
 
 media_player:
   - platform: speaker
@@ -150,8 +145,7 @@ binary_sensor:
                 id(s3_mic).start();
                 uploader_start("${intercom_url}", App.get_name().c_str());
     on_release:
-      # Only the release of a press that started a recording closes it out —
-      # a press refused mid-upload must not cut the running upload short.
+      # Only if this press started a recording; else it would cut a running upload.
       - if:
           condition:
             lambda: 'return id(ptt_recording);'

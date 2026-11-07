@@ -1,21 +1,14 @@
 # Intercom HA
 
-A whole-home **push-to-talk intercom + voice satellite** built on
+A whole-home push-to-talk intercom and voice satellite on
 [Home Assistant](https://www.home-assistant.io/) and [ESPHome](https://esphome.io/).
+Hold a device's button to talk; your voice plays on the other devices' speakers.
+The same path carries TTS announcements; the devices are also Assist satellites
+and music players.
 
-Press a button on any device to record, and your voice is broadcast through the
-speakers of every other device. The same path also carries Home Assistant TTS
-announcements, wake-word voice assist, and music streaming — all into custom
-external speakers driven by MAX98357A amps.
-
-The project has two halves:
-
-- **Firmware** (`devices/`, `include/`, `packages/`) — ESPHome configs for the
-  ESP32 satellites.
-- **Add-on** (`intercom-addon/`) — a Home Assistant add-on (Python/aiohttp) that
-  receives audio from the devices, mixes in chimes, ducks any playing media, and
-  broadcasts to the target media players. It also renders text announcements via
-  Piper TTS.
+- **Firmware** (`devices/`, `include/`, `packages/`) — ESPHome configs.
+- **Add-on** (`intercom-addon/`) — receives uploads, adds chimes, ducks media,
+  plays the result on the target media players; renders text announcements.
 
 ## Devices
 
@@ -25,9 +18,7 @@ The project has two halves:
 | **Terrace** — M5Stack VoiceS3R + 2× MAX98357A (dual mono) | ESP32-S3 (8 MB PSRAM) | PTT intercom, wake word (`okay nabu`) + HA Assist, Spotify via Music Assistant, TTS announcements |
 | **Voice S3** — bare ESP32-S3 + PCM5102A + ZK-502MT amp + INMP441 + button | ESP32-S3 N16R8 (8 MB PSRAM) | One box on 24 V: stereo Music Assistant player with a built-in 2 × 50 W amp driving two passive speakers, wake word + HA Assist, tap-to-talk / hold-to-intercom. Mic and DAC on separate I²S peripherals, so it keeps listening while playing |
 
-See **[docs/DEVICES.md](docs/DEVICES.md)** for the full hardware reference:
-wiring diagrams, GPIO maps, the audio pipeline, and the key technical decisions
-(two-I²S-bus design, dual-mono amps, codec mic gain, DMA fragmentation watchdog).
+Wiring, GPIO maps and hardware notes: **[docs/DEVICES.md](docs/DEVICES.md)**.
 
 ## How it works
 
@@ -42,9 +33,8 @@ wiring diagrams, GPIO maps, the audio pipeline, and the key technical decisions
                                      • broadcasts to target players
 ```
 
-The same add-on serves an **Announce** panel (HA ingress) where you type text
-that's rendered with Piper TTS and played on the players you pick — the identical
-broadcast path the intercom uses.
+The add-on's ingress panel also sends text announcements (Piper TTS) down the
+same path.
 
 ## Repository layout
 
@@ -110,99 +100,37 @@ tag (see `.github/workflows/build.yml`).
 
 ### Broadcast cleanup
 
-**On by default.** Every broadcast has its speech brought to **−16 dBFS**,
-with a lookahead peak limiter holding −3 dBFS. Measured, raw uploads carry
-speech at −21 to −33 dBFS against a chime near −9; on the Atom Echo's small
-speaker that made a broadcast audible only if the talker had been right on the
-mic. The cleanup is what lets that gain happen without the hiss coming up with
-it — measured on voice-s3 in its case, at the same −16 dBFS of speech:
+`denoise.py` processes each upload before broadcast (the stored recording stays raw):
+
+1. high-pass at 80 Hz — removes room rumble (35 % of a capture's RMS was below 80 Hz);
+2. 8-band spectral subtraction — the only stage that reduces hiss under speech;
+3. downward expander — quiets the gaps between words;
+4. level — speech to −16 dBFS, lookahead limiter at −3 dBFS peaks.
+
+`denoise: false` skips 1–3 and keeps 4 (`denoise.level()`). Raw uploads arrive at
+−21 to −33 dBFS, too quiet next to music and the chime. The level stage must
+stay last, after the noise is down. Measured on voice-s3:
 
 | | speech | floor between words |
 |---|---|---|
 | raw upload | −31.0 dBFS | −57.8 dBFS |
-| `denoise: false` (level only) | −16.0 | −42.9 |
-| `denoise: true` | −16.2 | **−60.2** |
+| `denoise: false` | −16.0 | −42.9 |
+| `denoise: true` | −16.2 | −60.2 |
 
-With `denoise: false` a broadcast still gets the level (`denoise.level()`), but
-no noise reduction, so a mic that has gone wrong is audible as one. The retained
-recording is the raw upload either way.
-
-The INMP441 has no gain control, and device-side digital gain buys level but not
-clarity: SNR was 13-15 dB at unity, at +18 dB and at +36 dB alike, because gain
-lifts the noise floor with the signal. So the device takes a fixed +12 dB — the
-measured clipping-free ceiling — while the level and the noise work happen in
-the add-on, where there is CPU to spare and float headroom.
-
-`denoise.py` runs four stages over each upload before it is broadcast:
-
-1. **high-pass** at 80 Hz — the single biggest win. Measured on a real capture,
-   **35% of the total RMS sits below 80 Hz**: room rumble carrying no speech at
-   all. The filter is −3 dB at the corner and flat above 200 Hz, so the voice is
-   untouched.
-2. **multiband spectral subtraction** — 8 bands, each attenuated by the noise
-   estimated for that band. This is the stage that matters, because it is the
-   only one that reduces noise *while speech is present*. An expander alone was
-   inaudible: measurement showed 67% of frames carry speech, and no gate can
-   touch the hiss underneath them.
-3. **downward expander** — cleans the remaining gaps. Its threshold is the
-   *geometric mean* of the measured floor and the measured speech level (their
-   midpoint in dB); a fixed multiple of the floor landed above the speech on
-   real captures and attenuated everything equally, achieving nothing.
-4. **set level** — brings speech to `TARGET_SPEECH_RMS` (−16 dBFS), with a
-   lookahead limiter holding −3 dBFS peaks.
-
-Stage 4 has to use an absolute target because the broadcast shares a media
-player with music. Measured: raw uploads carry speech at −21 to −33 dBFS, while
-music masters sit near −12 dBFS and the chime near −9. At one volume setting
-that makes the chime audible and the speech inaudible. `denoise.level()` — the
-`denoise: false` path — is this same stage on its own.
-
-Raising the level is only legitimate **because it runs last**, on already-quiet
-noise. An earlier version normalised before the band subtraction existed and
-sounded like "louder, including the noise" — correctly, since the noise
-reduction then was 0.2 dB. Now, on real captures, speech ends up 11–15 dB above
-the untouched original while the floor between words stays 1–4 dB *below* it.
-On synthetic white noise it can land ~2 dB above — real mic noise is
-rumble-heavy, which the band subtraction handles far better — so the tests
-bound that at +3 dB. Don't reorder these.
-
-The band split is complementary — each band is a one-pole low-pass of what is
-left, subtracted from the residual — so with all gains at 1 the bands sum back
-to the input to within 2e-13. A conventional filter bank would leave crossover
-ripple that colours the voice even when nothing is being attenuated.
-
-Measured against a high-passed reference across eight real captures, before
-the level stage: **audible hiss (1-8 kHz median) 7-12 dB down, voice level
-within ±0.5 dB, and the gaps between words 11-14 dB quieter** without going
-dead. ~0.22 s of CPU per 5 s upload, in a worker thread. Set `denoise: false`
-to take the noise reduction out of the broadcast path (the level stays).
-
-Both `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` are taste calls, swept and
-documented in the module: raise them if the gaps sound abrupt, lower them if
-there is still too much hiss.
-
-The retained recordings stay **raw** whatever this is set to — that copy exists to expose mic
-faults, and cleaning it would hide them. To hear what the cleanup does to a
-capture, run `tools/denoise-preview.py <wav>`; it writes a `-clean` sibling and
-prints the before/after statistics.
+Tuning: `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` in `denoise.py` (raise if gaps
+sound abrupt, lower if hiss remains). Preview a capture with
+`tools/denoise-preview.py <wav>`. Device-side mic gain: [docs/DEVICES.md](docs/DEVICES.md) → INMP441 mic.
 
 ### Mic recordings
 
-Every upload to `/intercom` — a PTT broadcast or a device's **Mic test
-recording** button — is also kept as a chime-free WAV of the raw mic audio in
-the add-on's `/data/recordings`, newest `keep_recordings` retained. The
-**Intercom** side-panel lists them with an inline player, a download link and a
-delete button.
+Every upload to `/intercom` is also saved as a raw, chime-free WAV in
+`/data/recordings` (newest `keep_recordings`; `0` keeps nothing and deletes old
+ones). The side-panel lists them with player, download and delete.
 
 The **Mic test recording** button (voice-s3, atom-echo) records 5 s and uploads
-it to the device's `mic_test_url` substitution — by default this add-on, so the
-test lands in the panel. It is handled like any other upload, so it is **also
-played on that device's target speakers**. For level / clipping / SNR
-statistics instead, point `mic_test_url` at `tools/mic-capture.py` on a LAN
-machine and reflash; `intercom_url`, and with it PTT, is unaffected.
-
-Set `keep_recordings: 0` if you'd rather nothing spoken over the intercom is
-retained on disk — it also deletes whatever an earlier setting kept.
+to the `mic_test_url` substitution — the add-on by default, so the test is saved
+here **and played on the device's target speakers**. For level/SNR statistics,
+point `mic_test_url` at `tools/mic-capture.py`; PTT is unaffected.
 
 ### HTTP API
 
@@ -238,8 +166,7 @@ See [docs/DEVICES.md → Announcements](docs/DEVICES.md) for details.
 
 ## Development
 
-The add-on logic is plain Python with a pytest suite. The system `python3` on
-macOS has no pytest, so use a virtualenv:
+Add-on tests (use a venv — macOS `python3` has no pytest):
 
 ```bash
 python3 -m venv .venv
@@ -247,10 +174,8 @@ python3 -m venv .venv
 .venv/bin/python -m pytest tests -q
 ```
 
-The voice-case design checks need no venv:
-`cd hardware/voice-case/fusion/VoiceCase && python3 -m vc.checks`.
+Voice-case design checks: `cd hardware/voice-case/fusion/VoiceCase && python3 -m vc.checks`.
 
 ## License
 
-No license file is present; treat as all rights reserved unless the maintainer
-states otherwise.
+No license file; all rights reserved.

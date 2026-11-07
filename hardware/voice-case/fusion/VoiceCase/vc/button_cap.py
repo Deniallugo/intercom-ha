@@ -1,17 +1,9 @@
-"""snap-in button cap: a scaled TalkingPetDIY dome, flange + straight body + one fillet.
+"""Snap-in button cap (port of ``modules/button_cap.scad``): flange, straight body, one
+top fillet.
 
-Port of ``modules/button_cap.scad``. Drawn in PRINTING orientation: the dome APEX is on
-the build plate at z = 0 and the part grows +z, which is the same direction as case z, so
-case z maps to print z by adding btn_dome_h.
-
-Printed apex-down the whole part is a cup — floor, then walls, then a post standing up
-inside it — with no overhang anywhere, and three things make that true: the top fillet
-meets the plate tangentially, the step out to the flange is 45 deg because btn_flare_h()
-is DERIVED from the flange/body step, and the post is on the axis.
-
-The revolved section is the OpenSCAD polygon with TRUE ARCS where it had a 24-segment
-approximation of one — the only place this port is not bit-identical to the STL the SCAD
-produced, and it is the direction you want to differ in.
+Drawn in print orientation: apex on the plate at z = 0, print z = case z + btn_dome_h.
+Prints dome-down with no overhang (tangent fillet, 45 deg flare, post on axis). Uses true
+arcs, so its STL differs slightly from the SCAD's.
 """
 
 import math
@@ -46,9 +38,8 @@ def _revolve(part):
         ('line', (r_flng, z_fl1)),         # flange
         ('line', (r_wall, z_fl1)),
         ('line', (r_wall, z_catch)),       # body, on down to the lip
-        # Retention lip. Tapered, not a square barb: the far end enters the bore first, so
-        # it is the narrow end and the body cams inward as you press. The step back at the
-        # near end stays square — that face is the catch.
+        # Retention lip: tapered on the leading end so the body cams inward; the square
+        # trailing face is the catch.
         ('line', (r_lip, z_catch)),
         ('line', (r_wall, z_end)),
         ('line', (r_in, z_end)),
@@ -60,13 +51,8 @@ def _revolve(part):
 
 
 def _slits(part):
-    """Radial slits, so the lip can collapse through the shell bore.
-
-    They start below the top face and run off the far edge, which leaves the body solid
-    everywhere the shell bore touches it — the journal is not cut where it is most
-    accurate, and the only way to see one is to look up under the flange. Each cut runs
-    outward from the axis only, so btn_slits is the slit count, not half of it.
-    """
+    """Radial slits so the lip can collapse through the shell bore. They start below the
+    top face, leaving the body solid where the bore guides it."""
     z0 = P.btn_dome_h + P.btn_slit_z0
     z1 = P.btn_dome_h + P.btn_wall_z1() + 0.2
     big = 4*P.btn_cap_d
@@ -81,9 +67,8 @@ def _slits(part):
 
 def build(part):
     _revolve(part)
-    # Centre post, reaching btn_preload PAST the plunger's free position — so with the lip
-    # on the catch the switch is holding the cap up there and it cannot rattle. It carries
-    # the whole thumb load until the plunger bottoms in the switch body under it.
+    # Centre post, reaching btn_preload past the plunger's free position: the switch holds
+    # the cap up against its lip, so it can't rattle.
     post = cyl(part, 0, P.btn_wall_t + P.btn_post_h(), P.btn_post_d, name='post')
     part.union(NAME, [post])
     return part.cut(NAME, _slits(part))

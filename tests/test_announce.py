@@ -7,8 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "intercom-addon"))
 import announce  # noqa: E402
 from chimes import ChimeMixer  # noqa: E402
 
-# The device speakers (and the whole intercom chain) are built for this format;
-# announcements must be delivered at it, not at the TTS engine's native rate.
+# Announcements must arrive at the add-on's format, not the TTS native rate.
 TARGET = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
 
 
@@ -37,8 +36,7 @@ def test_parse_tts_wav_returns_none_for_non_wav():
 
 
 def test_build_announcement_wav_resamples_to_target_rate():
-    # 1 second of 22050 Hz speech must come out at the target 16 kHz so the
-    # Atom Echo's I2S speaker can allocate its (16 kHz-sized) DMA buffers.
+    # 22.05 kHz in -> 16 kHz out (Atom Echo DMA buffers are sized for it).
     speech_frames = 22050
     pcm = b"\x01\x02" * speech_frames
     wav_in = _make_wav(pcm, rate=22050, width=2, channels=1)
@@ -76,8 +74,7 @@ def test_build_announcement_wav_falls_back_for_non_wav():
 
 
 def test_build_announcement_wav_reports_real_duration_for_non_16bit_wav():
-    # 24-bit WAV: ChimeMixer can't mix it (16-bit only), but we can still
-    # measure its true length from the PCM so ducking/cleanup aren't truncated.
+    # 24-bit: not mixable, but the length is still measured.
     rate, width, channels = 22050, 3, 1
     frames = 5000
     pcm = b"\x00\x00\x00" * frames

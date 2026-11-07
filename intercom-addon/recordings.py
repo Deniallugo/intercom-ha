@@ -1,20 +1,8 @@
-"""Retain the raw mic audio of intercom uploads inside the add-on.
+"""Keep the raw mic audio (no chimes, no cleanup) of every /intercom upload.
 
-Every upload to /intercom is kept here: PTT broadcasts and the device's "Mic
-test recording" button alike. That button records 5 s with Wi-Fi quiet, then
-POSTs it to the device's ${mic_test_url} — by default this add-on's /intercom,
-so the test is saved here AND, like any broadcast, played on the source's
-target speakers. The /config/www copy that playback uses is deleted right after
-(see intercom._play_on_targets); this one is what the ingress panel lists. For
-level / clipping / SNR statistics instead, point ${mic_test_url} at
-tools/mic-capture.py on a LAN machine and reflash.
-
-What is stored is the *raw* mic PCM — no chimes — because that is what tells you
-whether the microphone itself is working.
-
-Files live in the add-on's own /data volume (persistent across restarts, not
-visible in /config), newest `keep` retained and older ones pruned on each save.
-keep = 0 stores nothing, and deletes whatever an earlier setting left behind.
+PTT broadcasts and device mic tests alike, so a mic can be judged from the
+panel. Stored in /data/recordings, newest `keep` retained; keep = 0 stores
+nothing and deletes what is there.
 """
 import logging
 import os
@@ -28,15 +16,11 @@ log = logging.getLogger(__name__)
 
 RECORDINGS_DIR = "/data/recordings"
 
-# A name arrives from the URL path and is turned straight back into a
-# filesystem path, so only ever accept the exact shape save() produces —
-# anything with a slash or a leading dot is rejected before it can traverse.
+# Names come from the URL: accept only what save() produces (no traversal).
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.wav$")
 _UNSAFE = re.compile(r"[^A-Za-z0-9]+")
 
-# Written under a .part suffix and renamed, so listing() never sees a
-# half-flushed file. The suffix is outside _SAFE_NAME, so it is also never
-# servable or listable while in flight.
+# Write-then-rename, so a half-written file is never listed or served.
 _PARTIAL_SUFFIX = ".part"
 
 
@@ -47,13 +31,10 @@ def _slug(text: str, limit: int) -> str:
 
 
 def save(wav_bytes: bytes, *, source: str, session_id: str, keep: int) -> Optional[Path]:
-    """Write `wav_bytes` as a new recording and prune to the newest `keep`.
+    """Write a new recording and prune to the newest `keep`.
 
-    Returns the path written, or None when retention is disabled (keep <= 0) —
-    in which case any recordings kept under an earlier setting are deleted, so
-    "keep nothing" really means nothing is stored. Raises OSError if the volume
-    is not writable — the caller logs and carries on, since a failed capture
-    must never cost the user the broadcast.
+    Returns the path, or None if keep <= 0 (then deletes all). Raises OSError;
+    the caller must not let that cost the broadcast.
     """
     if keep <= 0:
         prune(0)

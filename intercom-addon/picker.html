@@ -61,9 +61,8 @@
     <button class="linkish" id="rec-refresh">refresh</button>
   </div>
   <div class="hint" style="margin: 0.2rem 0 0.6rem;">
-    The raw mic audio of the last few uploads, broadcasts and mic tests alike.
-    “Mic test recording” on a device records 5 s and lands here — and, like any
-    broadcast, also plays on that device’s target speakers. Press it, then refresh.
+    Raw mic audio of recent uploads. A device’s “Mic test recording” lands here
+    (and also plays on its targets) — press it, then refresh.
   </div>
   <div id="rec-list"></div>
 </section>
@@ -229,11 +228,7 @@ function render() {
 async function save() {
   $("toast").textContent = "";
   try {
-    // A device that uploaded for the first time while this page was open was
-    // enrolled on the server (with an empty route) after we loaded. Keep it,
-    // rather than overwriting players.json with our older list of sources.
-    // The page never removes a source, so anything only the server knows of
-    // is new, not deleted.
+    // Keep sources enrolled on the server since this page loaded.
     let merged = false;
     const cur = await fetch("./api/players");
     if (cur.ok) {
@@ -420,8 +415,7 @@ async function loadRecordings() {
 
 $("rec-refresh").addEventListener("click", loadRecordings);
 
-// Recordings after the players: their rows show each source's alias, which
-// only arrives with /api/players.
+// After load(): recording rows need the aliases.
 load().then(loadRecordings);
 </script>
 </body>

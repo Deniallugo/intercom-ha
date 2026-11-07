@@ -7,9 +7,7 @@ from chimes import ChimeMixer
 
 log = logging.getLogger(__name__)
 
-# When we can't measure an announcement's length (the engine returned a format
-# we can't decode), report this generous floor instead of 0 so the caller's
-# duck-restore and file-cleanup grace windows don't truncate it mid-playback.
+# Assumed length of undecodable TTS, so restore/cleanup don't cut it short.
 FALLBACK_DURATION_SECONDS = 30.0
 
 
@@ -63,15 +61,10 @@ def _resample_mono16(samples: array.array, src_rate: int, dst_rate: int) -> arra
 
 
 def build_announcement_wav(audio: bytes, mixer: ChimeMixer):
-    """Return (bytes, ext, duration_seconds).
+    """Return (bytes, ext, duration_seconds), chimed and at ``mixer``'s rate.
 
-    If the TTS audio is a 16-bit PCM WAV, resample it to ``mixer``'s format and
-    build a chime+speech+chime WAV at that rate. The whole intercom chain (and
-    the device I2S speakers, whose DMA buffers are sized for it) is built around
-    the addon's configured rate, so announcements MUST be delivered at it — a
-    native-rate TTS WAV (e.g. Piper's 22.05 kHz) makes the no-PSRAM Atom Echo's
-    speaker fail to allocate its DMA buffers and spin in a retry loop.
-    Non-16-bit / unparseable TTS output degrades to chime-less playback.
+    Must be resampled: a 22.05 kHz Piper WAV makes the Atom Echo's speaker fail
+    its DMA allocation. Non-16-bit / unparseable TTS plays without chimes.
     """
     parsed = parse_tts_wav(audio)
     if parsed is None:
@@ -79,8 +72,7 @@ def build_announcement_wav(audio: bytes, mixer: ChimeMixer):
         return audio, "mp3", FALLBACK_DURATION_SECONDS
     pcm, rate, width, channels = parsed
     if width != 2:
-        # Can't resample/mix (16-bit only), but we still know the true length
-        # from the PCM, so report it accurately.
+        # Can't mix non-16-bit, but the length is still known.
         duration = len(pcm) / (rate * width * channels)
         log.warning("TTS WAV is %d-bit, not 16-bit; playing without chime", width * 8)
         return audio, "wav", duration
@@ -90,8 +82,7 @@ def build_announcement_wav(audio: bytes, mixer: ChimeMixer):
     samples = _downmix_to_mono(samples, channels)
     samples = _resample_mono16(samples, rate, mixer.sample_rate)
     if mixer.channels > 1:
-        # ChimeMixer pre-renders its chimes at mixer.channels, so the speech must
-        # match. Duplicate the mono signal across channels.
+        # Chimes are rendered at mixer.channels; match them.
         interleaved = array.array("h", bytes(2 * len(samples) * mixer.channels))
         for i, s in enumerate(samples):
             for c in range(mixer.channels):

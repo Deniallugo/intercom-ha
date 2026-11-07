@@ -39,11 +39,8 @@ static bool _send_all(int sock, const void* buf, size_t len) {
   return true;
 }
 
-// Every exit path of the task ends here, so _uploading always clears. With
-// `discard`, the recording the upload abandoned is drained to nowhere until it
-// ends — leaving it would hand its stale tail to the next upload, and a full
-// buffer would drop the next recording's start. Bounded, so a recorder nobody
-// stops cannot pin this task.
+// Every task exit goes through here, so _uploading always clears. `discard`
+// drains the abandoned recording (max 120 s) so its tail can't leak into the next.
 static void _upl_finish(int sock, bool discard) {
   if (sock >= 0) ::close(sock);
   if (discard) {
@@ -93,9 +90,8 @@ static void _stream_task(void* arg) {
     _upl_finish(-1, false);
     return;
   }
-  // Without these a Wi-Fi drop mid-request blocks send()/recv() forever, and
-  // since _uploading never clears, every later PTT is refused until a reboot.
-  // SO_SNDTIMEO also bounds lwIP's connect().
+  // Without timeouts a Wi-Fi drop blocks forever and every later PTT is refused
+  // until reboot. SO_SNDTIMEO also bounds connect().
   struct timeval tv;
   tv.tv_sec = UPL_TIMEOUT_S; tv.tv_usec = 0;
   ::setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -108,7 +104,7 @@ static void _stream_task(void* arg) {
   }
   ::freeaddrinfo(res);
 
-  // Send HTTP headers — chunked streaming body
+  // Chunked POST
   auto sid = _make_sid();
   char hdr[512];
   int hlen = snprintf(hdr, sizeof(hdr),

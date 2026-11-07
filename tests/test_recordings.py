@@ -40,9 +40,7 @@ def test_save_disabled_when_keep_is_zero(rec_dir):
 
 
 def test_keep_zero_deletes_recordings_kept_earlier(rec_dir):
-    """Turning retention off must not strand the files an earlier setting
-    kept: the panel hides them at keep=0, so they would otherwise sit in /data
-    forever, contradicting "nothing is stored"."""
+    """keep=0 deletes recordings kept under an earlier setting."""
     for sid in ("one", "two"):
         recordings.save(_wav(0.1), source="dev", session_id=sid, keep=5)
     assert len(list(rec_dir.glob("*.wav"))) == 2

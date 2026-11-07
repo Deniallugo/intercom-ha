@@ -19,9 +19,8 @@ import recordings
 
 ha = HAClient()
 
-# Initialized at import with the addon's default audio format. _run()
-# rebuilds it if options.json overrides any of the format fields. Module-level
-# so tests can call handlers directly without going through _run().
+# Default format at import (so tests can call handlers directly); _run()
+# rebuilds it from options.json.
 mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
 ducker = Ducker(ha)
 talkback = TalkbackWindows()
@@ -37,22 +36,14 @@ OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 PICKER_HTML_FILE = Path(__file__).parent / "picker.html"
 
-# Whether to clean up broadcast audio when the option is absent. On: speech is
-# brought to -16 dBFS either way (a raw upload is far too quiet for a small
-# speaker), and without the cleanup the hiss comes up with it — measured on
-# voice-s3 in its case, a -42.9 dBFS floor instead of -60.2. The retained
-# recording stays raw regardless, so mic faults remain visible there; turn this
-# off to hear them in the broadcast too.
+# Speech is levelled either way; without cleanup the hiss rises with it
+# (voice-s3: -42.9 dBFS floor instead of -60.2).
 DEFAULT_DENOISE = True
 
-# How many mic recordings to retain when the option is absent. 0 disables
-# retention entirely.
 DEFAULT_KEEP_RECORDINGS = 10
 
-# X-Session-ID is attacker-controllable and is interpolated into a /config/www
-# filename, so a value like "../../config/foo" would escape the directory and
-# let a LAN client write an arbitrary .wav. Accept it for logging/correlation
-# only when it's a safe token; otherwise fall back to a fresh random id.
+# X-Session-ID ends up in a /config/www filename: reject anything that could
+# traverse out of it.
 _SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
@@ -66,9 +57,7 @@ def load_options() -> dict:
 
 
 def denoise_enabled() -> bool:
-    """Whether to run the full cleanup (denoise.process) before broadcasting,
-    rather than the level stage alone (denoise.level). Falls back to the
-    default if options.json cannot be read, like keep_recordings()."""
+    """Full cleanup (True) or level only (False); default if options unreadable."""
     try:
         return bool(load_options().get("denoise", DEFAULT_DENOISE))
     except (OSError, json.JSONDecodeError, AttributeError) as e:
@@ -151,8 +140,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
     log.info("received  session=%s  source=%s  pcm=%d bytes  duration=%.1fs",
              session_id[:8], source, len(pcm), duration)
 
-    # Keep the raw mic audio before routing, so a mic test is still listenable
-    # from the ingress panel even if the broadcast that follows fails.
+    # Saved before routing, so it survives a failed broadcast.
     try:
         kept = recordings.save(
             mixer.build_plain_wav(pcm),
@@ -167,8 +155,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
 
     state = players.load_players()
 
-    # Talkback: if this source has a live reply window, route ONLY to the
-    # sender's self-player.
+    # A live reply window routes only to the original sender's own player.
     reply_to = talkback.reply_target(source)
     if reply_to is not None:
         log.info("talkback  source=%s  reply-to=%s", source, reply_to)
@@ -187,20 +174,13 @@ async def handle_intercom(request: web.Request) -> web.Response:
         selves=state["selves"],
     )
 
-    # Clean up only what goes out. recordings.save() above deliberately kept the
-    # raw bytes — that copy exists to expose mic faults, and processing it would
-    # hide them. Failure here must not cost the broadcast, so fall back to raw.
-    # Both are pure Python over every sample — seconds of CPU for a long
-    # broadcast — so they run in a worker thread to keep the event loop (and
-    # every other request) responsive meanwhile.
+    # Only the broadcast is cleaned; the saved recording stays raw. Pure-Python
+    # DSP takes seconds, hence the thread. A failure falls back to raw audio.
     try:
         if denoise_enabled():
             clean = await asyncio.to_thread(
                 denoise.process, pcm, sample_rate=mixer.sample_rate)
         else:
-            # No cleanup, but still the level: raw speech arrives ~18 dB under
-            # the chime, which a small speaker cannot make up. See
-            # denoise.TARGET_SPEECH_RMS.
             clean = await asyncio.to_thread(
                 denoise.level, pcm, sample_rate=mixer.sample_rate)
     except Exception:
@@ -218,9 +198,7 @@ async def handle_intercom(request: web.Request) -> web.Response:
 
 
 async def handle_announce(request: web.Request) -> web.Response:
-    """Speak `text` (Piper TTS) on `targets`. Shared by the LAN endpoint
-    (automations) and the ingress endpoint (UI). If `targets` is omitted/empty,
-    announce on every media_player in HA."""
+    """Speak `text` via TTS on `targets` (all media players if omitted)."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -290,9 +268,8 @@ async def handle_recording_delete(request: web.Request) -> web.Response:
 async def _play_on_targets(
     wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str
 ) -> None:
-    """Write the media to /config/www and play it on `targets` with the same
-    duck/restore/cleanup behavior the intercom uses. Used by both the intercom
-    and announcement handlers."""
+    """Write the media to /config/www and play it on `targets`, pausing and
+    later restoring whatever they were playing."""
     filename = f"{name}.{ext}"
     filepath = Path(CONFIG_WWW) / filename
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -304,10 +281,8 @@ async def _play_on_targets(
         _spawn(_delete_after(filepath, duration + 10))
         return
 
-    # The restore and the file cleanup are scheduled in `finally`: if anything
-    # past the pause raised and skipped them, paused music would stay paused for
-    # good — and the stale snapshot left in the Ducker would make every later
-    # broadcast to that player skip taking a fresh one.
+    # Restore in `finally`, or a failure leaves music paused and a stale
+    # snapshot in the Ducker.
     try:
         opts = load_options()
         ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
@@ -315,7 +290,6 @@ async def _play_on_targets(
         media_url = f"{ha_url}/local/{filename}"
         log.info("playing on %d player(s): %s", len(targets), targets)
         for player in targets:
-            # One unreachable player must not cost the others the broadcast.
             try:
                 status = await ha.play_media(player, media_url)
                 log.info("HA API  player=%s  status=%d", player, status)
@@ -326,8 +300,7 @@ async def _play_on_targets(
         _spawn(_delete_after(filepath, duration + 10))
 
 
-# Strong references to fire-and-forget tasks: the event loop only keeps weak
-# ones, so an unreferenced task can be garbage-collected before it runs.
+# The loop holds tasks weakly; keep them alive until done.
 _background_tasks: set = set()
 
 
@@ -376,10 +349,8 @@ async def _run() -> None:
     sample_rate = opts.get("sample_rate", 16000)
     bits = opts.get("bits_per_sample", 16)
     channels = opts.get("channels", 1)
-    # Every device sends 16-bit mono, and the chimes and denoise only handle
-    # that: 24-bit fails in ChimeMixer, and stereo would be levelled as if it
-    # were mono. config.yaml's schema already pins both; this catches a
-    # hand-edited options.json.
+    # Chimes and denoise handle 16-bit mono only (schema pins it; this catches
+    # a hand-edited options.json).
     if bits != 16 or channels != 1:
         log.error("unsupported audio format %s-bit / %s channel(s) — only 16-bit "
                   "mono is supported; using that", bits, channels)
@@ -408,9 +379,7 @@ async def _run() -> None:
     await ingress_runner.setup()
     await web.TCPSite(ingress_runner, host="0.0.0.0", port=ingress_port).start()
 
-    # Run until the Supervisor stops the container (SIGTERM), then shut down
-    # cleanly — including the HA client's aiohttp session, which otherwise
-    # logs "Unclosed client session" on the way out.
+    # Run until SIGTERM, then close servers and the HA session cleanly.
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

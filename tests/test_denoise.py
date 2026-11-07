@@ -1,9 +1,5 @@
-"""Tests for the broadcast audio cleanup.
-
-The properties that matter are structural — length and format preserved, never
-raises, never clips, silence not amplified — plus the one measurable claim the
-module makes: it improves SNR on real speech-shaped input.
-"""
+"""Broadcast cleanup: length/format kept, never raises or clips, silence not
+amplified, and SNR improves on speech-shaped input."""
 import array
 import math
 import struct
@@ -73,9 +69,7 @@ def test_preserves_length_and_format():
 
 @pytest.mark.parametrize("fn", [denoise.process, denoise.level])
 def test_odd_length_keeps_the_trailing_byte(fn):
-    """An odd byte count is not 16-bit PCM, but it must still come out exactly
-    as long as it went in, with the stray byte untouched — the duration
-    arithmetic and the chime offsets downstream depend on the length."""
+    """Output length equals input length; downstream timing depends on it."""
     src = speech_like()
     odd = src + b"\x7f"
     out = fn(odd, sample_rate=RATE)
@@ -121,10 +115,7 @@ def speech_level(b):
 
 
 def test_brings_speech_to_the_target_level():
-    """Speech must land near TARGET_SPEECH_RMS regardless of how quiet it
-    arrived, because the broadcast shares a media player with music: a raw
-    upload is ~25 dB below a music master and is simply inaudible at the volume
-    music is set to."""
+    """Speech lands near TARGET_SPEECH_RMS however quiet it arrived."""
     for level in (600, 1200, 3000):
         out = denoise.process(speech_like(level=level), sample_rate=RATE)
         ratio = speech_level(out) / denoise.TARGET_SPEECH_RMS
@@ -141,12 +132,8 @@ def _floor_of(b):
 
 
 def test_gain_does_not_undo_the_noise_reduction():
-    """What makes raising the level legitimate: the make-up gain may not bring
-    the noise between words back up past the untouched original by more than a
-    whisker. On real, rumble-heavy mic noise it stays 1-4 dB BELOW; this
-    synthetic white noise is the hard case for the band subtraction and lands
-    ~2 dB above, so the bound is +3 dB. Past that, the module is back to being
-    "louder, including the noise"."""
+    """Make-up gain may not lift the floor >3 dB over raw (synthetic white noise
+    is the hard case; real mic noise ends up below)."""
     src = speech_like(level=1200, noise=200)
     out = denoise.process(src, sample_rate=RATE)
     assert _floor_of(out) < _floor_of(src) * 10 ** (3 / 20), (
@@ -155,9 +142,7 @@ def test_gain_does_not_undo_the_noise_reduction():
 
 
 def test_lowers_the_noise_floor():
-    """The cleanup must earn its gain: relative to the speech, the floor has to
-    come down substantially. Plain level() moves both together; this is the
-    difference the option exists for."""
+    """Floor drops relative to speech — what level() alone cannot do."""
     src = speech_like(level=1200, noise=200)
 
     def gap(b):
@@ -170,8 +155,7 @@ def test_lowers_the_noise_floor():
 
 
 def test_silence_is_not_amplified():
-    """Pure near-silence must stay quiet — the guard that stops a dead mic from
-    being normalised up into full-scale hiss."""
+    """Near-silence stays quiet: a dead mic is not normalised into hiss."""
     src = speech_like(noise=20, duty=0)
     out = denoise.process(src, sample_rate=RATE)
     assert peak(out) < denoise.MIN_PEAK_TO_NORMALISE * 2
@@ -194,8 +178,7 @@ def test_level_restore_is_bounded():
 
 
 def test_highpass_response():
-    """-3 dB at the corner, flat over the speech band. A filter cutting higher
-    than advertised would thin the voice while looking like a DC blocker."""
+    """-3 dB at the corner, flat over the speech band."""
     import array as _array
 
     def gain_at(hz):
@@ -220,10 +203,8 @@ def test_is_deterministic():
 # ── level(): the stage a broadcast gets with the cleanup off ─────────────────
 
 def test_level_brings_quiet_speech_to_its_target():
-    """Raw uploads arrive ~18 dB under the chime; level() must close that gap
-    even though nothing else in the cleanup runs."""
-    # 900 is about the quietest real upload (Atom across a room); anything much
-    # quieter needs more than MAX_MAKEUP and is held short of the target.
+    """level() alone still brings quiet speech up to the target."""
+    # ~quietest real upload; much lower is capped by MAX_MAKEUP.
     for lvl in (900, 1500, 4000):
         out = denoise.level(speech_like(level=lvl), sample_rate=RATE)
         ratio = speech_level(out) / denoise.TARGET_SPEECH_RMS
@@ -231,11 +212,9 @@ def test_level_brings_quiet_speech_to_its_target():
 
 
 def test_level_limiter_holds_the_peak_ceiling():
-    """Reaching the target takes more gain than the crest factor allows; the
-    limiter, not a smaller factor, must keep every sample under TARGET_PEAK."""
+    """The limiter, not a smaller factor, keeps peaks under TARGET_PEAK."""
     src = speech_like(level=2500)
-    # A plosive-like spike far above the speech, which a plain scale factor
-    # would have had to respect at the cost of the whole broadcast's level.
+    # Plosive-like spike far above the speech.
     s = list(unpack(src))
     for i in range(8000, 8040):
         s[i] = 20000 if i % 2 else -20000

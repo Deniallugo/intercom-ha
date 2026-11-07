@@ -1,25 +1,11 @@
 #!/usr/bin/env python3
-"""Run the add-on's broadcast cleanup over a WAV so you can judge it by ear.
+"""Run the add-on's broadcast processing over WAVs offline, to A/B by ear.
 
-The cleanup lives in the add-on and only touches audio on its way out to the
-speakers, which makes it awkward to evaluate: the WAVs mic-capture.py writes are
-raw by design, and the copies the add-on retains are raw too. This applies the
-same code paths offline and writes two siblings to A/B against:
+    python3 tools/denoise-preview.py tools/mic-06.wav   # -> -clean.wav, -level.wav
 
-    -clean.wav   denoise.process(): the full cleanup, what a broadcast gets
-                 with `denoise: true` (the default)
-    -level.wav   denoise.level(): high-pass and level only, what a broadcast
-                 gets with `denoise: false`
-
-Usage:
-    python3 tools/denoise-preview.py tools/mic-06.wav   # -> mic-06-clean.wav, mic-06-level.wav
-    python3 tools/denoise-preview.py tools/*.wav        # batch
-
-The floor / loudest / SNR figures are measured the way mic-capture.py measures
-them (quietest vs loudest quarter-second), before and after, so a change is
-judged the same way the mic itself was characterised. The one to watch is SNR:
-the cleanup should raise it, while level() leaves it where it was — gain alone
-lifts the noise with the speech, which is also why device-side gain never could.
+-clean is denoise.process() (`denoise: true`), -level is denoise.level()
+(`denoise: false`). Prints floor / loudest / SNR before and after, measured as
+mic-capture.py does; cleanup should raise SNR, level() should not change it.
 """
 import math
 import struct

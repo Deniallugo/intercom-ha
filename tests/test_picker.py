@@ -37,8 +37,7 @@ def fake_ha(monkeypatch):
 def _drop_ducker_state():
     srv.ducker._snapshots.clear()
     srv.ducker._deadlines.clear()
-    # Tasks were created in the previous test's event loop, which is now
-    # gone — just drop the references; the loop closure already cancelled them.
+    # Previous test's loop is gone and already cancelled these.
     srv.ducker._tasks.clear()
 
 
@@ -399,19 +398,14 @@ async def test_intercom_wav_includes_chimes(
     pcm_len = struct.unpack_from("<I", wav, 40)[0]
     # Chime is 120ms at 16k/16/1 = 3840 bytes each side.
     # Total PCM = 3840 + 200 + 3840 = 7880.
-    # The payload is not byte-identical to the upload: fake_options leaves
-    # `denoise` unset, so DEFAULT_DENOISE (on) applies and denoise.process()
-    # rewrites it on the way out — the retained recording is what keeps the raw
-    # bytes. Its length is preserved exactly, which is what pcm_len checks and
-    # what the chime offsets and the duration arithmetic depend on.
+    # Default denoise rewrites the payload but keeps its length.
     assert pcm_len == 7880
 
 
 async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
 ):
-    """With cleanup disabled the broadcast skips the noise reduction but still
-    gets its level set — raw speech is far too quiet for a small speaker."""
+    """denoise: false skips process() but still runs level()."""
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": [],
@@ -421,9 +415,7 @@ async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     calls = []
     cleanup_calls = []
 
-    # Records rather than raises: the handler deliberately swallows any
-    # exception from the cleanup and broadcasts raw, so a raised AssertionError
-    # here would be caught and the test would still pass.
+    # Count, not raise: the handler swallows cleanup exceptions.
     def no_cleanup(pcm, *, sample_rate):
         cleanup_calls.append(pcm)
         return pcm
@@ -449,8 +441,7 @@ async def test_intercom_levels_but_does_not_clean_when_denoise_off(
 async def test_intercom_cleans_when_denoise_on(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
 ):
-    """`denoise: true` runs the full cleanup — process(), not level() — and
-    what it returns is what is broadcast."""
+    """denoise: true broadcasts what process() returns; level() is not called."""
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": [],
@@ -485,9 +476,8 @@ async def test_play_media_failure_still_restores_and_cleans_up(
     aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
     monkeypatch,
 ):
-    """A play_media that raises must not leave the paused music paused forever
-    (nor a stale snapshot behind), must not cost the other targets their
-    broadcast, and must not strand the media file in /config/www."""
+    """A failing play_media: others still play, music is restored, no stale
+    snapshot, media file still deleted."""
     import asyncio as _asyncio
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen", "media_player.bedroom"]},
