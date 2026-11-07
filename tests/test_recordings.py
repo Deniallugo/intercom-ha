@@ -39,6 +39,17 @@ def test_save_disabled_when_keep_is_zero(rec_dir):
     assert not rec_dir.exists()
 
 
+def test_keep_zero_deletes_recordings_kept_earlier(rec_dir):
+    """Turning retention off must not strand the files an earlier setting
+    kept: the panel hides them at keep=0, so they would otherwise sit in /data
+    forever, contradicting "nothing is stored"."""
+    for sid in ("one", "two"):
+        recordings.save(_wav(0.1), source="dev", session_id=sid, keep=5)
+    assert len(list(rec_dir.glob("*.wav"))) == 2
+    assert recordings.save(_wav(), source="dev", session_id="three", keep=0) is None
+    assert list(rec_dir.glob("*.wav")) == []
+
+
 def test_save_sanitises_source_and_session(rec_dir):
     path = recordings.save(
         _wav(), source="../../etc/pwn", session_id="../..", keep=5
@@ -182,6 +193,18 @@ def test_keep_recordings_defaults_when_option_missing(monkeypatch, tmp_path):
 def test_keep_recordings_survives_a_missing_file(monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "OPTIONS_FILE", str(tmp_path / "nope.json"))
     assert srv.keep_recordings() == srv.DEFAULT_KEEP_RECORDINGS
+
+
+def test_denoise_enabled_survives_a_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(srv, "OPTIONS_FILE", str(tmp_path / "nope.json"))
+    assert srv.denoise_enabled() is srv.DEFAULT_DENOISE
+
+
+def test_denoise_enabled_survives_bad_json(monkeypatch, tmp_path):
+    p = tmp_path / "options.json"
+    p.write_text("{not json")
+    monkeypatch.setattr(srv, "OPTIONS_FILE", str(p))
+    assert srv.denoise_enabled() is srv.DEFAULT_DENOISE
 
 
 def test_keep_recordings_clamps_negative(monkeypatch, tmp_path):

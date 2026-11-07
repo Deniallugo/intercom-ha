@@ -9,22 +9,26 @@ information nothing downstream can recover. So the device now takes only a small
 fixed boost that cannot clip, and the *level* is made up here, after the hiss
 between words has been pushed down.
 
-Three stages, in this order:
+Four stages, in this order:
 
   1. high-pass   — kills the INMP441's DC bias and sub-audio wander. Cheap, and
                    it must run first: DC offset otherwise inflates every RMS
                    measurement the later stages depend on.
-  2. expander    — attenuates frames that sit near the noise floor, so silence
+  2. band subtraction — splits the signal into BAND_COUNT bands and attenuates
+                   each by its own estimated noise, frame by frame. The only
+                   stage that lowers the hiss *under* speech.
+  3. expander    — attenuates frames that sit near the noise floor, so silence
                    between words goes quiet instead of hissing. A *downward
                    expander*, not a hard gate: gain moves continuously with
                    level, which is what stops speech onsets from being chopped.
-  3. normalise   — one scale factor to bring speech to a fixed level, with
+  4. normalise   — one scale factor to bring speech to a fixed level, with
                    a lookahead peak limiter holding TARGET_PEAK. Computed in
                    float over the whole buffer, so unlike device-side gain it
                    can never clip. Also available alone as level(), which is
                    what a broadcast gets when the cleanup is turned off.
 
-Length, sample rate and format are preserved exactly, so callers can keep using
+Input is 16-bit mono PCM. Length, sample rate and format are preserved exactly
+(an odd trailing byte is passed through untouched), so callers can keep using
 the same duration arithmetic.
 
 What this does NOT touch: the copy kept by recordings.py. That is deliberately
@@ -61,10 +65,10 @@ HIGHPASS_HZ = 80.0
 #      24   2.0   -6.8 dB  -3.3 dB  +3.5 dB
 #
 # More bands buy nothing and cost time linearly (0.18s at 8, 0.52s at 24), so
-# 8 it is. The voice loss is given back by _set_level, leaving hiss ~4 dB
-# down. That is a real, audible improvement and also close to the ceiling: the
-# microphone only delivers 10-13 dB of SNR, so there is not much more to win
-# without artefacts.
+# 8 it is. The voice loss is given back by _set_level. On its own this stage is
+# worth ~4-7 dB of hiss; the expander that follows takes the total to the 7-12
+# dB in the MAX_ATTENUATION table. The microphone only delivers 10-13 dB of
+# SNR, so there is not much more to win without artefacts.
 BAND_COUNT = 8
 BAND_LO_HZ = 80.0
 BAND_HI_HZ = 8000.0
@@ -176,8 +180,9 @@ RELEASE_MS = 40.0
 # whole broadcast.
 TARGET_SPEECH_RMS = 5200.0
 
-# Trim on top of the target, in dB, if broadcasts want to be generally louder
-# or quieter. Bounded by the peak ceiling and MAX_MAKEUP regardless.
+# A tuning knob, not a feature: a trim on top of the target, in dB, for
+# broadcasts that should be generally louder or quieter. 0 = off, which is what
+# ships. Bounded by the peak ceiling and MAX_MAKEUP regardless.
 MAKEUP_DB = 0.0
 
 # -3 dBFS ceiling. Leaves headroom for the chimes concatenated around this
@@ -193,23 +198,32 @@ MIN_PEAK_TO_NORMALISE = 200
 MAX_MAKEUP = 8.0
 
 
-def process(pcm: bytes, *, sample_rate: int, enabled: bool = True) -> bytes:
-    """Return `pcm` high-passed, expanded and normalised.
-
-    Falls back to returning the input unchanged — never raising — for anything
-    it cannot handle (odd length, empty, disabled, silent). A broadcast must
-    still go out if the cleanup cannot run.
-    """
-    if not enabled or len(pcm) < 4:
-        return pcm
-
+def _unpack(pcm: bytes, tag: str):
+    """(samples, trailing odd byte) — or None if `pcm` cannot be read."""
     n = len(pcm) // 2
     try:
         samples = array.array("h")
         samples.frombytes(pcm[: n * 2])
     except (ValueError, struct.error) as e:
-        log.warning("denoise: cannot unpack PCM (%s) — passing through", e)
+        log.warning("%s: cannot unpack PCM (%s) — passing through", tag, e)
+        return None
+    return samples, pcm[n * 2:]
+
+
+def process(pcm: bytes, *, sample_rate: int) -> bytes:
+    """Return `pcm` high-passed, band-subtracted, expanded and normalised.
+
+    Falls back to returning the input unchanged — never raising — for anything
+    it cannot handle (shorter than two samples, unreadable). A trailing odd
+    byte is kept as is, so the output is always exactly as long as the input.
+    A broadcast must still go out if the cleanup cannot run.
+    """
+    if len(pcm) < 4:
         return pcm
+    unpacked = _unpack(pcm, "denoise")
+    if unpacked is None:
+        return pcm
+    samples, tail = unpacked
 
     work = _highpass(samples, sample_rate)
 
@@ -231,12 +245,12 @@ def process(pcm: bytes, *, sample_rate: int, enabled: bool = True) -> bytes:
 
     if thresh > 0:
         _expand(work, sample_rate, thresh)
-    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS)
+    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS, tag="denoise")
 
     log.info("denoise: floor %.0f  speech %.0f  thresh %.0f  level x%.2f",
              floor, speech, thresh, scale)
     # work holds float64; to_pcm rounds and clamps it back to int16.
-    return to_pcm(work)
+    return to_pcm(work) + tail
 
 
 def level(pcm: bytes, *, sample_rate: int) -> bytes:
@@ -246,29 +260,26 @@ def level(pcm: bytes, *, sample_rate: int) -> bytes:
     expander, nothing that changes the character of the sound, but the speech
     still lands at TARGET_SPEECH_RMS like a cleaned broadcast would — the hiss
     rises with it, since nothing has lowered it first. Same pass-through
-    guarantees as process().
+    guarantees as process(), including the kept trailing odd byte.
     """
     if len(pcm) < 4:
         return pcm
-    n = len(pcm) // 2
-    try:
-        samples = array.array("h")
-        samples.frombytes(pcm[: n * 2])
-    except (ValueError, struct.error) as e:
-        log.warning("level: cannot unpack PCM (%s) — passing through", e)
+    unpacked = _unpack(pcm, "level")
+    if unpacked is None:
         return pcm
+    samples, tail = unpacked
     work = _highpass(samples, sample_rate)
-    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS)
+    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS, tag="level")
     log.info("level: x%.2f", scale)
-    return to_pcm(work)
+    return to_pcm(work) + tail
 
 
 def _highpass(samples: "array.array", sample_rate: int) -> "array.array":
-    """One-pole high-pass at HIGHPASS_HZ, returned as float-capable ints.
+    """One-pole high-pass at HIGHPASS_HZ, returned as an array('d') of floats.
 
-    y[n] = a * (y[n-1] + x[n] - x[n-1]) — the standard DC blocker. Kept in a
-    Python list of floats while the later stages work on it, so repeated scaling
-    does not requantise at every step.
+    y[n] = a * (y[n-1] + x[n] - x[n-1]) — the standard DC blocker. Kept in
+    float64 while the later stages work on it, so repeated scaling does not
+    requantise at every step.
     """
     rc = 1.0 / (2.0 * math.pi * HIGHPASS_HZ)
     dt = 1.0 / sample_rate
@@ -410,7 +421,8 @@ def _expand(work: "array.array", sample_rate: int, thresh: float) -> None:
             work[i] *= gain
 
 
-def _set_level(work: "array.array", sample_rate: int, target: float) -> float:
+def _set_level(work: "array.array", sample_rate: int, target: float,
+               *, tag: str = "denoise") -> float:
     """Bring speech to `target` RMS. Returns the factor applied.
 
     Runs LAST, after the noise has been suppressed — see TARGET_SPEECH_RMS for
@@ -428,8 +440,8 @@ def _set_level(work: "array.array", sample_rate: int, target: float) -> float:
         if av > peak:
             peak = av
     if peak < MIN_PEAK_TO_NORMALISE:
-        log.info("denoise: peak %.0f below %d — leaving level alone (no speech)",
-                 peak, MIN_PEAK_TO_NORMALISE)
+        log.info("%s: peak %.0f below %d — leaving level alone (no speech)",
+                 tag, peak, MIN_PEAK_TO_NORMALISE)
         return 1.0
 
     rms = _frame_rms(work, sample_rate)

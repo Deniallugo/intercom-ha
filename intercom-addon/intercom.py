@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import signal
 import uuid
 from pathlib import Path
 
@@ -65,8 +66,14 @@ def load_options() -> dict:
 
 
 def denoise_enabled() -> bool:
-    """Whether to high-pass / expand / normalise before broadcasting."""
-    return bool(load_options().get("denoise", DEFAULT_DENOISE))
+    """Whether to run the full cleanup (denoise.process) before broadcasting,
+    rather than the level stage alone (denoise.level). Falls back to the
+    default if options.json cannot be read, like keep_recordings()."""
+    try:
+        return bool(load_options().get("denoise", DEFAULT_DENOISE))
+    except (OSError, json.JSONDecodeError, AttributeError) as e:
+        log.warning("could not read the denoise option (%s) — using default", e)
+        return DEFAULT_DENOISE
 
 
 def keep_recordings() -> int:
@@ -183,14 +190,19 @@ async def handle_intercom(request: web.Request) -> web.Response:
     # Clean up only what goes out. recordings.save() above deliberately kept the
     # raw bytes — that copy exists to expose mic faults, and processing it would
     # hide them. Failure here must not cost the broadcast, so fall back to raw.
+    # Both are pure Python over every sample — seconds of CPU for a long
+    # broadcast — so they run in a worker thread to keep the event loop (and
+    # every other request) responsive meanwhile.
     try:
         if denoise_enabled():
-            clean = denoise.process(pcm, sample_rate=mixer.sample_rate)
+            clean = await asyncio.to_thread(
+                denoise.process, pcm, sample_rate=mixer.sample_rate)
         else:
             # No cleanup, but still the level: raw speech arrives ~18 dB under
             # the chime, which a small speaker cannot make up. See
             # denoise.TARGET_SPEECH_RMS.
-            clean = denoise.level(pcm, sample_rate=mixer.sample_rate)
+            clean = await asyncio.to_thread(
+                denoise.level, pcm, sample_rate=mixer.sample_rate)
     except Exception:
         log.exception("denoise failed — broadcasting raw audio")
         clean = pcm
@@ -289,19 +301,41 @@ async def _play_on_targets(
 
     if not targets:
         log.warning("no targets; skipping play for %s", filename)
-        asyncio.create_task(_delete_after(filepath, duration + 10))
+        _spawn(_delete_after(filepath, duration + 10))
         return
 
-    opts = load_options()
-    ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
-    await ducker.snapshot_and_pause(targets)
-    media_url = f"{ha_url}/local/{filename}"
-    log.info("playing on %d player(s): %s", len(targets), targets)
-    for player in targets:
-        status = await ha.play_media(player, media_url)
-        log.info("HA API  player=%s  status=%d", player, status)
-    ducker.schedule_restore(list(targets), duration + 1.5)
-    asyncio.create_task(_delete_after(filepath, duration + 10))
+    # The restore and the file cleanup are scheduled in `finally`: if anything
+    # past the pause raised and skipped them, paused music would stay paused for
+    # good — and the stale snapshot left in the Ducker would make every later
+    # broadcast to that player skip taking a fresh one.
+    try:
+        opts = load_options()
+        ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
+        await ducker.snapshot_and_pause(targets)
+        media_url = f"{ha_url}/local/{filename}"
+        log.info("playing on %d player(s): %s", len(targets), targets)
+        for player in targets:
+            # One unreachable player must not cost the others the broadcast.
+            try:
+                status = await ha.play_media(player, media_url)
+                log.info("HA API  player=%s  status=%d", player, status)
+            except Exception as e:
+                log.error("play_media failed for %s: %s", player, e)
+    finally:
+        ducker.schedule_restore(list(targets), duration + 1.5)
+        _spawn(_delete_after(filepath, duration + 10))
+
+
+# Strong references to fire-and-forget tasks: the event loop only keeps weak
+# ones, so an unreferenced task can be garbage-collected before it runs.
+_background_tasks: set = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 async def _delete_after(filepath: Path, delay: float) -> None:
@@ -342,6 +376,14 @@ async def _run() -> None:
     sample_rate = opts.get("sample_rate", 16000)
     bits = opts.get("bits_per_sample", 16)
     channels = opts.get("channels", 1)
+    # Every device sends 16-bit mono, and the chimes and denoise only handle
+    # that: 24-bit fails in ChimeMixer, and stereo would be levelled as if it
+    # were mono. config.yaml's schema already pins both; this catches a
+    # hand-edited options.json.
+    if bits != 16 or channels != 1:
+        log.error("unsupported audio format %s-bit / %s channel(s) — only 16-bit "
+                  "mono is supported; using that", bits, channels)
+        bits, channels = 16, 1
     mixer = ChimeMixer(
         sample_rate=sample_rate,
         sample_width=bits // 8,
@@ -366,7 +408,20 @@ async def _run() -> None:
     await ingress_runner.setup()
     await web.TCPSite(ingress_runner, host="0.0.0.0", port=ingress_port).start()
 
-    await asyncio.Event().wait()  # run forever
+    # Run until the Supervisor stops the container (SIGTERM), then shut down
+    # cleanly — including the HA client's aiohttp session, which otherwise
+    # logs "Unclosed client session" on the way out.
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    try:
+        await stop.wait()
+    finally:
+        log.info("shutting down")
+        await lan_runner.cleanup()
+        await ingress_runner.cleanup()
+        await ha.close()
 
 
 def main() -> None:

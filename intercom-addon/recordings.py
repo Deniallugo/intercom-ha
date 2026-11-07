@@ -1,16 +1,20 @@
 """Retain the raw mic audio of intercom uploads inside the add-on.
 
-The device's "Mic test recording" button POSTs to the same /intercom endpoint a
-PTT broadcast uses, and that path writes the mixed WAV to /config/www only long
-enough to play it before deleting it (see intercom._play_on_targets). Keeping a
-copy here means a mic test can be listened to from the ingress panel without
-repointing the device's ${intercom_url} at tools/mic-capture.py and reflashing.
+Every upload to /intercom is kept here: PTT broadcasts and the device's "Mic
+test recording" button alike. That button records 5 s with Wi-Fi quiet, then
+POSTs it to the device's ${mic_test_url} — by default this add-on's /intercom,
+so the test is saved here AND, like any broadcast, played on the source's
+target speakers. The /config/www copy that playback uses is deleted right after
+(see intercom._play_on_targets); this one is what the ingress panel lists. For
+level / clipping / SNR statistics instead, point ${mic_test_url} at
+tools/mic-capture.py on a LAN machine and reflash.
 
 What is stored is the *raw* mic PCM — no chimes — because that is what tells you
 whether the microphone itself is working.
 
 Files live in the add-on's own /data volume (persistent across restarts, not
 visible in /config), newest `keep` retained and older ones pruned on each save.
+keep = 0 stores nothing, and deletes whatever an earlier setting left behind.
 """
 import logging
 import os
@@ -45,11 +49,14 @@ def _slug(text: str, limit: int) -> str:
 def save(wav_bytes: bytes, *, source: str, session_id: str, keep: int) -> Optional[Path]:
     """Write `wav_bytes` as a new recording and prune to the newest `keep`.
 
-    Returns the path written, or None when retention is disabled (keep <= 0).
-    Raises OSError if the volume is not writable — the caller logs and carries
-    on, since a failed capture must never cost the user the broadcast.
+    Returns the path written, or None when retention is disabled (keep <= 0) —
+    in which case any recordings kept under an earlier setting are deleted, so
+    "keep nothing" really means nothing is stored. Raises OSError if the volume
+    is not writable — the caller logs and carries on, since a failed capture
+    must never cost the user the broadcast.
     """
     if keep <= 0:
+        prune(0)
         return None
 
     directory = Path(RECORDINGS_DIR)

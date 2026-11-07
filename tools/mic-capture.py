@@ -9,16 +9,19 @@ audio from wiring faults.
 Usage:
     python3 tools/mic-capture.py                    # listens on 0.0.0.0:9999
 
-Then point the device at this machine and trigger a recording:
+Then point the device's mic test at this machine and trigger a recording:
     1. in devices/<device>.yaml set
-           intercom_url: "http://<this-machine-ip>:9999/intercom"
+           mic_test_url: "http://<this-machine-ip>:9999/intercom"
+       (by default it points at the add-on, which keeps the test in its panel
+       and also plays it on the speakers; PTT broadcasts use ${intercom_url}
+       and keep going to the add-on either way)
     2. flash, then press the device's "Mic test recording" button in Home
-       Assistant (or hold the PTT button)
+       Assistant — it records 5 s with Wi-Fi quiet, then uploads
     3. WAVs land next to this script as mic-<device>-01.wav, -02, ... (never
        overwriting an earlier capture)
 
-Reading the output — the decisive number is zero-crossings per second, which
-this prints indirectly via the verdict:
+Reading the output — the decisive number is zero-crossings per second, printed
+as "zero crossings N/s" and summed up in the verdict:
     * speech produces hundreds to thousands of sign changes per second
     * under ~50/s is not sound at all, no matter how large the level looks
     * "isolated spikes" counts single samples that jump away from both their

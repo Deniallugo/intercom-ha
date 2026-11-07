@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 log = logging.getLogger(__name__)
 
@@ -10,7 +10,6 @@ log = logging.getLogger(__name__)
 @dataclass
 class Snapshot:
     state: str
-    volume_level: Optional[float]
 
 
 class Ducker:
@@ -77,11 +76,8 @@ class Ducker:
             data = await self._ha.get_state(target)
         except Exception as e:
             log.warning("ducking snapshot failed for %s: %s", target, e)
-            return Snapshot(state="idle", volume_level=None)
-        return Snapshot(
-            state=data.get("state", "idle"),
-            volume_level=(data.get("attributes") or {}).get("volume_level"),
-        )
+            return Snapshot(state="idle")
+        return Snapshot(state=data.get("state", "idle"))
 
     async def restore(self, target: str) -> None:
         snap = self._snapshots.pop(target, None)

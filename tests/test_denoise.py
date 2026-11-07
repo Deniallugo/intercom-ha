@@ -71,9 +71,17 @@ def test_preserves_length_and_format():
     assert len(out) % 2 == 0
 
 
-def test_disabled_returns_input_unchanged():
+@pytest.mark.parametrize("fn", [denoise.process, denoise.level])
+def test_odd_length_keeps_the_trailing_byte(fn):
+    """An odd byte count is not 16-bit PCM, but it must still come out exactly
+    as long as it went in, with the stray byte untouched — the duration
+    arithmetic and the chime offsets downstream depend on the length."""
     src = speech_like()
-    assert denoise.process(src, sample_rate=RATE, enabled=False) is src
+    odd = src + b"\x7f"
+    out = fn(odd, sample_rate=RATE)
+    assert len(out) == len(odd)
+    assert out[-1:] == b"\x7f"
+    assert out[:-1] == fn(src, sample_rate=RATE)
 
 
 @pytest.mark.parametrize("bad", [b"", b"\x00", b"\x01\x02\x03"])
