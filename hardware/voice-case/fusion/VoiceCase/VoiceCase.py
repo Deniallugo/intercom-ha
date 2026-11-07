@@ -1,29 +1,19 @@
-"""Voice S3 desk puck — Fusion 360 script entry point.
+"""Voice S3 desk puck — Fusion 360 entry point (Scripts and Add-Ins, Shift+S).
 
-Run it from Fusion's Scripts and Add-Ins palette (Shift+S). It asks which part to build,
-runs the design checks, and models that part in a NEW document — one component per part,
-built from standard sketch + extrude / revolve / loft features and combines, so everything
-lands in the timeline and can be inspected, edited or rolled back by hand.
+Asks for a part, runs the design checks (nothing is built if one fails), and models it in
+a new document:
 
-  all      the assembled preview: shell, plate, cap, holder and clamp in position
-  shell    the puck body — top face, four walls, every opening
-  base     the base plate with both board pockets, the register lip and the vents
-  button   the snap-in cap
-  holder   the switch carrier that screws inside the top face
-  clamp    the mic clamp bar
-  coupon   top-face fit coupon + the three parts that mate with it
-  fit      a slice off the devkit bed's REAR end — pin relief, width, rear stops
-  fit-front  the same off its FRONT end — the retention tab
+  all        assembled preview
+  shell      body: top face, walls, openings
+  base       base plate: board pockets, register lip, vents
+  button     snap-in cap
+  holder     switch carrier, screws inside the top face
+  clamp      mic clamp bar
+  coupon     top-face fit coupon + its mating parts
+  fit        devkit bed, rear end: pin relief, width, rear stops
+  fit-front  devkit bed, front end: retention tab
 
-The numbers all live in `vc/params.py`, and the checks that hold them together in
-`vc/checks.py` — which also runs standalone (`./test.sh`), so you can move a board
-dimension and see what it costs without opening Fusion at all. A part is never built on a
-design that fails a check: that is the same contract the OpenSCAD had, where `assert()`
-stopped the render.
-
-Editing a parameter and re-running is the whole workflow, and the module cache is purged
-below to make that work — without it Fusion holds the first import of `vc.*` for the rest
-of the session and your edit appears to do nothing.
+Numbers live in `vc/params.py`; edit and re-run.
 """
 
 import os
@@ -36,14 +26,11 @@ import adsk.fusion
 # The part to build. Set ASK = False to pin it here and skip the prompt.
 PART = 'all'
 ASK = True
-# A new document per run, so re-running never touches work you have open. Turn this off to
-# build into the active design instead.
+# Build into a new document each run; False builds into the active design.
 NEW_DOCUMENT = True
-# Deposit the headline numbers in the Parameters dialog as `ref_*`, so a sketch you draw by
-# hand can be dimensioned against the case. They are REFERENCE ONLY and drive nothing —
-# see vc/parameters.py.
+# Add read-only `ref_*` user parameters for dimensioning hand sketches (vc/parameters.py).
 USER_PARAMETERS = True
-# Write one STL per component next to this script, in stl/ — the equivalent of build.sh.
+# Write one STL per component to stl/, in print orientation.
 EXPORT_STL = True
 
 PARTS = ('all', 'shell', 'base', 'button', 'holder', 'clamp', 'coupon', 'fit',
@@ -77,11 +64,7 @@ def _part(vc, design, module, transform=None):
 
 
 def _builders(vc, design, part):
-    """[(label, thunk)] — one entry per component, built when its thunk is called.
-
-    Deferred rather than built here so `run` can note where each part's features start in
-    the timeline and fold them into a named group as they land.
-    """
+    """[(label, thunk)] per component; deferred so `run` can group each part's timeline features."""
     P = vc.params
     t = vc.build.transform
 
@@ -99,9 +82,8 @@ def _builders(vc, design, part):
     if part == 'fit-front':
         return [(vc.coupons.FIT_FRONT, lambda: vc.coupons.fit(design, end=+1))]
     if part == 'all':
-        # The assembled preview, in the shell's frame: z = 0 is the top OUTER face and +z
-        # runs down into the box. The holder and the clamp are the two parts drawn in their
-        # own print orientation rather than the case's, so they flip into place.
+        # Shell frame: z = 0 is the top face, +z into the box. Holder and clamp are drawn
+        # in print orientation, so they are flipped into place.
         placed = [
             (vc.shell, None),
             (vc.base_plate, t((0, 0, P.top_depth()))),
@@ -131,8 +113,7 @@ def _export(parts, folder):
     if not os.path.isdir(folder):
         os.makedirs(folder)
     for p in parts:
-        # the COMPONENT, not the occurrence: that exports in the part's own frame, which is
-        # the print orientation each part was drawn in
+        # Export the component, not the occurrence: that keeps the print orientation.
         path = os.path.join(folder, '%s.stl' % p.comp.name.replace(' ', '-'))
         opts = mgr.createSTLExportOptions(p.comp, path)
         opts.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementHigh
@@ -158,8 +139,6 @@ def run(_context):
             ui.messageBox('"%s" is not one of: %s' % (part, ', '.join(PARTS)))
             return
 
-        # Checks first, and nothing is modelled if one fails — a case that fails one of
-        # these is not a case, it is a pile of collisions waiting to be discovered by hand.
         failures = vc.checks.run_checks()
         if failures:
             ui.messageBox('%d design check(s) failed — nothing built:\n\n  %s'
@@ -174,15 +153,10 @@ def run(_context):
             ui.messageBox('No Fusion design is active — open one, or set '
                           'NEW_DOCUMENT = True.')
             return
-        # The root component is NOT renamed: its name follows the document's, and Fusion
-        # refuses to set it ("root component name cannot be changed"). The part components
-        # inside it carry the names.
 
         notes = []
         if USER_PARAMETERS:
             added, updated, failed = vc.parameters.write(design)
-            # Quiet on success — this is housekeeping, not something to interrupt for. The
-            # TEXT COMMANDS window has it if you want the count.
             app.log('reference parameters: %d added, %d updated' % (added, updated))
             if failed:
                 notes.append('reference parameters Fusion refused: %s' % ', '.join(failed))

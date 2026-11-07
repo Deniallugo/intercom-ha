@@ -1,6 +1,7 @@
 substitutions:
-  name: esphome-web-0f4600  
+  name: esphome-web-0f4600
   friendly_name: Intercom S3
+  intercom_url: "http://homeassistant.local:9999/intercom"
 
 packages:
   secrets: !include secrets-s3.yaml
@@ -23,7 +24,7 @@ esphome:
             id(s3_mic).add_data_callback([](const std::vector<uint8_t>& data) {
               recorder_on_data(data.data(), data.size());
             });
-    # mww doesn't auto-start in ESPHome 2026.x — without this it never listens.
+    # mww doesn't auto-start in ESPHome 2026.x.
     - priority: 100.0
       then:
         - micro_wake_word.start
@@ -34,28 +35,19 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    # Cache layout — avoids boot loops (per M5Stack reference).
+    # Boot-loops without this cache layout (M5Stack reference config).
     sdkconfig_options:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
 
-# 8 MB octal PSRAM on the S3-PICO module.
 psram:
   mode: octal
   speed: 80MHz
 
-# No UART pins broken out — log over USB CDC.
+# No UART pins broken out.
 logger:
   hardware_uart: USB_CDC
-  level: VERBOSE
-  logs:
-    # Quiet noisy components so wake-word logs stay readable.
-    component: DEBUG
-    sensor: DEBUG
-    scheduler: DEBUG
-    api.service: DEBUG
-    api.connection: DEBUG
 
 # ── I²C for ES8311 codec ─────────────────────────────────────────────────────
 
@@ -69,6 +61,7 @@ i2c:
       ignore_strapping_warning: true
     scan: false
 
+# Needed for the mic: it programs the codec's ADC and mic_gain at boot.
 audio_dac:
   - platform: es8311
     id: es8311_dac
@@ -76,23 +69,12 @@ audio_dac:
     sample_rate: 48000
     mic_gain: 36DB              # wake word needs this; lower if intercom clips
 
-# ── NS4150 internal Class-D amp enable ───────────────────────────────────────
-# GPIO18 enables the internal NS4150 amp — off = no internal speaker sound.
-
-switch:
-  - platform: gpio
-    pin: GPIO18
-    id: internal_amp_enable
-    name: "Internal Amp"
-    restore_mode: ALWAYS_ON
-
 # ── I²S buses ────────────────────────────────────────────────────────────────
-# The ES8311 is one full-duplex codec on one I²S bus, so mic (RX) and speaker
-# (TX) share a single instance and can't be live at once — the wake word is
-# stopped before playback, restarted after (see on_announcement / on_idle).
+# Mic on bus 1, playback on bus 2, so the wake word listens through playback.
+# The internal speaker is unused; intercom-s3-minimal.yaml is the build for it.
 
 i2s_audio:
-  # Bus 1 — internal ES8311 codec, hard-wired, not on the headers.
+  # Bus 1 — internal ES8311 codec (mic only).
   - id: i2s_bus
     i2s_lrclk_pin:
       number: GPIO3
@@ -100,8 +82,7 @@ i2s_audio:
     i2s_bclk_pin: GPIO17
     i2s_mclk_pin: GPIO11
 
-  # Bus 2 — free pins G5/G6/G7. Broadcast bus: both MAX98357A amps listen in
-  # parallel. No MCLK broken out (the MAX doesn't need it).
+  # Bus 2 — G5/G6/G7, both MAX98357A amps in parallel. No MCLK needed.
   - id: i2s_bus_ext
     i2s_lrclk_pin: GPIO6
     i2s_bclk_pin: GPIO5
@@ -110,28 +91,14 @@ microphone:
   - platform: i2s_audio
     id: s3_mic
     i2s_audio_id: i2s_bus
-    i2s_din_pin: GPIO4            # Mic data from codec ADC (ASDOUT silkscreen)
+    i2s_din_pin: GPIO4            # ASDOUT
     adc_type: external
     bits_per_sample: 16bit
     sample_rate: 16000
     correct_dc_offset: true
 
 speaker:
-  # Internal ES8311 → NS4150 → 1 W speaker. Fallback; mute via "Internal Amp".
-  - platform: i2s_audio
-    id: s3_speaker
-    i2s_audio_id: i2s_bus
-    i2s_dout_pin: GPIO48          # Speaker data to codec DAC (DSDIN silkscreen)
-    dac_type: external
-    bits_per_sample: 16bit
-    sample_rate: 48000
-    channel: left                  # VoiceS3R has only one internal speaker
-    audio_dac: es8311_dac
-
-  # 2× MAX98357A, both playing the same mono mix (dual mono). Each is a
-  # self-contained DAC+amp on G5/G6/G7. ESPHome sees ONE speaker — the amps are
-  # passive parallel listeners, so the 2nd board is wiring-only (no YAML change).
-  # Optional 3.5 mm line-out via a PCM5100 on the same bus — see docs/DEVICES.md.
+  # 2× MAX98357A wired in parallel on one bus: one speaker here, dual mono.
   - platform: i2s_audio
     id: s3_speaker_ext
     i2s_audio_id: i2s_bus_ext
@@ -141,8 +108,7 @@ speaker:
     sample_rate: 48000
     channel: mono
 
-  # Two virtual sources so TTS announcements and music can share one speaker
-  # (ESPHome rejects the same speaker on both pipelines).
+  # The two media_player pipelines can't share one speaker.
   - platform: mixer
     id: s3_mixer
     output_speaker: s3_speaker_ext
@@ -150,7 +116,7 @@ speaker:
       - id: s3_announcement_src
       - id: s3_media_src
 
-# ── Media player (HA-controllable playback) ──────────────────────────────────
+# ── Media player ─────────────────────────────────────────────────────────────
 
 media_player:
   - platform: speaker
@@ -158,39 +124,17 @@ media_player:
     name: "${friendly_name} Player"
     volume_min: 0.2
     volume_max: 0.9
-    buffer_size: 1000000 # 1 MB PSRAM buffer for music streaming
-    # Music (Spotify / Music Assistant).
+    buffer_size: 1000000 # 1 MB, in PSRAM
     media_pipeline:
       speaker: s3_media_src
       format: FLAC
       sample_rate: 48000
       num_channels: 1
-    # Short interruptions: TTS, intercom, wake-word sounds.
     announcement_pipeline:
       speaker: s3_announcement_src
       format: FLAC
       sample_rate: 48000
       num_channels: 1
-    # Mic and speaker share one I²S instance. Stop the wake word and wait for the
-    # mic to release the bus before playback, else "Parent bus is busy". Resume after.
-    on_announcement:
-      - if:
-          condition:
-            microphone.is_capturing:
-          then:
-            - micro_wake_word.stop:
-            - wait_until:
-                condition:
-                  not:
-                    microphone.is_capturing:
-                timeout: 3s
-    on_idle:
-      - if:
-          condition:
-            not:
-              micro_wake_word.is_running:
-          then:
-            - micro_wake_word.start:
 
 # ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
 
@@ -210,19 +154,73 @@ binary_sensor:
           then:
             - logger.log: "button ignored — upload in progress"
           else:
+            - globals.set:
+                id: ptt_recording
+                value: 'true'
             - lambda: |-
                 recorder_start();
-                id(s3_mic).start();
-                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
+                id(s3_mic).start();   // our own listener slot
+                uploader_start("${intercom_url}", App.get_name().c_str());
+            # Else it fires on the PTT speech.
+            - micro_wake_word.stop:
     on_release:
-      - delay: 2s
-      - lambda: |-
-          id(s3_mic).stop();
-          recorder_stop();
-      - wait_until:
+      # Only if this press started a recording: stopping the mic otherwise
+      # takes the wake word's slot and the device goes deaf.
+      - if:
           condition:
-            lambda: 'return !uploader_is_uploading();'
-          timeout: 10s
+            lambda: 'return id(ptt_recording);'
+          then:
+            - globals.set:
+                id: ptt_recording
+                value: 'false'
+            - delay: 2s
+            - lambda: recorder_stop();
+            - wait_until:
+                condition:
+                  lambda: 'return !uploader_is_uploading();'
+                timeout: 10s
+            # Re-arm before releasing our slot so the mic never has zero
+            # listeners. Assist re-arms it itself in on_end.
+            - if:
+                condition:
+                  not:
+                    voice_assistant.is_running:
+                then:
+                  - micro_wake_word.start:
+            - lambda: id(s3_mic).stop();
+
+globals:
+  - id: ptt_recording
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+script:
+  # If HA never answers, Assist hangs with the wake word off: device deaf.
+  - id: va_watchdog
+    mode: restart
+    then:
+      - delay: 30s
+      - if:
+          condition:
+            voice_assistant.is_running:
+          then:
+            - logger.log: "Assist stalled — no response from HA; resetting"
+            - voice_assistant.stop:
+            # on_end normally re-arms; step in only if it didn't.
+            - delay: 3s
+            - if:
+                condition:
+                  and:
+                    - not:
+                        micro_wake_word.is_running:
+                    - lambda: 'return !id(ptt_recording);'
+                then:
+                  - mixer_speaker.apply_ducking:
+                      id: s3_media_src
+                      decibel_reduction: 0
+                      duration: 0.5s
+                  - micro_wake_word.start:
 
 # ── HA Voice Assistant satellite ─────────────────────────────────────────────
 
@@ -232,14 +230,18 @@ voice_assistant:
   media_player: s3_player
   noise_suppression_level: 2
   auto_gain: 31dBFS
-  volume_multiplier: 2.0       # back from 4.0 — 4× clipped TTS at +12 dB GAIN
+  volume_multiplier: 2.0       # 4.0 clips at mic_gain 36DB
+  on_start:
+    - script.execute: va_watchdog
   on_end:
-    # Re-arm the wake word — VA stopped it, and on_idle won't restart it while
-    # music keeps playing (so the next "okay nabu" was ignored).
-    - micro_wake_word.start:
-    # Keep music ducked until the answer finishes playing. on_end fires before the
-    # TTS plays, so wait for the announcement to start, then end, then restore.
-    # Timeouts cover the no-answer case (first times out, second passes through).
+    - script.stop: va_watchdog
+    # Not during PTT: the release re-arms it.
+    - if:
+        condition:
+          lambda: 'return !id(ptt_recording);'
+        then:
+          - micro_wake_word.start:
+    # on_end fires before the reply plays: wait for it to start and finish.
     - wait_until:
         condition:
           lambda: 'return id(s3_player)->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
@@ -254,15 +256,18 @@ voice_assistant:
         duration: 0.5s
   # No answer coming — restore music and re-arm.
   on_error:
+    - script.stop: va_watchdog
     - mixer_speaker.apply_ducking:
         id: s3_media_src
         decibel_reduction: 0
         duration: 0.5s
-    - micro_wake_word.start:
+    - if:
+        condition:
+          lambda: 'return !id(ptt_recording);'
+        then:
+          - micro_wake_word.start:
 
-# ── Wake-word dispatch ───────────────────────────────────────────────────────
-# "okay nabu" → HA Assist. Later: a 2nd model for intercom — see
-# docs/superpowers/specs/2026-05-18-kitchen-amp-and-terrace-s3-design.md.
+# ── Wake word ────────────────────────────────────────────────────────────────
 
 micro_wake_word:
   id: mww
@@ -272,12 +277,19 @@ micro_wake_word:
       id: okay_nabu
       probability_cutoff: 0.7      # default 0.97 too strict at our gain
   on_wake_word_detected:
-    # Duck music ~20 dB with a short ramp; restored when the answer finishes.
-    # Chime is configured HA-side — an on-device chime fails ("Incompatible audio
-    # streams"): external-speaker audio must go through the media_player pipeline.
-    - mixer_speaker.apply_ducking:
-        id: s3_media_src
-        decibel_reduction: 20
-        duration: 0.3s
-    - voice_assistant.start:
-        wake_word: !lambda return wake_word;
+    # Without a subscribed HA client, start() fails without firing on_error,
+    # so nothing re-arms the wake word. (api.connected is also true for
+    # `esphome logs`.)
+    - if:
+        condition:
+          lambda: 'return id(va)->get_api_connection() == nullptr;'
+        then:
+          - logger.log: "wake word ignored — Home Assistant not subscribed"
+        else:
+          # Chime is set HA-side; an on-device one fails here.
+          - mixer_speaker.apply_ducking:
+              id: s3_media_src
+              decibel_reduction: 20
+              duration: 0.3s
+          - voice_assistant.start:
+              wake_word: !lambda return wake_word;

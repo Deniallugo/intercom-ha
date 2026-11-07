@@ -1,8 +1,7 @@
 # Terrace VoiceS3R Enclosure
 
 Parametric OpenSCAD wall-mount case for the terrace intercom combo: M5Stack
-VoiceS3R + 2× MAX98357A + 2× 2" drivers. Design spec:
-[../../docs/superpowers/specs/2026-05-31-terrace-case-design.md](../../docs/superpowers/specs/2026-05-31-terrace-case-design.md).
+VoiceS3R + 2× MAX98357A + 2× 2" drivers.
 
 ## Render
 
@@ -16,7 +15,7 @@ Render one part manually:
 ```bash
 "$OPENSCAD" -D 'part="front"' -o stl/front.stl terrace-case.scad
 ```
-Parts: `front`, `rear`, `button`, `coupon` (fit test), `all` (assembled preview). Select with the normal variable flag `-D part="..."` (a `$`-prefixed variable would be ignored by `-D`).
+Parts: `front`, `rear`, `button`, `spacer`, `coupon` (fit test), `all` (assembled preview).
 
 ## Parameters
 
@@ -55,65 +54,31 @@ button cap:
 - 1× M5Stack ATOM Echo S3R (VoiceS3R)
 - 2× MAX98357A breakout
 - 2× 2" full-range driver (~53 mm OD)
-- 4× M3 screws (from the back, through the flat rear plate, self-tap into the corner front-shell bosses)
-- 8× M2 self-tap screws for the drivers (4 per driver, into the bolt-circle bosses)
-- 8× M2 self-tap screws for the amp boards (4 per board, into the standoffs)
-- 2× foam/EVA gasket rings for the drivers (~45–52 mm, seat in the baffle groove)
-- 2× wall screws for the keyhole slots
+- 4× M3 self-tap screws (rear plate → front bosses)
+- 8× M2 self-tap screws for the drivers
+- 8× M2 self-tap screws for the amp boards
+- 2× foam/EVA gasket rings for the drivers (~45–52 mm)
+- 2× wall screws for the keyholes
 
 ## Assembly
 
-1. Drop a foam/EVA gasket ring into the baffle groove around each driver, then seat the drivers into the front-shell rings; fasten each with 4× M2 through the flange into the bolt-circle bosses (compressing the gasket); solder driver leads to the amp `+/−`.
-2. Drop the VoiceS3R into the cradle button-forward (its mic ends up behind the perforation under the button); route header wires through the side window to the amps.
-3. Seat the amp boards on their standoffs; fasten each with 4× M2 into the standoff pilots.
-4. Drop the button cap into its well from the front (snaps captive).
+1. Gasket ring into each baffle groove, drivers in, 4× M2 each. Solder leads to the amps.
+2. VoiceS3R into the cradle, button forward (mic behind the holes under the button). Route
+   wires through the side window to the amps.
+3. Amp boards on their standoffs, 4× M2 each.
+4. Button cap into its well from the front, **nub toward the top** (see below).
 5. Hang the rear plate on two wall screws via the keyholes.
 6. Mate front to rear; drive 4× M3 from the back.
 
-Then run the full suite + build and confirm STLs are produced:
-```bash
-hardware/terrace-case/test.sh && hardware/terrace-case/build.sh && ls -l hardware/terrace-case/stl
-```
-
 ## Optional depth spacer
 
-If the assembled case sounds constrained/boxy with the rear closed, the drivers
-are starved for air (~8 mm behind each cone). The **spacer** part is a drop-in
-picture-frame ring that inserts at the front-shell ↔ rear-plate parting line and
-adds `spacer_t` (default **20 mm**) of sealed air volume behind the drivers — no
-reprint of the front shell or rear plate.
-
-Render/print it like any other part:
-
-    openscad -o stl/spacer.stl -D 'part="spacer"' terrace-case.scad
-
-Print flat (frame face down), no supports, same settings as the shell (0.2 mm
-layers, ≥4 perimeters, 20–30 % infill).
-
-**Assembly (front shell → spacer → rear plate):**
-
-1. Seat the spacer on the front shell — its spigot lip nests into the shell's
-   rear opening; the 4 corner pads land on the existing front bosses.
-2. Foam/EVA tape on **both** seams (front↔spacer and spacer↔rear). Plastic faces
-   are not airtight and this is a sealed box — skipping this re-introduces leaks.
-3. Fit the rear plate and fasten with **4× M3×35 self-tapping screws** (replacing
-   the short ones) — they span the rear plate + spacer and bite into the front
-   bosses. M3×30 also works (~7 mm engagement).
-
-The USB-C exit (front shell bottom wall) and keyhole wall-mount (rear plate) are
-unchanged; the case simply stands `spacer_t` further off the wall. Tune
-`spacer_t` in `modules/params.scad` and reprint just the spacer to taste.
+If it sounds boxy with the rear closed, the drivers lack air (~8 mm behind each cone).
+Print `spacer`: a ring between front shell and rear plate that adds `spacer_t` (20 mm)
+of sealed volume. Print frame face down. Foam tape on **both** seams (it's a sealed box);
+use 4× M3×35 (or ×30) self-tap screws instead of the short ones.
 
 ## Button: top-switch nub (orient + fix)
 
-The module's tactile switch is toward the **top** of the module, not its center,
-so the cap's contact nub is offset up by `btn_above_center` (`modules/params.scad`)
-while the round face stays centered. The nub stays fully under the skirt (assert
-guards this); tune `btn_above_center` and reprint **only the button cap** to dial
-it in — no front-shell reprint.
-
-Because the well is a plain round bore, the round cap is free to **spin**, which
-would swing the offset nub off the switch. So at assembly, orient the cap **nub
-toward the top** and fix that rotation — a dab of glue/CA on the skirt or a snug
-press-fit. (A spin-proof captive version would need the well keyed, i.e. a
-front-shell reprint.)
+The module's switch is above its centre, so the cap's nub is offset by
+`btn_above_center` (tune it by reprinting only the cap). The well is round, so the cap
+can spin: fit it nub-up and fix it with a dab of glue.

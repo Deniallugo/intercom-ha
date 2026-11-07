@@ -37,8 +37,7 @@ def fake_ha(monkeypatch):
 def _drop_ducker_state():
     srv.ducker._snapshots.clear()
     srv.ducker._deadlines.clear()
-    # Tasks were created in the previous test's event loop, which is now
-    # gone — just drop the references; the loop closure already cancelled them.
+    # Previous test's loop is gone and already cancelled these.
     srv.ducker._tasks.clear()
 
 
@@ -399,20 +398,32 @@ async def test_intercom_wav_includes_chimes(
     pcm_len = struct.unpack_from("<I", wav, 40)[0]
     # Chime is 120ms at 16k/16/1 = 3840 bytes each side.
     # Total PCM = 3840 + 200 + 3840 = 7880.
+    # Default denoise rewrites the payload but keeps its length.
     assert pcm_len == 7880
-    # The payload is no longer byte-identical to the upload: denoise.process()
-    # high-passes, expands and normalises it on the way out (the retained
-    # recording is what keeps the raw bytes). Length is preserved exactly, which
-    # is what the chime offsets and the duration arithmetic depend on.
-    payload = wav[44 + 3840:44 + 3840 + 200]
-    assert len(payload) == len(pcm)
+
+
+async def test_intercom_odd_length_upload_keeps_closing_chime_aligned(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    import struct
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    client = await aiohttp_client(lan_app)
+    await client.post(
+        "/intercom", data=b"\xAA\xBB" * 100 + b"\x7f",
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
+    assert struct.unpack_from("<I", wav, 40)[0] == 7880   # odd byte dropped
+    assert wav.endswith(srv.mixer.chime_out)
 
 
 async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
 ):
-    """With cleanup disabled the broadcast skips the noise reduction but still
-    gets its level set — raw speech is far too quiet for a small speaker."""
+    """denoise: false skips process() but still runs level()."""
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": [],
@@ -420,9 +431,12 @@ async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     monkeypatch.setattr(srv, "load_options",
                         lambda: {"ha_url": "http://ha.test:8123", "denoise": False})
     calls = []
+    cleanup_calls = []
 
-    def no_cleanup(*a, **kw):
-        raise AssertionError("cleanup ran with denoise off")
+    # Count, not raise: the handler swallows cleanup exceptions.
+    def no_cleanup(pcm, *, sample_rate):
+        cleanup_calls.append(pcm)
+        return pcm
 
     def fake_level(pcm, *, sample_rate):
         calls.append(pcm)
@@ -437,8 +451,83 @@ async def test_intercom_levels_but_does_not_clean_when_denoise_off(
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
     )
     assert calls == [pcm]
+    assert cleanup_calls == []
     wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
     assert wav[44 + 3840:44 + 3840 + 200] == b"\x11\x22" * 100
+
+
+async def test_intercom_cleans_when_denoise_on(
+    aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
+):
+    """denoise: true broadcasts what process() returns; level() is not called."""
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    monkeypatch.setattr(srv, "load_options",
+                        lambda: {"ha_url": "http://ha.test:8123", "denoise": True})
+    process_calls, level_calls = [], []
+
+    def fake_process(pcm, *, sample_rate):
+        process_calls.append((pcm, sample_rate))
+        return b"\x33\x44" * (len(pcm) // 2)
+
+    def fake_level(pcm, *, sample_rate):
+        level_calls.append(pcm)
+        return pcm
+
+    monkeypatch.setattr(srv.denoise, "process", fake_process)
+    monkeypatch.setattr(srv.denoise, "level", fake_level)
+    client = await aiohttp_client(lan_app)
+    pcm = b"\xAA\xBB" * 100
+    await client.post(
+        "/intercom", data=pcm,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    assert process_calls == [(pcm, 16000)]
+    assert level_calls == []
+    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
+    assert wav[44 + 3840:44 + 3840 + 200] == b"\x33\x44" * 100
+
+
+async def test_play_media_failure_still_restores_and_cleans_up(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+    monkeypatch,
+):
+    """A failing play_media: others still play, music is restored, no stale
+    snapshot, media file still deleted."""
+    import asyncio as _asyncio
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen", "media_player.bedroom"]},
+        "default": [],
+    }))
+    fake_ha.get_state.return_value = {"state": "playing", "attributes": {}}
+
+    async def play_media(entity, url):
+        if entity == "media_player.kitchen":
+            raise RuntimeError("HA unreachable")
+        return 200
+
+    fake_ha.play_media.side_effect = play_media
+    deleted = []
+
+    async def fast_delete(path, delay):
+        deleted.append(path)
+
+    monkeypatch.setattr(srv, "_delete_after", fast_delete)
+    client = await aiohttp_client(lan_app)
+    resp = await client.post(
+        "/intercom", data=b"\xAA\xBB" * 100,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    assert resp.status == 204
+    assert [c.args[0] for c in fake_ha.play_media.call_args_list] == [
+        "media_player.kitchen", "media_player.bedroom"]
+    await _asyncio.sleep(2.0)
+    played = sorted(c.args[0] for c in fake_ha.play.call_args_list)
+    assert played == ["media_player.bedroom", "media_player.kitchen"]
+    assert srv.ducker._snapshots == {}
+    assert len(deleted) == 1
 
 
 async def test_intercom_pauses_playing_target_then_resumes(

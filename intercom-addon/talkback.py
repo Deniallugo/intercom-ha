@@ -8,14 +8,9 @@ WINDOW_SECONDS = 30
 
 
 class TalkbackWindows:
-    """Per-receiver short-lived state pointing back at the last sender's
-    self-player.
-
-    record_broadcast() opens windows for every target whose entity_id appears
-    in the inverted `selves` map (i.e., the target IS a known source).
-    reply_target() returns the sender's self-player if the receiver's window
-    is still active. Windows are NOT consumed on use — only expire by time
-    or are overwritten by a newer broadcast.
+    """After a broadcast, a receiving device's next upload within
+    WINDOW_SECONDS goes back to the sender only. Windows expire or are
+    overwritten; they are not consumed on use.
     """
 
     def __init__(self, now_func: Callable[[], float] = time.monotonic):

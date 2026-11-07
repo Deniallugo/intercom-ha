@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 log = logging.getLogger(__name__)
 
@@ -10,17 +10,13 @@ log = logging.getLogger(__name__)
 @dataclass
 class Snapshot:
     state: str
-    volume_level: Optional[float]
 
 
 class Ducker:
-    """Snapshots target media_player state, pauses playing ones for the
-    duration of a broadcast, and restores them. A target found paused is left
-    paused on restore (the broadcast un-pauses it), so it stays as we found it.
+    """Pause playing targets for a broadcast and restore them afterwards.
 
-    Concurrent broadcasts to the same target: keep the FIRST snapshot; later
-    calls only extend the restore deadline. Exactly one in-flight restore
-    task per target, regardless of how many broadcasts overlapped.
+    Overlapping broadcasts keep the first snapshot and only extend the restore
+    deadline: one restore task per target.
     """
 
     def __init__(self, ha, now_func: Callable[[], float] = time.monotonic):
@@ -47,9 +43,7 @@ class Ducker:
                 log.info("ducking   %s  state=%s  → no-op", target, snap.state)
 
     def schedule_restore(self, targets: list[str], delay: float) -> None:
-        """Restore each target `delay` seconds from now. If a restore is
-        already pending for a target, extend its deadline (don't stack tasks).
-        """
+        """Restore each target in `delay` s, extending any pending restore."""
         deadline = self._now() + delay
         for target in targets:
             had_deadline = target in self._deadlines
@@ -77,11 +71,8 @@ class Ducker:
             data = await self._ha.get_state(target)
         except Exception as e:
             log.warning("ducking snapshot failed for %s: %s", target, e)
-            return Snapshot(state="idle", volume_level=None)
-        return Snapshot(
-            state=data.get("state", "idle"),
-            volume_level=(data.get("attributes") or {}).get("volume_level"),
-        )
+            return Snapshot(state="idle")
+        return Snapshot(state=data.get("state", "idle"))
 
     async def restore(self, target: str) -> None:
         snap = self._snapshots.pop(target, None)
@@ -94,9 +85,7 @@ class Ducker:
             except Exception as e:
                 log.warning("ducking restore failed for %s: %s", target, e)
         elif snap.state == "paused":
-            # Injecting a one-shot media_url un-pauses a paused player — it
-            # auto-resumes the queue when the broadcast ends. Re-pause to leave
-            # it as we found it.
+            # Playing the broadcast un-pauses the queue; pause it again.
             try:
                 await self._ha.pause(target)
                 log.info("restored  %s  state=paused", target)

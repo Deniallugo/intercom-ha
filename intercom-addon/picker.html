@@ -61,8 +61,8 @@
     <button class="linkish" id="rec-refresh">refresh</button>
   </div>
   <div class="hint" style="margin: 0.2rem 0 0.6rem;">
-    The raw mic audio of the last few uploads — press “Mic test recording” on a
-    device, then refresh.
+    Raw mic audio of recent uploads. A device’s “Mic test recording” lands here
+    (and also plays on its targets) — press it, then refresh.
   </div>
   <div id="rec-list"></div>
 </section>
@@ -228,6 +228,15 @@ function render() {
 async function save() {
   $("toast").textContent = "";
   try {
+    // Keep sources enrolled on the server since this page loaded.
+    let merged = false;
+    const cur = await fetch("./api/players");
+    if (cur.ok) {
+      const latest = await cur.json();
+      for (const [src, targets] of Object.entries(latest.routes || {})) {
+        if (!(src in state.routes)) { state.routes[src] = targets; merged = true; }
+      }
+    }
     const resp = await fetch("./api/players", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
@@ -242,6 +251,7 @@ async function save() {
       const body = await resp.json().catch(() => ({}));
       throw new Error("HTTP " + resp.status + (body.error ? ": " + body.error : ""));
     }
+    if (merged) render();   // show the sources that appeared meanwhile
     $("toast").textContent = "Saved";
     setTimeout(() => { $("toast").textContent = ""; }, 2000);
   } catch (e) {
@@ -366,7 +376,18 @@ function renderRecordings(data) {
     del.textContent = "delete";
     del.addEventListener("click", async () => {
       del.disabled = true;
-      await fetch("./api/recordings/" + encodeURIComponent(item.name), {method: "DELETE"});
+      try {
+        const resp = await fetch("./api/recordings/" + encodeURIComponent(item.name),
+                                 {method: "DELETE"});
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+      } catch (e) {
+        del.disabled = false;
+        const err = document.createElement("span");
+        err.className = "error";
+        err.textContent = " delete failed: " + e;
+        head.appendChild(err);
+        return;
+      }
       loadRecordings();
     });
     head.appendChild(del);
@@ -394,8 +415,8 @@ async function loadRecordings() {
 
 $("rec-refresh").addEventListener("click", loadRecordings);
 
-load();
-loadRecordings();
+// After load(): recording rows need the aliases.
+load().then(loadRecordings);
 </script>
 </body>
 </html>

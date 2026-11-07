@@ -60,6 +60,14 @@ def test_build_wav_payload_position():
     assert wav[start:end] == payload
 
 
+def test_build_wav_drops_odd_byte_so_closing_chime_stays_aligned():
+    mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
+    payload = b"\xAA\xBB" * 50
+    wav = mixer.build_wav(payload + b"\x7f")
+    assert wav == mixer.build_wav(payload)
+    assert wav.endswith(mixer.chime_out)
+
+
 def test_pcm_duration_seconds():
     mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
     payload = b"\x00" * (16000 * 2)  # exactly 1s at 16k/16/1

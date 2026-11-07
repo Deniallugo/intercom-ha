@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-"""Run the add-on's broadcast cleanup over a WAV so you can judge it by ear.
+"""Run the add-on's broadcast processing over WAVs offline, to A/B by ear.
 
-The cleanup lives in the add-on and only touches audio on its way out to the
-speakers, which makes it awkward to evaluate: the WAVs mic-capture.py writes are
-raw by design, and the copies the add-on retains are raw too. This applies the
-same code path offline and writes a `-clean` sibling to A/B against.
+    python3 tools/denoise-preview.py tools/mic-06.wav   # -> -clean.wav, -level.wav
 
-Usage:
-    python3 tools/denoise-preview.py tools/mic-06.wav        # -> mic-06-clean.wav
-    python3 tools/denoise-preview.py tools/*.wav             # batch
-
-The numbers printed are the same ones mic-capture.py reports, before and after,
-so a change is judged the same way the mic itself was characterised. The one to
-watch is SNR: the cleanup should raise it. Device-side gain never could.
+-clean is denoise.process() (`denoise: true`), -level is denoise.level()
+(`denoise: false`). Prints floor / loudest / SNR before and after, measured as
+mic-capture.py does; cleanup should raise SNR, level() should not change it.
 """
 import math
 import struct
@@ -55,7 +48,7 @@ def row(label, m):
 def main(paths):
     for arg in paths:
         src = Path(arg)
-        if src.stem.endswith("-clean"):
+        if src.stem.endswith(("-clean", "-level")):
             continue          # don't process our own output
         with wave.open(str(src), "rb") as w:
             if w.getsampwidth() != 2 or w.getnchannels() != 1:
@@ -64,25 +57,27 @@ def main(paths):
             rate = w.getframerate()
             raw = w.readframes(w.getnframes())
 
-        clean = denoise.process(raw, sample_rate=rate)
-        before, after = measure(raw, rate), measure(clean, rate)
+        before = measure(raw, rate)
         if before is None:
             print(f"{src.name}: empty")
             continue
-
-        out = src.with_name(src.stem + "-clean.wav")
-        with wave.open(str(out), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(rate)
-            w.writeframes(clean)
-
         print(f"\n{src.name}  ({len(raw)//2} samples, {len(raw)/2/rate:.2f}s)")
         print(row("raw", before))
-        print(row("clean", after))
-        delta = after["snr"] - before["snr"]
-        print(f"  {'->':<10} SNR {delta:+.1f} dB   floor x{after['floor']/max(before['floor'],1e-9):.2f}   "
-              f"speech x{after['loud']/max(before['loud'],1e-9):.2f}   wrote {out.name}")
+
+        for label, fn in (("clean", denoise.process), ("level", denoise.level)):
+            out_pcm = fn(raw, sample_rate=rate)
+            after = measure(out_pcm, rate)
+            out = src.with_name(f"{src.stem}-{label}.wav")
+            with wave.open(str(out), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(rate)
+                w.writeframes(out_pcm)
+            print(row(label, after))
+            delta = after["snr"] - before["snr"]
+            print(f"  {'->':<10} SNR {delta:+.1f} dB   "
+                  f"floor x{after['floor']/max(before['floor'],1e-9):.2f}   "
+                  f"speech x{after['loud']/max(before['loud'],1e-9):.2f}   wrote {out.name}")
 
 
 if __name__ == "__main__":

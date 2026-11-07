@@ -1,12 +1,8 @@
-"""puck shell: top face + four walls, open at the base (+z).
+"""Puck shell (port of ``modules/shell.scad``): top face + four walls, open at the base.
 
-Port of ``modules/shell.scad``. The top face carries the button bore, the mic port and
-the DAC's nothing-at-all (both boards are on the plate); the rear (-y) wall carries the
-devkit's USB-C window and the +x wall the DAC's own 3.5 mm socket.
-
-Feature order is the OpenSCAD one — union the additive shapes, then cut every opening —
-because that is what makes each cut independent: nothing here depends on a face that an
-earlier feature created, so moving a parameter can only move geometry, never re-target it.
+Top face: button bore, mic port. Rear wall: devkit USB-C window. +x wall: DAC socket.
+Additive shapes are unioned first, then every opening is cut; no cut depends on a face
+created by another feature.
 """
 
 from . import params as P
@@ -17,13 +13,8 @@ NAME = 'shell'
 
 # ---- envelope ------------------------------------------------------------------
 def shell_body(part, depth):
-    """Outer rounded box with a 45 deg CHAMFERED top edge, hollowed, open at +z.
-
-    Chamfer rather than fillet: the shell prints top-face-down, so the top edge is on the
-    build plate and a tangent fillet would start horizontal there — a local 90 deg
-    overhang. The chamfer is a loft between the flat top face and the full plan at
-    z = chamfer, which is the hull() the OpenSCAD took.
-    """
+    """Outer rounded box with a 45 deg chamfered top edge, hollowed, open at +z. A chamfer,
+    not a fillet, so it prints top-down without support (lofted, like the SCAD's hull)."""
     rrect_loft(part, 0, P.chamfer,
                (2*P.flat_half_x(), 2*P.flat_half_y(), max(0.5, P.radius - P.chamfer)),
                (P.outer_w(), P.outer_h(), P.radius),
@@ -39,12 +30,8 @@ def shell_body(part, depth):
 
 # ---- top face: button ----------------------------------------------------------
 def button_cut(part):
-    """A plain bore, a shallow flange recess, nothing mechanical.
-
-    Below the recess the bore is 1.4 mm of the journal the cap body runs in, and it is
-    the ACCURATE half of it — the holder only gets on axis via two M2s in clearance
-    holes — which is why it is cut at btn_bore_d() rather than at the global `clr`.
-    """
+    """Bore and flange recess. The bore is the accurate half of the cap's guide (the holder
+    floats on clearance holes), hence btn_bore_d()."""
     return [
         cyl(part, -0.1, P.wall + 0.2, P.btn_bore_d(), P.btn_pos, name='button bore'),
         cyl(part, -0.1, P.btn_recess_depth + 0.1, P.btn_recess_d(), P.btn_pos,
@@ -53,12 +40,7 @@ def button_cut(part):
 
 
 def button_pilots(part):
-    """Two BLIND M2 pilots, drilled from the inner face, on +-x.
-
-    Blind is the point: a through-hole here would be two visible dots either side of the
-    button. They are on +-x because +y belongs to the mic and the bore between them is
-    20 mm across.
-    """
+    """Two blind M2 pilots on ±x, drilled from inside so nothing shows on the top face."""
     return [cyl(part, P.wall - P.btn_pilot_depth, P.btn_pilot_depth + 0.1,
                 P.board_screw_pilot,
                 (P.btn_pos[0] + sx*P.btn_pilot_pitch/2, P.btn_pos[1]),
@@ -68,11 +50,7 @@ def button_pilots(part):
 
 # ---- top face: microphone ------------------------------------------------------
 def mic_seat(part):
-    """Board recess, gasket seat, one short port.
-
-    Pressing the INMP441's port onto the gasket leaves near-zero front volume, which puts
-    the port resonance well above speech instead of in the middle of it.
-    """
+    """Board recess, gasket seat, one short port (keeps the resonance above speech)."""
     z_gasket = P.wall - P.mic_seat_depth - P.mic_gasket_depth
     return [
         box_z(part, P.wall - P.mic_seat_depth, P.mic_seat_depth + 0.1, P.mic_pos,
@@ -85,11 +63,7 @@ def mic_seat(part):
 
 
 def mic_posts(part):
-    """Two M2 posts FLANKING the seat, on full-thickness wall.
-
-    They flank rather than sit under the board because the board lies directly on its own
-    gasket. Screwing the clamp down onto them is what compresses that gasket.
-    """
+    """Two M2 posts flanking the seat (the board lies on its gasket); the clamp screws to them."""
     add, cut = [], []
     for sx in (-1, 1):
         c = (P.mic_pos[0] + sx*P.mic_post_pitch/2, P.mic_pos[1])
@@ -101,23 +75,13 @@ def mic_posts(part):
 
 # ---- rear wall -----------------------------------------------------------------
 def usb_window(part):
-    """One window over the devkit's own two USB-C receptacles.
-
-    Power, first flash and the serial log all come through here, which is why there is no
-    panel-mount USB socket. A BOUNDED hole: material is left below it so the rim the base
-    plate seats on stays continuous.
-    """
+    """One window over the devkit's two USB-C ports, with rim left below it for the plate."""
     return box(part, (P.s3_pos_x(), -P.outer_h()/2, P.s3_usb_cz_eff()),
                (P.s3_usb_w(), P.wall*3, P.s3_usb_h_eff()), name='USB window')
 
 
 def usb_panel(part):
-    """...and the wall around it thinned from the INSIDE, to usb_panel_t.
-
-    Same trick and the same reason as the jack's panel: a plug has a fixed amount of
-    shell before its overmold. Cut on the inner face only, so the outside stays a plain
-    flat wall, and stopped short of the bottom rim.
-    """
+    """Wall thinned from inside to usb_panel_t around the window, so a plug reaches."""
     y_hi = -P.inner_half_y() + 0.05
     y_lo = -(P.outer_h()/2 - P.usb_panel_t)
     return box(part, (P.s3_pos_x(), (y_hi + y_lo)/2, P.s3_usb_cz_eff()),
@@ -127,15 +91,9 @@ def usb_panel(part):
 
 # ---- +x side wall --------------------------------------------------------------
 def dac_jack_cut(part):
-    """The DAC board's OWN 3.5 mm socket, through a locally THINNED panel.
-
-    Three cuts: a counterbore on the inner face the socket body nests into, the plug hole
-    through what is left, and a lead-in on the outer face. The thinning is what makes the
-    socket usable — a 3.5 mm plug needs nearly all of ~14 mm of barrel in to make the
-    ring contact — and the socket stops INSIDE the counterbore rather than poking
-    through, which is what lets the plate carrying the board rise straight up into the
-    shell at assembly.
-    """
+    """The DAC's own socket: inner counterbore, plug hole, outer lead-in. The thinned panel
+    lets a plug seat fully; the socket stays inside the counterbore so the plate can rise
+    straight into the shell."""
     cy = P.dac_jack_w + 2*P.clr
     cz = P.dac_jack_h + 2*P.clr
     panel_x = P.outer_w()/2 - P.jack_panel_t
@@ -152,11 +110,7 @@ def dac_jack_cut(part):
 
 # ---- corners -------------------------------------------------------------------
 def corner_bosses(part):
-    """Full-depth pillars from the top face to the base plate rim, M3 heat-set inserts.
-
-    Being full-depth is what makes them obstacles on every plane in the box, which is why
-    the two boards sit side by side in x rather than anywhere convenient.
-    """
+    """Full-depth corner pillars for M3 heat-set inserts."""
     add, cut = [], []
     for cx, cy in P.boss_centres():
         add.append(cyl(part, P.wall, P.cavity_depth, P.boss_od, (cx, cy), name='boss'))

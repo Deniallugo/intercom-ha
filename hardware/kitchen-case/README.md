@@ -1,11 +1,8 @@
 # Kitchen Atom Echo Enclosure
 
 Parametric OpenSCAD wall-mount case for the kitchen intercom: classic M5Stack
-Atom Echo + 1× MAX98357A + 2× 4 cm drivers (side by side, wired in series off
-the one amp). Design spec:
-[../../docs/superpowers/specs/2026-06-01-kitchen-case-design.md](../../docs/superpowers/specs/2026-06-01-kitchen-case-design.md).
-Forked from `hardware/terrace-case` (two speakers/two amps) — kitchen keeps the
-two-driver baffle but drives both from a single amp.
+Atom Echo + 1× MAX98357A + 2× 4 cm drivers wired in series. Derived from
+[../terrace-case](../terrace-case), with one amp instead of two.
 
 ## Render
 
@@ -19,7 +16,7 @@ Render one part manually:
 ```bash
 "$OPENSCAD" -D 'part="front"' -o stl/front.stl kitchen-case.scad
 ```
-Parts: `front`, `rear`, `button`, `coupon` (fit test), `all` (assembled preview). Select with the normal variable flag `-D part="..."` (a `$`-prefixed variable would be ignored by `-D`).
+Parts: `front`, `rear`, `button`, `spacer`, `coupon` (fit test), `all` (assembled preview).
 
 ## Parameters
 
@@ -38,9 +35,8 @@ All in [modules/params.scad](modules/params.scad). Common edits:
 | `clr` | global fit clearance (raise if parts are tight) |
 | `keyhole_spacing` | wall-screw spacing |
 
-The two drivers sit side by side, centered as a pair; the module sits centered
-below them with the single amp board to its right. Outer width is derived
-(`outer_w()`) from whichever is wider — the driver pair or the module+amp row.
+Drivers side by side on top; module below with the amp to its right. Outer width
+(`outer_w()`) follows the wider of the two rows.
 
 ## Print before you commit to the full case
 
@@ -52,7 +48,8 @@ button cap:
 - Cradle too tight/loose → adjust `clr` / `mod_clr`.
 - Button binds or has no travel → adjust `btn_well_d` / `btn_travel`.
 - Driver doesn't seat → adjust `spk_od` / `spk_seat_depth`.
-- Drivers are friction/glue-mounted (`spk_screw_n = 0`); the locating ring + gasket hold them. To screw-mount instead, set `spk_screw_n > 0` and enlarge the shell until `test.sh` passes (the asserts guard against the bolt-circle bosses colliding with the corner lid screws in this tight envelope).
+- Drivers are glued, not screwed (`spk_screw_n = 0`). To screw them, set `spk_screw_n > 0`
+  and grow the shell until `test.sh` passes.
 
 ## Print settings
 
@@ -66,71 +63,38 @@ button cap:
 - 1× M5Stack Atom Echo (classic)
 - 1× MAX98357A breakout
 - 2× 4 cm full-range drivers (~40 mm locating dia, ~20 mm deep)
-- 4× M3 screws (from the back, through the flat rear plate, self-tap into the corner front-shell bosses)
-- 4× M2 self-tap screws for the amp board (into the standoffs)
-- 2× foam/EVA gasket rings for the drivers (~34–39 mm, seat in the baffle grooves)
-- a dab of glue / foam tape to retain each driver in its locating ring (drivers are friction/glue-mounted, not screwed)
-- 2× wall screws for the keyhole slots
+- 4× M3 self-tap screws (rear plate → front bosses)
+- 4× M2 self-tap screws (amp board)
+- 2× foam/EVA gasket rings for the drivers (~34–39 mm)
+- glue or foam tape for the drivers
+- 2× wall screws for the keyholes
 
 ## Speaker wiring (two drivers, one amp)
 
-Wire the two drivers **in series** across the single amp's `+ / −` output:
-`amp +` → driver A `+`, driver A `−` → driver B `+`, driver B `−` → `amp −`.
-Series **doubles** the load impedance (e.g. 2× 4 Ω → 8 Ω), which is always safe
-for the MAX98357A and splits the power between the two drivers. (Parallel would
-halve the impedance — fine for 8 Ω drivers, but 2× 4 Ω → 2 Ω risks overheating
-/ clipping the amp, so series is the default here.)
+**In series:** `amp +` → A `+`, A `−` → B `+`, B `−` → `amp −`. 2× 4 Ω in series is
+8 Ω; in parallel it would be 2 Ω, too low for the MAX98357A.
 
 ## Assembly
 
-1. Drop a foam/EVA gasket ring into the baffle groove around each driver, then seat the drivers into the front-shell locating rings (compressing the gasket); retain each with a dab of glue or foam tape — the rings + gaskets hold them, there are no driver screws. Wire the two drivers in series (see above) and solder the series pair to the amp `+/−`.
-2. Drop the Atom Echo into the cradle top-face-forward (its button + mic end up behind the well and the perforation in the front wall); route header wires through the side window to the amp.
-3. Seat the amp board on its standoffs; fasten with 4× M2 into the standoff pilots.
-4. Drop the button cap into its well from the front (snaps captive).
+1. Gasket ring into each baffle groove, drivers into the locating rings, glue. Wire them
+   in series to the amp `+/−`.
+2. Atom Echo into the cradle, face forward (button and mic behind the well and mic holes).
+   Route wires through the side window to the amp.
+3. Amp board on its standoffs, 4× M2.
+4. Button cap into its well from the front, **nub toward the top** (see below).
 5. Hang the rear plate on two wall screws via the keyholes.
 6. Mate front to rear; drive 4× M3 from the back.
 
-Wiring (amp taps + internal-speaker handling) is covered by the louder-amp
-design: [../../docs/superpowers/specs/2026-06-01-kitchen-atom-echo-louder-amp-design.md](../../docs/superpowers/specs/2026-06-01-kitchen-atom-echo-louder-amp-design.md).
+Amp wiring: [docs/DEVICES.md](../../docs/DEVICES.md) → *Kitchen*.
 
 ## Optional depth spacer
 
-If the header pins / wiring behind the Atom Echo don't fit with the rear plate
-closed, the **spacer** part is a drop-in picture-frame ring (the same part as the
-terrace case) that inserts at the front-shell ↔ rear-plate parting line and adds
-`spacer_t` (default **10 mm**) of clearance — no reprint of the front shell or
-rear plate.
-
-Render/print it like any other part:
-
-    openscad -o stl/spacer.stl -D 'part="spacer"' kitchen-case.scad
-
-Print flat (frame face down), no supports, same settings as the shell.
-
-**Assembly (front shell → spacer → rear plate):**
-
-1. Seat the spacer on the front shell — its spigot lip nests into the shell's
-   rear opening; the 4 corner pads land on the existing front bosses.
-2. Foam/EVA tape on **both** seams (front↔spacer and spacer↔rear) to keep the
-   box sealed.
-3. Fit the rear plate and fasten with **4× M3×20 self-tapping screws** (replacing
-   the short ones) — they span the rear plate + spacer and bite into the front
-   bosses. M3×25 gives a deeper bite.
-
-The USB-C exit and keyhole wall-mount are unchanged; the case simply stands
-`spacer_t` further off the wall. Tune `spacer_t` in `modules/params.scad` and
-reprint just the spacer.
+If the wiring behind the Atom Echo doesn't fit, print `spacer`: a ring between front
+shell and rear plate that adds `spacer_t` (10 mm) of depth. Print frame face down.
+Foam tape on both seams; use 4× M3×20 (or ×25) self-tap screws instead of the short ones.
 
 ## Button: top-switch nub (orient + fix)
 
-The Atom Echo's tactile switch is toward the **top** of the module, not its
-center, so the cap's contact nub is offset up by `btn_above_center`
-(`modules/params.scad`) while the round face stays centered. The nub stays fully
-under the skirt (assert guards this); tune `btn_above_center` and reprint **only
-the button cap** to dial it in — no front-shell reprint.
-
-Because the well is a plain round bore, the round cap is free to **spin**, which
-would swing the offset nub off the switch. So at assembly, orient the cap **nub
-toward the top** and fix that rotation — a dab of glue/CA on the skirt or a snug
-press-fit. (A spin-proof captive version would need the well keyed, i.e. a
-front-shell reprint.)
+The Atom Echo's switch is above the module's centre, so the cap's nub is offset by
+`btn_above_center` (tune it by reprinting only the cap). The well is round, so the cap
+can spin: fit it nub-up and fix it with a dab of glue.

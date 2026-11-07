@@ -1,12 +1,5 @@
-"""mic clamp bar.
-
-Port of ``modules/mic_clamp.scad``. The two M2 posts flank the INMP441 board rather than
-sit under it — they have to, because the board lies directly on its own gasket and nothing
-can be underneath it. So this bar spans both posts and its central pad reaches back down to
-press the board's centre, opposite the MEMS port. Tightening the two M2s is what compresses
-the gasket, and the gasket is what keeps the port volume near zero.
-
-Drawn in PRINTING orientation: bar flat on the plate at z = 0, pad growing +z. No supports.
+"""Mic clamp bar (port of ``modules/mic_clamp.scad``): spans the two M2 posts, and its
+pad presses the INMP441 onto its gasket. Print orientation: bar on the plate, pad up.
 """
 
 from . import params as P
