@@ -5,6 +5,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
+#include "freertos/idf_additions.h"
+#include "esp_heap_caps.h"
 
 static const char*  REC_TAG   = "recorder";
 static const size_t RBUF_SIZE = 32 * 1024;  // ~1 s at 16 kHz 16-bit
@@ -41,6 +43,20 @@ void recorder_init() {
   _sbuf = xStreamBufferCreate(RBUF_SIZE, 1);
   if (!_sbuf) ESP_LOGE(REC_TAG, "stream buffer alloc failed");
   else        ESP_LOGI(REC_TAG, "ready (%u KB ring buffer)", (unsigned)(RBUF_SIZE / 1024));
+}
+
+// Same, with a buffer of `bytes` in PSRAM — for boards that have it. Big enough
+// to hold a whole recording, which is what lets a mic test capture first and
+// upload after: Wi-Fi then transmits nothing while the mic is listening (see
+// the "Mic test (Wi-Fi quiet)" button on voice-s3).
+void recorder_init_psram(size_t bytes) {
+  _sbuf = xStreamBufferCreateWithCaps(bytes, 1, MALLOC_CAP_SPIRAM);
+  if (!_sbuf) {
+    ESP_LOGW(REC_TAG, "PSRAM stream buffer alloc failed — falling back to internal");
+    recorder_init();
+    return;
+  }
+  ESP_LOGI(REC_TAG, "ready (%u KB ring buffer in PSRAM)", (unsigned)(bytes / 1024));
 }
 
 void recorder_set_gain(int num, int den) {
@@ -136,6 +152,16 @@ void recorder_on_data(const uint8_t* data, size_t len) {
     }
     processed += chunk;
   }
+}
+
+// Throw away a recording in progress without ever marking it done, so no
+// uploader will see it. For a recording started speculatively — voice-s3 starts
+// one on every button press and only learns 1.2 s later whether it was a hold.
+void recorder_cancel() {
+  _rec_active = false;
+  _rec_done   = false;
+  if (_sbuf) xStreamBufferReset(_sbuf);
+  ESP_LOGI(REC_TAG, "recording cancelled");
 }
 
 void recorder_stop() {
