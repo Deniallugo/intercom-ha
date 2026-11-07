@@ -20,10 +20,12 @@ substitutions:
   name: voice-s3
   friendly_name: Voice S3
   intercom_url: "http://homeassistant.local:9999/intercom"
-  # Where the "Mic test recording" button uploads to. Separate from
-  # ${intercom_url} so pointing a mic test at tools/mic-capture.py on a laptop
-  # does not also divert PTT broadcasts away from the add-on.
-  mic_test_url: "http://192.168.31.82:9999/intercom"
+  # Where the "Mic test recording" button uploads to. Defaults to the add-on: the
+  # test is saved in its panel's recordings — and, like any broadcast, also
+  # played on the target speakers. For level / clipping / SNR statistics point
+  # this at tools/mic-capture.py on a LAN machine (http://<laptop-ip>:9999/intercom).
+  # Separate from ${intercom_url} so doing that does not divert PTT broadcasts.
+  mic_test_url: "http://homeassistant.local:9999/intercom"
 
 packages:
   secrets: !include secrets-voice.yaml
@@ -49,9 +51,9 @@ esphome:
             // the press but only starts uploading once the hold is confirmed
             // 1.2 s later, so that much has to wait in the buffer. The upload
             // then streams and drains it, so this is slack, not a length cap.
-            // Large enough to hold a whole "Mic test (Wi-Fi quiet)" capture.
+            // The mic test needs it too: it records all 5 s before uploading.
             recorder_init_psram(30 * 32000);
-            // Measured (tools/mic-voice-s3-*.wav): 1-10 Hz drift up to 12 dB
+            // Measured on this board's captures: 1-10 Hz drift up to 12 dB
             // LOUDER than the speech, plus a broadband rumble falling ~12
             // dB/octave from 100 Hz — 25-30 dB above the Atom's floor, and
             // with no tones in it, so not mains or the buck converter. 180 Hz
@@ -69,13 +71,14 @@ esphome:
     # 24-bit sample sits in bits 31..8, so anything down to `>> 8` still reads
     # real bits and this costs no resolution.
     #
-    # Measured, not guessed: re-scaling the five unclipped captures in `tools/`
-    # by another x2 leaves 0.00% clipped, worst case −5.1 dBFS peak on the
+    # Measured, not guessed: re-scaling five unclipped captures by another x2
+    # leaves 0.00% clipped, worst case −5.1 dBFS peak on the
     # loudest close-range one, and puts a normal room capture's speech at
     # −20.8 dBFS — which is exactly denoise.py's TARGET_SPEECH_RMS, i.e. the
-    # level the add-on would otherwise have to make up. That matters now that
-    # the add-on's cleanup is off by default: with `denoise: false` nothing
-    # downstream sets the level, so this shift IS the broadcast level.
+    # level the add-on would otherwise have to make up. The add-on levels every
+    # broadcast either way (denoise.process() or, with `denoise: false`,
+    # denoise.level()), but every dB it makes up lifts the noise floor with the
+    # voice, so arriving at the target already is the better start.
     #
     # +12 dB and no more. x4 from here (+18 dB) pins that same capture at
     # 0.0 dBFS and begins clipping, and `>> 10` (+36 dB) clipped 12.3% of a
@@ -253,12 +256,18 @@ media_player:
 # hold timing to get right. Diagnostic category, so it stays out of the way in
 # Home Assistant.
 #
-# This button uploads to ${mic_test_url}, not ${intercom_url}: point it at
-# `tools/mic-capture.py` on a LAN machine and the test lands there as a WAV with
-# level, clipping, zero-crossing and SNR statistics — which is how the mic on
-# this board was characterised — while a held PTT still broadcasts normally.
-# Point it back at the add-on to hear a test through the speakers instead.
-# See docs/DEVICES.md → "how this mic fails".
+# Nothing is sent until the 5 s are over, so Wi-Fi transmits nothing while the
+# mic listens: the capture shows the mic and its supply, not the upload's own
+# transmit bursts (see the `wifi:` note above).
+#
+# Uploads to ${mic_test_url} — by default the add-on, where the test is saved
+# in the panel's recordings and also played on the target speakers. Point it
+# at `tools/mic-capture.py` for level, clipping, zero-crossing and SNR
+# statistics. See docs/DEVICES.md → "how this mic fails".
+#
+# Refused while PTT owns the recorder (pressed, held, or in its release tail),
+# and PTT refuses to start while this runs: both share the one recorder, and
+# recorder_start() from either would wipe the other's take.
 button:
   - platform: template
     id: record_test
@@ -267,47 +276,20 @@ button:
     on_press:
       - if:
           condition:
-            lambda: 'return uploader_is_uploading();'
+            lambda: |-
+              return uploader_is_uploading() || id(mic_test_running) ||
+                     id(ptt_armed) || id(intercom_recording);
           then:
-            - logger.log: "mic test ignored — upload in progress"
+            - logger.log: "mic test ignored — recorder busy"
           else:
+            - globals.set:
+                id: mic_test_running
+                value: 'true'
             - micro_wake_word.stop:
             - lambda: |-
                 id(inmp441_mic).start();   // take our own listener slot
                 recorder_start();
-                uploader_start("${mic_test_url}", App.get_name().c_str());
-            - logger.log: "mic test recording started"
-            - delay: 5s
-            - lambda: recorder_stop();
-            - wait_until:
-                condition:
-                  lambda: 'return !uploader_is_uploading();'
-                timeout: 15s
-            - logger.log: "mic test recording uploaded"
-            - micro_wake_word.start:       # re-arm before releasing our slot
-            - lambda: id(inmp441_mic).stop();
-
-  # Same 5 s capture, but nothing is sent until it is over. Out of the case the
-  # mic shows ~30 clicks/s, 3 ms each, 24 dB over the floor, at irregular
-  # intervals — the rhythm of the upload's own TCP packets while recording.
-  # If the clicks vanish here, they are Wi-Fi transmit bursts reaching the
-  # INMP441 through its supply, not sound.
-  - platform: template
-    id: record_test_quiet
-    name: "Mic test (Wi-Fi quiet)"
-    entity_category: diagnostic
-    on_press:
-      - if:
-          condition:
-            lambda: 'return uploader_is_uploading();'
-          then:
-            - logger.log: "mic test ignored — upload in progress"
-          else:
-            - micro_wake_word.stop:
-            - lambda: |-
-                id(inmp441_mic).start();
-                recorder_start();
-            - logger.log: "quiet mic test: recording, upload held back"
+            - logger.log: "mic test: recording, upload held back"
             - delay: 5s
             - lambda: |-
                 recorder_stop();
@@ -316,9 +298,12 @@ button:
                 condition:
                   lambda: 'return !uploader_is_uploading();'
                 timeout: 15s
-            - logger.log: "quiet mic test uploaded"
-            - micro_wake_word.start:
+            - logger.log: "mic test uploaded"
+            - micro_wake_word.start:       # re-arm before releasing our slot
             - lambda: id(inmp441_mic).stop();
+            - globals.set:
+                id: mic_test_running
+                value: 'false'
 
 # ── Wake word ────────────────────────────────────────────────────────────────
 
@@ -329,16 +314,14 @@ micro_wake_word:
     channels: 0              # the mic emits one (left) channel
     # Measured from a real capture: speech peaks at 5404/32767 = −15.7 dBFS with
     # no gain at all — a quiet mic with headroom to spend, not one that needs
-    # none. (An earlier 64 here came from a −60 dBFS reading taken while the
-    # wiring was faulty; it clipped everything, which is the other end of this.)
+    # none.
     #
     # 4 is +12 dB, matching the intercom shift. This path gets no help from the
     # add-on's cleanup — detection happens here, on the device — so a fixed
     # boost is the only lever there is. Free of clipping at this setting:
     # re-scaled captures peak at −5.1 dBFS worst case with 0.00% clipped.
     #
-    # 8 (+18 dB) is where clipping starts and was tried and reverted: louder,
-    # not clearer. If this now false-triggers, `probability_cutoff` below is the
+    # 8 (+18 dB) is where clipping starts: louder, not clearer. If this now false-triggers, `probability_cutoff` below is the
     # lever to raise — not this, which is what gets a quiet voice across the
     # room up to a level the model responds to at all.
     gain_factor: 4
@@ -425,9 +408,9 @@ voice_assistant:
   # what saves the reply —
   # it is kept because a line-out build into a powered speaker still needs it.
   #
-  # This said 15 while the comment said "back to full" — it never un-ducked.
-  # It matters beyond music: intercom broadcasts play through media_src too, so
-  # a run that ends without on_end/on_error left every later broadcast 15 dB down.
+  # It must be 0, not merely less: intercom broadcasts play through media_src
+  # too, so a run that ends without on_end/on_error would otherwise leave every
+  # later broadcast ducked.
   on_stt_vad_end:
     - mixer_speaker.apply_ducking:
         id: media_src
@@ -464,7 +447,15 @@ voice_assistant:
     # announcement decode. intercom-s3 has to do this first because its mic and
     # speaker share a bus; here the mic has its own peripheral and nothing needs
     # it back early. Cost: no barge-in during the answer itself.
-    - micro_wake_word.start:
+    #
+    # Not while PTT or the mic test owns the mic: a hold stops this pipeline
+    # (hold_watch), and ~1.5 s later this would re-arm the wake word in the
+    # middle of the broadcast, listening to it. Those paths re-arm it themselves.
+    - if:
+        condition:
+          lambda: 'return !id(intercom_recording) && !id(mic_test_running);'
+        then:
+          - micro_wake_word.start:
     # The conversation is over and nothing cancelled the timer, so whatever was
     # said, it wasn't "stop" — bring the alarm back. Resumes from the top of the
     # 8-chime cycle rather than where it left off, which is the right bias: the
@@ -484,7 +475,11 @@ voice_assistant:
         id: media_src
         decibel_reduction: 0
         duration: 0.5s
-    - micro_wake_word.start:
+    - if:                            # same guard as on_end
+        condition:
+          lambda: 'return !id(intercom_recording) && !id(mic_test_running);'
+        then:
+          - micro_wake_word.start:
     # Same as on_end: a failed pipeline definitely didn't cancel the timer, so
     # an unacknowledged alarm must not be swallowed by a network hiccup.
     - if:
@@ -536,9 +531,18 @@ globals:
     initial_value: 'false'
 
   # True from a press that started a recording until that recording is either
-  # cancelled (tap) or sent (hold). False on a press while an upload was still
-  # in flight: no recording was started, so a hold is refused.
+  # cancelled (tap) or released (hold — cleared at the release, before the
+  # tail). False on a press while the recorder was busy (upload in flight,
+  # previous broadcast's tail, mic test): no recording was started, so a hold
+  # is refused.
   - id: ptt_armed
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+  # True while the "Mic test recording" button owns the recorder (recording,
+  # then uploading). PTT does not start a recording meanwhile.
+  - id: mic_test_running
     type: bool
     restore_value: false
     initial_value: 'false'
@@ -573,8 +577,10 @@ script:
             - delay: 3s
             - if:
                 condition:
-                  not:
-                    micro_wake_word.is_running:
+                  and:
+                    - not:
+                        micro_wake_word.is_running:
+                    - lambda: 'return !id(intercom_recording) && !id(mic_test_running);'
                 then:
                   - mixer_speaker.apply_ducking:
                       id: media_src
@@ -646,12 +652,14 @@ binary_sensor:
       # Start recording NOW, not when the hold is confirmed 1.2 s later — that
       # wait used to cost the first second of every broadcast, because people
       # talk as they press. A tap throws this away (recorder_cancel below).
-      # Nothing is uploaded until release, so a discarded take costs nothing.
-      # Not while the previous broadcast is still in its release tail —
-      # recorder_start() would wipe it before it is sent.
+      # Nothing is uploaded before the hold is confirmed, so a discarded take
+      # costs nothing. Not while the previous broadcast is still in its release
+      # tail or a mic test is running — recorder_start() would wipe their take.
       - if:
           condition:
-            lambda: 'return !uploader_is_uploading() && !id(intercom_recording);'
+            lambda: |-
+              return !uploader_is_uploading() && !id(intercom_recording) &&
+                     !id(mic_test_running);
           then:
             - lambda: |-
                 id(inmp441_mic).start();   // our own listener slot
@@ -679,59 +687,74 @@ binary_sensor:
                       recorder_cancel();
                       id(ptt_armed) = false;
                       id(inmp441_mic).stop();
-            # A ringing timer claims the tap: silence it and do nothing else.
-            # Otherwise the only way to stop the alarm would be to talk over it.
-            # `alarm_suspended` covers the tap landing mid-conversation, after a
-            # wake word already paused the alarm — without it, the tap would
-            # look like an ordinary Assist cancel and on_end would ring again.
             - if:
+                # A tap during the previous broadcast's 500 ms release tail does
+                # nothing: the mic and recorder still belong to that broadcast.
                 condition:
-                  or:
-                    - script.is_running: timer_alarm
-                    - lambda: 'return id(alarm_suspended);'
+                  lambda: 'return id(intercom_recording);'
                 then:
-                  - globals.set:
-                      id: alarm_suspended
-                      value: 'false'
-                  - script.stop: timer_alarm
+                  - logger.log: "tap ignored — broadcast still finishing"
+                # A ringing timer claims the tap: silence it and do nothing else.
+                # Otherwise the only way to stop the alarm would be to talk over
+                # it. `alarm_suspended` covers the tap landing mid-conversation,
+                # after a wake word already paused the alarm — without it, the
+                # tap would look like an ordinary Assist cancel and on_end would
+                # ring again.
                 else:
                   - if:
                       condition:
-                        voice_assistant.is_running:
+                        or:
+                          - script.is_running: timer_alarm
+                          - lambda: 'return id(alarm_suspended);'
                       then:
-                        - voice_assistant.stop:
+                        - globals.set:
+                            id: alarm_suspended
+                            value: 'false'
+                        - script.stop: timer_alarm
                       else:
-                        # Same reason as on_wake_word_detected: with no client
-                        # subscribed, request_start() bails WITHOUT firing
-                        # error_trigger_, so the on_error branch that re-arms the
-                        # wake word never runs and the device goes deaf until it
-                        # reboots. api.connected is the wrong test — any client,
-                        # `esphome logs` included, satisfies it.
                         - if:
                             condition:
-                              lambda: 'return id(va)->get_api_connection() == nullptr;'
+                              voice_assistant.is_running:
                             then:
-                              - logger.log: "tap ignored — Home Assistant not subscribed"
+                              - voice_assistant.stop:
                             else:
-                              - micro_wake_word.stop:
-                              # Same chime as the wake word — feedback, and it
-                              # warms the output chain before the reply arrives.
-                              - media_player.speaker.play_on_device_media_file:
-                                  id: voice_player
-                                  media_file: chime_sound
-                                  announcement: true
-                              - voice_assistant.start:
+                              # Same reason as on_wake_word_detected: with no
+                              # client subscribed, request_start() bails WITHOUT
+                              # firing error_trigger_, so the on_error branch that
+                              # re-arms the wake word never runs and the device
+                              # goes deaf until it reboots. api.connected is the
+                              # wrong test — any client, `esphome logs` included,
+                              # satisfies it.
+                              - if:
+                                  condition:
+                                    lambda: 'return id(va)->get_api_connection() == nullptr;'
+                                  then:
+                                    - logger.log: "tap ignored — Home Assistant not subscribed"
+                                  else:
+                                    - micro_wake_word.stop:
+                                    # Same chime as the wake word — feedback, and
+                                    # it warms the output chain before the reply.
+                                    - media_player.speaker.play_on_device_media_file:
+                                        id: voice_player
+                                        media_file: chime_sound
+                                        announcement: true
+                                    - voice_assistant.start:
           # ── hold released: close out the broadcast ──
           else:
             - if:
                 condition:
                   lambda: 'return id(intercom_recording);'
                 then:
+                  # Disarm NOW, not after the tail: a quick tap inside the
+                  # 500 ms would otherwise still see ptt_armed from this press
+                  # and recorder_cancel() the broadcast before it is sent.
+                  - globals.set:
+                      id: ptt_armed
+                      value: 'false'
                   - delay: 500ms    # tail, so the last word isn't clipped
                   - lambda: |-
                       recorder_stop();
                       id(intercom_recording) = false;
-                      id(ptt_armed) = false;
                   - wait_until:
                       condition:
                         lambda: 'return !uploader_is_uploading();'

@@ -660,7 +660,6 @@ internal PHY, which is what `USB_SERIAL_JTAG` logging uses.
 intercom/
 ├── devices/
 │   ├── atom-echo.yaml              # Kitchen Atom Echo (PTT intercom + DMA watchdog)
-│   ├── listen_and_answer.yaml      # Atom Echo VA variant
 │   ├── intercom-s3.yaml            # Terrace VoiceS3R (intercom + wake-word + music)
 │   ├── intercom-s3-minimal.yaml    # Bare-boot diagnostic config
 │   ├── speaker-s3.yaml             # Bare S3 + PCM5102A — playback only, no mic

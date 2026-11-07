@@ -14,6 +14,7 @@ static const size_t RBUF_SIZE = 32 * 1024;  // ~1 s at 16 kHz 16-bit
 static StreamBufferHandle_t _sbuf       = nullptr;
 static volatile bool        _rec_active = false;
 static volatile bool        _rec_done   = false;
+static bool                 _rec_full_logged = false;  // "buffer full" once per take
 
 // Software gain for the captured 16-bit PCM stream. Defaults to unity (1/1 = no
 // change). Devices whose mic chain has no PGA (e.g. Atom Echo PDM) can call
@@ -45,14 +46,18 @@ void recorder_init() {
   else        ESP_LOGI(REC_TAG, "ready (%u KB ring buffer)", (unsigned)(RBUF_SIZE / 1024));
 }
 
-// Same, with a buffer of `bytes` in PSRAM — for boards that have it. Big enough
-// to hold a whole recording, which is what lets a mic test capture first and
-// upload after: Wi-Fi then transmits nothing while the mic is listening (see
-// the "Mic test (Wi-Fi quiet)" button on voice-s3).
+// Same, with a buffer of `bytes` in PSRAM — for boards that have it. Needed
+// wherever audio has to wait before it is uploaded: voice-s3's PTT records from
+// the press but starts uploading only once the hold is confirmed 1.2 s later,
+// and its mic test records all 5 s before sending anything (so Wi-Fi is quiet
+// while the mic listens). The 32 KB internal buffer holds ~1 s of either.
 void recorder_init_psram(size_t bytes) {
   _sbuf = xStreamBufferCreateWithCaps(bytes, 1, MALLOC_CAP_SPIRAM);
   if (!_sbuf) {
-    ESP_LOGW(REC_TAG, "PSRAM stream buffer alloc failed — falling back to internal");
+    ESP_LOGE(REC_TAG, "PSRAM stream buffer alloc (%u KB) failed — falling back to "
+             "%u KB internal: anything recorded before its upload starts "
+             "(PTT pre-roll, mic test) will be truncated to ~1 s",
+             (unsigned)(bytes / 1024), (unsigned)(RBUF_SIZE / 1024));
     recorder_init();
     return;
   }
@@ -94,9 +99,19 @@ void recorder_start() {
   xStreamBufferReset(_sbuf);
   _hp_x1 = _hp_x2 = _hp_y1 = _hp_y2 = 0.0f;
   _skip_left = _skip_total;
+  _rec_full_logged = false;
   _rec_done   = false;
   _rec_active = true;
   ESP_LOGI(REC_TAG, "recording started");
+}
+
+// Logs a dropped write once per recording: a full buffer stays full for every
+// callback after it (~30/s), and repeating it buries the rest of the log.
+static void _rec_dropped(size_t n) {
+  if (_rec_full_logged) return;
+  _rec_full_logged = true;
+  ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes (further drops in this "
+           "recording not logged)", (unsigned) n);
 }
 
 void recorder_on_data(const uint8_t* data, size_t len) {
@@ -105,8 +120,7 @@ void recorder_on_data(const uint8_t* data, size_t len) {
   // Fast path: nothing to do to the samples — straight passthrough.
   if (_gain_num == _gain_den && !_hp_on && _skip_left == 0) {
     size_t sent = xStreamBufferSend(_sbuf, data, len, 0);
-    if (sent < len)
-      ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(len - sent));
+    if (sent < len) _rec_dropped(len - sent);
     return;
   }
 
@@ -147,8 +161,7 @@ void recorder_on_data(const uint8_t* data, size_t len) {
     if (m > 0) {
       size_t bytes = m * 2;
       size_t sent  = xStreamBufferSend(_sbuf, scaled, bytes, 0);
-      if (sent < bytes)
-        ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(bytes - sent));
+      if (sent < bytes) _rec_dropped(bytes - sent);
     }
     processed += chunk;
   }
@@ -162,6 +175,12 @@ void recorder_cancel() {
   _rec_done   = false;
   if (_sbuf) xStreamBufferReset(_sbuf);
   ESP_LOGI(REC_TAG, "recording cancelled");
+}
+
+// Empty whatever is buffered, leaving the recording's state alone. For an
+// uploader that gave up mid-stream (see uploader.h).
+void recorder_discard() {
+  if (_sbuf) xStreamBufferReset(_sbuf);
 }
 
 void recorder_stop() {

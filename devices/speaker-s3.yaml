@@ -54,6 +54,12 @@ speaker:
     bits_per_sample: 16bit
     sample_rate: 48000
     channel: stereo              # real stereo DAC → both channels out the jack
+    # Stay resident instead of tearing down after 500 ms of starved buffer (the
+    # default). A restart races the driver's own not-yet-released bus lock —
+    # "Parent bus is busy" — then backs off a full second, turning a brief stream
+    # hiccup mid-song into a long gap. Nothing else contends for this bus.
+    timeout: never
+    buffer_duration: 1000ms      # more slack before the buffer counts as starved
 
   # Two virtual sources so TTS/announcements and music can share the one DAC —
   # ESPHome requires both pipelines and rejects the same speaker on both.
@@ -61,8 +67,16 @@ speaker:
     id: speaker_mixer
     output_speaker: pcm5102_speaker
     source_speakers:
+      # Leave announcement_src at defaults. With `timeout: never` it does not
+      # reset between streams, and a second announcement on it — the TTS reply,
+      # after the chime — decodes and reports "finished playing" while producing
+      # no sound at all.
       - id: announcement_src
+      # media_src carries no announcements, so it can stay resident. That keeps
+      # the mixer up, and with it the I²S driver, avoiding the teardown/restart
+      # cycle described on the speaker above.
       - id: media_src
+        timeout: never
 
 # ── Media player (Music Assistant / HA playback) ─────────────────────────────
 media_player:

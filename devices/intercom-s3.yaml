@@ -1,6 +1,7 @@
 substitutions:
-  name: esphome-web-0f4600  
+  name: esphome-web-0f4600
   friendly_name: Intercom S3
+  intercom_url: "http://homeassistant.local:9999/intercom"
 
 packages:
   secrets: !include secrets-s3.yaml
@@ -48,14 +49,6 @@ psram:
 # No UART pins broken out — log over USB CDC.
 logger:
   hardware_uart: USB_CDC
-  level: VERBOSE
-  logs:
-    # Quiet noisy components so wake-word logs stay readable.
-    component: DEBUG
-    sensor: DEBUG
-    scheduler: DEBUG
-    api.service: DEBUG
-    api.connection: DEBUG
 
 # ── I²C for ES8311 codec ─────────────────────────────────────────────────────
 
@@ -69,6 +62,9 @@ i2c:
       ignore_strapping_warning: true
     scan: false
 
+# Kept for the MICROPHONE: this component programs the codec over I²C at boot,
+# ADC and mic_gain included. Its DAC side is unused — nothing plays through the
+# internal speaker (see speaker: below).
 audio_dac:
   - platform: es8311
     id: es8311_dac
@@ -76,23 +72,17 @@ audio_dac:
     sample_rate: 48000
     mic_gain: 36DB              # wake word needs this; lower if intercom clips
 
-# ── NS4150 internal Class-D amp enable ───────────────────────────────────────
-# GPIO18 enables the internal NS4150 amp — off = no internal speaker sound.
-
-switch:
-  - platform: gpio
-    pin: GPIO18
-    id: internal_amp_enable
-    name: "Internal Amp"
-    restore_mode: ALWAYS_ON
-
 # ── I²S buses ────────────────────────────────────────────────────────────────
-# The ES8311 is one full-duplex codec on one I²S bus, so mic (RX) and speaker
-# (TX) share a single instance and can't be live at once — the wake word is
-# stopped before playback, restarted after (see on_announcement / on_idle).
+# Capture and playback are on separate buses: the mic comes from the internal
+# ES8311 on bus 1, all playback goes to the external amps on bus 2. So the wake
+# word keeps listening through playback — no stop-before-announcement dance.
+#
+# The internal ES8311 DAC → NS4150 → 1 W speaker path is NOT connected: no
+# speaker is declared on bus 1 and the NS4150 enable (GPIO18) is left alone.
+# intercom-s3-minimal.yaml is the internal-speaker-only build.
 
 i2s_audio:
-  # Bus 1 — internal ES8311 codec, hard-wired, not on the headers.
+  # Bus 1 — internal ES8311 codec, hard-wired, not on the headers. Mic only.
   - id: i2s_bus
     i2s_lrclk_pin:
       number: GPIO3
@@ -117,17 +107,6 @@ microphone:
     correct_dc_offset: true
 
 speaker:
-  # Internal ES8311 → NS4150 → 1 W speaker. Fallback; mute via "Internal Amp".
-  - platform: i2s_audio
-    id: s3_speaker
-    i2s_audio_id: i2s_bus
-    i2s_dout_pin: GPIO48          # Speaker data to codec DAC (DSDIN silkscreen)
-    dac_type: external
-    bits_per_sample: 16bit
-    sample_rate: 48000
-    channel: left                  # VoiceS3R has only one internal speaker
-    audio_dac: es8311_dac
-
   # 2× MAX98357A, both playing the same mono mix (dual mono). Each is a
   # self-contained DAC+amp on G5/G6/G7. ESPHome sees ONE speaker — the amps are
   # passive parallel listeners, so the 2nd board is wiring-only (no YAML change).
@@ -171,26 +150,9 @@ media_player:
       format: FLAC
       sample_rate: 48000
       num_channels: 1
-    # Mic and speaker share one I²S instance. Stop the wake word and wait for the
-    # mic to release the bus before playback, else "Parent bus is busy". Resume after.
-    on_announcement:
-      - if:
-          condition:
-            microphone.is_capturing:
-          then:
-            - micro_wake_word.stop:
-            - wait_until:
-                condition:
-                  not:
-                    microphone.is_capturing:
-                timeout: 3s
-    on_idle:
-      - if:
-          condition:
-            not:
-              micro_wake_word.is_running:
-          then:
-            - micro_wake_word.start:
+    # No on_announcement / on_idle wake-word juggling: the mic is on its own I²S
+    # bus, so it keeps listening straight through playback. Re-arming after
+    # Assist is voice_assistant's on_end / on_error.
 
 # ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
 
@@ -210,19 +172,82 @@ binary_sensor:
           then:
             - logger.log: "button ignored — upload in progress"
           else:
+            - globals.set:
+                id: ptt_recording
+                value: 'true'
             - lambda: |-
                 recorder_start();
-                id(s3_mic).start();
-                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
+                id(s3_mic).start();   // our own listener slot
+                uploader_start("${intercom_url}", App.get_name().c_str());
+            # The wake word would otherwise fire on your own PTT speech. Our
+            # listener slot keeps the mic running once it lets go.
+            - micro_wake_word.stop:
     on_release:
-      - delay: 2s
-      - lambda: |-
-          id(s3_mic).stop();
-          recorder_stop();
-      - wait_until:
+      # Only the release of a press that started a recording closes it out. A
+      # press refused mid-upload must not stop the mic: that slot would be the
+      # wake word's, and the device would go deaf. Cleared before the tail so a
+      # second press-and-release inside it cannot close it out twice.
+      - if:
           condition:
-            lambda: 'return !uploader_is_uploading();'
-          timeout: 10s
+            lambda: 'return id(ptt_recording);'
+          then:
+            - globals.set:
+                id: ptt_recording
+                value: 'false'
+            - delay: 2s
+            - lambda: recorder_stop();
+            - wait_until:
+                condition:
+                  lambda: 'return !uploader_is_uploading();'
+                timeout: 10s
+            # Re-arm the wake word (its listener slot) BEFORE releasing ours, so
+            # the mic never drops to zero listeners in between. Not while Assist
+            # runs — it holds the wake word off itself and re-arms in on_end.
+            - if:
+                condition:
+                  not:
+                    voice_assistant.is_running:
+                then:
+                  - micro_wake_word.start:
+            - lambda: id(s3_mic).stop();
+
+globals:
+  # True from a press that started a recording until its release.
+  - id: ptt_recording
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+script:
+  # If Home Assistant never answers, the pipeline sits in AWAITING_RESPONSE
+  # forever — and since voice_assistant stops the wake word while it runs, the
+  # device goes deaf until it is rebooted. Started in on_start, cancelled in
+  # on_end / on_error, so it only fires when a run genuinely stalls.
+  - id: va_watchdog
+    mode: restart
+    then:
+      - delay: 30s
+      - if:
+          condition:
+            voice_assistant.is_running:
+          then:
+            - logger.log: "Assist stalled — no response from HA; resetting"
+            - voice_assistant.stop:
+            # Stopping fires on_end, which restores ducking and re-arms the wake
+            # word by itself; only step in if it did not.
+            - delay: 3s
+            - if:
+                condition:
+                  and:
+                    - not:
+                        micro_wake_word.is_running:
+                    - lambda: 'return !id(ptt_recording);'
+                then:
+                  - mixer_speaker.apply_ducking:
+                      id: s3_media_src
+                      decibel_reduction: 0
+                      duration: 0.5s
+                  - micro_wake_word.start:
 
 # ── HA Voice Assistant satellite ─────────────────────────────────────────────
 
@@ -232,11 +257,19 @@ voice_assistant:
   media_player: s3_player
   noise_suppression_level: 2
   auto_gain: 31dBFS
-  volume_multiplier: 2.0       # back from 4.0 — 4× clipped TTS at +12 dB GAIN
+  volume_multiplier: 2.0       # 4.0 clips at mic_gain 36DB
+  on_start:
+    - script.execute: va_watchdog
   on_end:
-    # Re-arm the wake word — VA stopped it, and on_idle won't restart it while
-    # music keeps playing (so the next "okay nabu" was ignored).
-    - micro_wake_word.start:
+    - script.stop: va_watchdog
+    # Re-arm the wake word — VA stopped it. Not during a PTT broadcast: the
+    # button's release re-arms it then, and listening now would hear the
+    # broadcast.
+    - if:
+        condition:
+          lambda: 'return !id(ptt_recording);'
+        then:
+          - micro_wake_word.start:
     # Keep music ducked until the answer finishes playing. on_end fires before the
     # TTS plays, so wait for the announcement to start, then end, then restore.
     # Timeouts cover the no-answer case (first times out, second passes through).
@@ -254,15 +287,19 @@ voice_assistant:
         duration: 0.5s
   # No answer coming — restore music and re-arm.
   on_error:
+    - script.stop: va_watchdog
     - mixer_speaker.apply_ducking:
         id: s3_media_src
         decibel_reduction: 0
         duration: 0.5s
-    - micro_wake_word.start:
+    - if:
+        condition:
+          lambda: 'return !id(ptt_recording);'
+        then:
+          - micro_wake_word.start:
 
 # ── Wake-word dispatch ───────────────────────────────────────────────────────
-# "okay nabu" → HA Assist. Later: a 2nd model for intercom — see
-# docs/superpowers/specs/2026-05-18-kitchen-amp-and-terrace-s3-design.md.
+# "okay nabu" → HA Assist.
 
 micro_wake_word:
   id: mww
@@ -272,12 +309,25 @@ micro_wake_word:
       id: okay_nabu
       probability_cutoff: 0.7      # default 0.97 too strict at our gain
   on_wake_word_detected:
-    # Duck music ~20 dB with a short ramp; restored when the answer finishes.
-    # Chime is configured HA-side — an on-device chime fails ("Incompatible audio
-    # streams"): external-speaker audio must go through the media_player pipeline.
-    - mixer_speaker.apply_ducking:
-        id: s3_media_src
-        decibel_reduction: 20
-        duration: 0.3s
-    - voice_assistant.start:
-        wake_word: !lambda return wake_word;
+    # Nothing to talk to when Home Assistant is unreachable, and failing here is
+    # not harmless: request_start() logs "No API client connected" and returns
+    # WITHOUT firing on_error — the branch that re-arms the wake word — so the
+    # device would stay deaf until it reboots. `api.connected` is the wrong
+    # test: any API client, `esphome logs` included, satisfies it. Only a client
+    # subscribed to the voice assistant sets this.
+    - if:
+        condition:
+          lambda: 'return id(va)->get_api_connection() == nullptr;'
+        then:
+          - logger.log: "wake word ignored — Home Assistant not subscribed"
+        else:
+          # Duck music ~20 dB with a short ramp; restored when the answer
+          # finishes. Chime is configured HA-side — an on-device chime fails
+          # ("Incompatible audio streams"): external-speaker audio must go
+          # through the media_player pipeline.
+          - mixer_speaker.apply_ducking:
+              id: s3_media_src
+              decibel_reduction: 20
+              duration: 0.3s
+          - voice_assistant.start:
+              wake_word: !lambda return wake_word;

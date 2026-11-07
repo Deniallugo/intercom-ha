@@ -55,8 +55,7 @@ intercom/
 │   ├── intercom-s3.yaml       # Terrace VoiceS3R
 │   ├── intercom-s3-minimal.yaml
 │   ├── speaker-s3.yaml        # Bare S3 + PCM5102A, playback only
-│   ├── voice-s3.yaml          # Bare S3 + PCM5102A + ZK-502MT amp + INMP441 + button
-│   └── listen_and_answer.yaml
+│   └── voice-s3.yaml          # Bare S3 + PCM5102A + ZK-502MT amp + INMP441 + button
 ├── include/              # Shared C++ — recorder.h (PCM ring + gain), uploader.h (chunked POST)
 ├── packages/base.yaml    # Shared logger/api/ota/wifi/captive_portal
 ├── intercom-addon/       # HA add-on (aiohttp): relay, chimes, ducking, talkback, announce, recordings

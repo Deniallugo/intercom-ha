@@ -1,10 +1,13 @@
 substitutions:
   name: atom-echo
   friendly_name: Atom Echo
-  # Where the "Mic test recording" button uploads to — point it at
-  # tools/mic-capture.py on a LAN machine. Separate from the PTT URL so a mic
-  # test never diverts real broadcasts away from the add-on.
-  mic_test_url: "http://192.168.31.82:9999/intercom"
+  intercom_url: "http://homeassistant.local:9999/intercom"
+  # Where the "Mic test recording" button uploads to. Defaults to the add-on:
+  # the test is saved in its panel's recordings — and, like any broadcast, also
+  # played on the target speakers. For level / clipping / SNR statistics point
+  # this at tools/mic-capture.py on a LAN machine (http://<laptop-ip>:9999/intercom).
+  # Separate from ${intercom_url} so doing that does not divert PTT broadcasts.
+  mic_test_url: "http://homeassistant.local:9999/intercom"
 
 packages:
   secrets: !include secrets-atom.yaml
@@ -24,7 +27,7 @@ esphome:
             recorder_init();
             // PDM mic on the Atom Echo has no PGA; boost recorded audio in
             // software, AFTER the high-pass below (recorder.h filters first).
-            // 8/1 = +18 dB. Measured (tools/mic-atom-echo-*.wav): with the
+            // 8/1 = +18 dB. Measured on this mic's captures: with the
             // drift and the start-up burst gone, the loudest capture peaks at
             // 7833 at x4 and speech sits at -37..-40 dBFS — too quiet next to
             // voice-s3. x8 puts that peak at ~15700, still 6 dB clear. The gain
@@ -173,8 +176,12 @@ light:
     restore_mode: ALWAYS_OFF
 
 # ── Mic diagnostics ────────────────────────────────────────────────────────────
-# Records 5 s to ${mic_test_url}, same as voice-s3's button: no hold timing to
-# get right, and the capture lands in tools/mic-capture.py with its statistics.
+# Records 5 s to ${mic_test_url} (the add-on by default — see substitutions):
+# no hold timing to get right. Unlike voice-s3 it streams while recording: with
+# no PSRAM the recorder's buffer holds only ~1 s, so it cannot hold the take back.
+#
+# Mic test and PTT share the one recorder and refuse to start while the other
+# owns it — recorder_start() from either would wipe the other's take.
 
 button:
   - platform: template
@@ -184,10 +191,15 @@ button:
     on_press:
       - if:
           condition:
-            lambda: 'return uploader_is_uploading();'
+            lambda: |-
+              return uploader_is_uploading() || id(mic_test_running) ||
+                     id(ptt_recording);
           then:
-            - logger.log: "mic test ignored — upload in progress"
+            - logger.log: "mic test ignored — recorder busy"
           else:
+            - globals.set:
+                id: mic_test_running
+                value: 'true'
             - light.turn_on:
                 id: status_led
                 red: 100%
@@ -208,6 +220,22 @@ button:
                 timeout: 15s
             - light.turn_off: status_led
             - logger.log: "mic test recording uploaded"
+            - globals.set:
+                id: mic_test_running
+                value: 'false'
+
+globals:
+  - id: mic_test_running
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # True from a press that actually started a recording until its release.
+  # A press refused because the recorder was busy leaves it false, so that
+  # press's release does not stop someone else's recording or mic.
+  - id: ptt_recording
+    type: bool
+    restore_value: false
+    initial_value: 'false'
 
 # ── Push-to-talk button (GPIO39, active LOW) ───────────────────────────────────
 
@@ -217,13 +245,19 @@ binary_sensor:
       number: GPIO39
       inverted: true
     name: "Button"
+    filters:
+      - delayed_on: 25ms      # debounce
+      - delayed_off: 25ms
     on_press:
       - if:
           condition:
-            lambda: 'return uploader_is_uploading();'
+            lambda: 'return uploader_is_uploading() || id(mic_test_running);'
           then:
-            - logger.log: "button ignored — upload in progress"
+            - logger.log: "button ignored — recorder busy"
           else:
+            - globals.set:
+                id: ptt_recording
+                value: 'true'
             - light.turn_on:
                 id: status_led
                 red: 0%
@@ -232,19 +266,29 @@ binary_sensor:
             - lambda: |-
                 recorder_start();
                 id(atom_mic).start();
-                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
+                uploader_start("${intercom_url}", App.get_name().c_str());
     on_release:
-      - delay: 0.1s
-      - lambda: |-
-          id(atom_mic).stop();
-          recorder_stop();
-      - light.turn_on:
-          id: status_led
-          red: 100%
-          green: 100%
-          blue: 0%
-      - wait_until:
+      # Only the release of a press that started a recording closes it out.
+      # Cleared before the tail, so a second press-and-release inside it
+      # (refused: the upload is still running) cannot close it out twice.
+      - if:
           condition:
-            lambda: 'return !uploader_is_uploading();'
-          timeout: 10s
-      - light.turn_off: status_led
+            lambda: 'return id(ptt_recording);'
+          then:
+            - globals.set:
+                id: ptt_recording
+                value: 'false'
+            - delay: 0.1s
+            - lambda: |-
+                id(atom_mic).stop();
+                recorder_stop();
+            - light.turn_on:
+                id: status_led
+                red: 100%
+                green: 100%
+                blue: 0%
+            - wait_until:
+                condition:
+                  lambda: 'return !uploader_is_uploading();'
+                timeout: 10s
+            - light.turn_off: status_led
