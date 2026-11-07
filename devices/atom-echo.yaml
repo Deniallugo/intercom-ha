@@ -1,6 +1,10 @@
 substitutions:
   name: atom-echo
   friendly_name: Atom Echo
+  # Where the "Mic test recording" button uploads to — point it at
+  # tools/mic-capture.py on a LAN machine. Separate from the PTT URL so a mic
+  # test never diverts real broadcasts away from the add-on.
+  mic_test_url: "http://192.168.31.82:9999/intercom"
 
 packages:
   secrets: !include secrets-atom.yaml
@@ -19,8 +23,19 @@ esphome:
         - lambda: |-
             recorder_init();
             // PDM mic on the Atom Echo has no PGA; boost recorded audio in
-            // software. 2/1 = +6 dB. Bump to (4, 1) for +12 dB if still quiet.
-            recorder_set_gain(2, 1);
+            // software, AFTER the high-pass below (recorder.h filters first).
+            // 8/1 = +18 dB. Measured (tools/mic-atom-echo-*.wav): with the
+            // drift and the start-up burst gone, the loudest capture peaks at
+            // 7833 at x4 and speech sits at -37..-40 dBFS — too quiet next to
+            // voice-s3. x8 puts that peak at ~15700, still 6 dB clear. The gain
+            // saturates rather than wraps, so a close talker clips cleanly.
+            recorder_set_gain(8, 1);
+            // Measured on this mic: 1-10 Hz drift up to 8 dB louder than the
+            // speech, and a ~50 ms full-scale burst while the PDM filter settles
+            // after id(atom_mic).start() — a click at the start of every
+            // broadcast. 100 Hz keeps the whole voice.
+            recorder_set_highpass(100);
+            recorder_set_skip_ms(100);
     - priority: 200.0
       then:
         - lambda: |-
@@ -73,6 +88,18 @@ speaker:
     dac_type: external
     bits_per_sample: 16bit
     sample_rate: 16000
+    # The speaker task allocates this as ONE contiguous internal-RAM block
+    # (500 ms default = 16 KB at 16 kHz/16-bit mono) and it is the LAST thing
+    # allocated when a broadcast starts — after the media player's reader and
+    # decoder tasks have already taken their share. On this no-PSRAM ESP32 that
+    # request is the one that fails, and the whole failure surfaces as:
+    #   [E][i2s_audio.speaker]: Speaker task setup failed (allocation, preload,
+    #                           or channel enable)
+    #   E i2s_common: i2s_channel_disable(): the channel has not been enabled yet
+    # (the second line is only cleanup noise — the task bailed before enabling).
+    # 200 ms = 6.4 KB. It only has to cover decoder scheduling jitter; network
+    # jitter is absorbed upstream by the media player's buffer_size below.
+    buffer_duration: 200ms
 
 # ── Media player (HA-controllable playback) ────────────────────────────────────
 
@@ -119,7 +146,12 @@ interval:
           // Watch the largest contiguous block, not total free — fragmentation,
           // not exhaustion, is what starves the I2S DMA descriptor allocation.
           size_t block = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
-          if (block < 8000) {
+          // Threshold must exceed the largest single contiguous block a
+          // broadcast asks for, or the watchdog stays happy while playback
+          // fails. That is the media player's 8192 B file ring buffer (the
+          // speaker's is 6.4 KB after buffer_duration: 200ms), so 12000 B
+          // leaves headroom above it rather than sitting just under it.
+          if (block < 12000) {
             if (++lowhits >= 3) {
               ESP_LOGE("watchdog", "Largest DMA block too small (%u B), rebooting", (unsigned) block);
               App.safe_reboot();
@@ -139,6 +171,43 @@ light:
     name: "Status LED"
     id: status_led
     restore_mode: ALWAYS_OFF
+
+# ── Mic diagnostics ────────────────────────────────────────────────────────────
+# Records 5 s to ${mic_test_url}, same as voice-s3's button: no hold timing to
+# get right, and the capture lands in tools/mic-capture.py with its statistics.
+
+button:
+  - platform: template
+    id: record_test
+    name: "Mic test recording"
+    entity_category: diagnostic
+    on_press:
+      - if:
+          condition:
+            lambda: 'return uploader_is_uploading();'
+          then:
+            - logger.log: "mic test ignored — upload in progress"
+          else:
+            - light.turn_on:
+                id: status_led
+                red: 100%
+                green: 0%
+                blue: 100%
+            - lambda: |-
+                recorder_start();
+                id(atom_mic).start();
+                uploader_start("${mic_test_url}", App.get_name().c_str());
+            - logger.log: "mic test recording started"
+            - delay: 5s
+            - lambda: |-
+                id(atom_mic).stop();
+                recorder_stop();
+            - wait_until:
+                condition:
+                  lambda: 'return !uploader_is_uploading();'
+                timeout: 15s
+            - light.turn_off: status_led
+            - logger.log: "mic test recording uploaded"
 
 # ── Push-to-talk button (GPIO39, active LOW) ───────────────────────────────────
 
