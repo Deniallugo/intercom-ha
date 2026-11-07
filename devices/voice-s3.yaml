@@ -45,15 +45,11 @@ esphome:
             // discard anyway. recorder_set_gain() multiplies already-truncated
             // samples to buy the same level, so it stays at unity.
             //
-            // 30 s in PSRAM rather than the 1 s internal default, so a whole
-            // broadcast fits and is uploaded AFTER it is captured. Measured
-            // (tools/mic-voice-s3-13/14.wav, same room, back to back): with the
-            // upload streaming during the recording the silence sat at
-            // -54.7 dBFS with 17 clicks/s, 13-16 dB tall; held back until the
-            // recording ended, -65.5 dBFS and none. Each Wi-Fi transmit burst
-            // reaches the INMP441 through its supply. A filter on the mic's VDD
-            // is the hardware fix; this is the one that needs no soldering.
-            // A hold past 30 s loses its tail ("buffer full" in the log).
+            // In PSRAM rather than the 1 s internal default: PTT records from
+            // the press but only starts uploading once the hold is confirmed
+            // 1.2 s later, so that much has to wait in the buffer. The upload
+            // then streams and drains it, so this is slack, not a length cap.
+            // Large enough to hold a whole "Mic test (Wi-Fi quiet)" capture.
             recorder_init_psram(30 * 32000);
             // Measured (tools/mic-voice-s3-*.wav): 1-10 Hz drift up to 12 dB
             // LOUDER than the speech, plus a broadband rumble falling ~12
@@ -133,6 +129,17 @@ esp32:
 psram:
   mode: octal
   speed: 40MHz
+
+# Transmit at 8.5 dBm instead of the default 20. Every transmit burst reaches the
+# INMP441 as a click, and a lower output power is a smaller current step on the
+# shared 3.3 V rail. Measured in the case with the upload streaming: -44.2 dBFS
+# and 39 clicks/s at 20 dBm, -57.7 dBFS and 1.3 clicks/s here — against -59.9
+# and none with nothing transmitted at all. That is what lets PTT stream, and
+# Assist, which always streams while it listens, gets the same benefit. The link
+# has margin to spare (-49 dBm at the AP); if the device starts dropping off
+# Wi-Fi, raise this first.
+wifi:
+  output_power: 8.5dB
 
 # Bare devkit: no UART header broken out. Log over the always-on USB-Serial-JTAG —
 # more reliable than USB_CDC, which re-enumerates on app boot and hides early output.
@@ -593,12 +600,16 @@ script:
             # taken at the press, keeps the mic running once mww lets go.
             - micro_wake_word.stop:
             - voice_assistant.stop:
-            - lambda: id(intercom_recording) = true;
-            # No uploader_start() here: the upload waits for the release, so
-            # Wi-Fi is quiet while the mic listens — see recorder_init_psram
-            # above. It costs no latency worth having: the add-on reads the
-            # whole body before it plays anything anyway.
-            - logger.log: "intercom: recording (upload on release)"
+            # Stream from here: the uploader first drains the 1.2 s buffered
+            # since the press, then keeps pace with the mic, so a hold has no
+            # length limit. Uploading while recording used to put Wi-Fi clicks
+            # in the broadcast; the reduced output_power above is what keeps
+            # them out now (in-case floor -57.7 dBFS, 1.3 clicks/s, against
+            # -59.9 and none with the upload held back entirely).
+            - lambda: |-
+                id(intercom_recording) = true;
+                uploader_start("${intercom_url}", App.get_name().c_str());
+            - logger.log: "intercom: recording"
 
   # Rings until it is acknowledged with a button tap, or gives up after ~12 s.
   # A timer that chimes once from across the room is a timer you miss.
@@ -721,7 +732,6 @@ binary_sensor:
                       recorder_stop();
                       id(intercom_recording) = false;
                       id(ptt_armed) = false;
-                      uploader_start("${intercom_url}", App.get_name().c_str());
                   - wait_until:
                       condition:
                         lambda: 'return !uploader_is_uploading();'
