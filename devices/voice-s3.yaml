@@ -44,7 +44,17 @@ esphome:
             // data callback's shift instead, out of bits this would have to
             // discard anyway. recorder_set_gain() multiplies already-truncated
             // samples to buy the same level, so it stays at unity.
-            recorder_init();
+            //
+            // 30 s in PSRAM rather than the 1 s internal default, so a whole
+            // broadcast fits and is uploaded AFTER it is captured. Measured
+            // (tools/mic-voice-s3-13/14.wav, same room, back to back): with the
+            // upload streaming during the recording the silence sat at
+            // -54.7 dBFS with 17 clicks/s, 13-16 dB tall; held back until the
+            // recording ended, -65.5 dBFS and none. Each Wi-Fi transmit burst
+            // reaches the INMP441 through its supply. A filter on the mic's VDD
+            // is the hardware fix; this is the one that needs no soldering.
+            // A hold past 30 s loses its tail ("buffer full" in the log).
+            recorder_init_psram(30 * 32000);
             // Measured (tools/mic-voice-s3-*.wav): 1-10 Hz drift up to 12 dB
             // LOUDER than the speech, plus a broadband rumble falling ~12
             // dB/octave from 100 Hz — 25-30 dB above the Atom's floor, and
@@ -270,6 +280,39 @@ button:
             - micro_wake_word.start:       # re-arm before releasing our slot
             - lambda: id(inmp441_mic).stop();
 
+  # Same 5 s capture, but nothing is sent until it is over. Out of the case the
+  # mic shows ~30 clicks/s, 3 ms each, 24 dB over the floor, at irregular
+  # intervals — the rhythm of the upload's own TCP packets while recording.
+  # If the clicks vanish here, they are Wi-Fi transmit bursts reaching the
+  # INMP441 through its supply, not sound.
+  - platform: template
+    id: record_test_quiet
+    name: "Mic test (Wi-Fi quiet)"
+    entity_category: diagnostic
+    on_press:
+      - if:
+          condition:
+            lambda: 'return uploader_is_uploading();'
+          then:
+            - logger.log: "mic test ignored — upload in progress"
+          else:
+            - micro_wake_word.stop:
+            - lambda: |-
+                id(inmp441_mic).start();
+                recorder_start();
+            - logger.log: "quiet mic test: recording, upload held back"
+            - delay: 5s
+            - lambda: |-
+                recorder_stop();
+                uploader_start("${mic_test_url}", App.get_name().c_str());
+            - wait_until:
+                condition:
+                  lambda: 'return !uploader_is_uploading();'
+                timeout: 15s
+            - logger.log: "quiet mic test uploaded"
+            - micro_wake_word.start:
+            - lambda: id(inmp441_mic).stop();
+
 # ── Wake word ────────────────────────────────────────────────────────────────
 
 micro_wake_word:
@@ -485,6 +528,14 @@ globals:
     restore_value: false
     initial_value: 'false'
 
+  # True from a press that started a recording until that recording is either
+  # cancelled (tap) or sent (hold). False on a press while an upload was still
+  # in flight: no recording was started, so a hold is refused.
+  - id: ptt_armed
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
   # True between "the wake word paused a ringing timer" and "we found out
   # whether that conversation actually cancelled it". Cleared by
   # on_timer_cancelled; consumed by voice_assistant's on_end / on_error.
@@ -532,22 +583,22 @@ script:
       - delay: 1200ms
       - if:
           condition:
-            lambda: 'return uploader_is_uploading();'
+            lambda: 'return !id(ptt_armed);'
           then:
             - logger.log: "intercom busy — hold ignored"
           else:
-            # Stop the wake word first: it would otherwise fire on your own PTT
-            # speech. The mic is reference-counted by listener (start/stop calls),
-            # so take our own listener slot here — that keeps the mic running once
-            # mww releases its slot. Released again on button release.
+            # The recording has been running since the press (see on_press);
+            # this only confirms it as a broadcast. Stop the wake word: it would
+            # otherwise fire on your own PTT speech. Our own listener slot,
+            # taken at the press, keeps the mic running once mww lets go.
             - micro_wake_word.stop:
             - voice_assistant.stop:
-            - lambda: |-
-                id(inmp441_mic).start();
-                id(intercom_recording) = true;
-                recorder_start();
-                uploader_start("${intercom_url}", App.get_name().c_str());
-            - logger.log: "intercom: recording"
+            - lambda: id(intercom_recording) = true;
+            # No uploader_start() here: the upload waits for the release, so
+            # Wi-Fi is quiet while the mic listens — see recorder_init_psram
+            # above. It costs no latency worth having: the add-on reads the
+            # whole body before it plays anything anyway.
+            - logger.log: "intercom: recording (upload on release)"
 
   # Rings until it is acknowledged with a button tap, or gives up after ~12 s.
   # A timer that chimes once from across the room is a timer you miss.
@@ -581,6 +632,20 @@ binary_sensor:
       - delayed_on: 25ms      # debounce
       - delayed_off: 25ms
     on_press:
+      # Start recording NOW, not when the hold is confirmed 1.2 s later — that
+      # wait used to cost the first second of every broadcast, because people
+      # talk as they press. A tap throws this away (recorder_cancel below).
+      # Nothing is uploaded until release, so a discarded take costs nothing.
+      # Not while the previous broadcast is still in its release tail —
+      # recorder_start() would wipe it before it is sent.
+      - if:
+          condition:
+            lambda: 'return !uploader_is_uploading() && !id(intercom_recording);'
+          then:
+            - lambda: |-
+                id(inmp441_mic).start();   // our own listener slot
+                recorder_start();
+                id(ptt_armed) = true;
       - script.execute: hold_watch
     on_release:
       # Still counting down → released before the threshold → it was a tap.
@@ -593,6 +658,16 @@ binary_sensor:
           # ── tap: talk to Assist (second tap cancels) ──
           then:
             - script.stop: hold_watch
+            # Not a broadcast after all — drop the speculative recording and
+            # give back the listener slot taken at the press.
+            - if:
+                condition:
+                  lambda: 'return id(ptt_armed);'
+                then:
+                  - lambda: |-
+                      recorder_cancel();
+                      id(ptt_armed) = false;
+                      id(inmp441_mic).stop();
             # A ringing timer claims the tap: silence it and do nothing else.
             # Otherwise the only way to stop the alarm would be to talk over it.
             # `alarm_suspended` covers the tap landing mid-conversation, after a
@@ -645,6 +720,8 @@ binary_sensor:
                   - lambda: |-
                       recorder_stop();
                       id(intercom_recording) = false;
+                      id(ptt_armed) = false;
+                      uploader_start("${intercom_url}", App.get_name().c_str());
                   - wait_until:
                       condition:
                         lambda: 'return !uploader_is_uploading();'
