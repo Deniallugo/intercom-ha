@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <climits>
+#include <cmath>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/stream_buffer.h"
@@ -20,6 +21,22 @@ static volatile bool        _rec_done   = false;
 static int _gain_num = 1;
 static int _gain_den = 1;
 
+// High-pass filter, off by default (recorder_set_highpass). Measured on both
+// mics: 1-10 Hz drift that correct_dc_offset leaves in, swinging up to ±10000 —
+// 2-12 dB LOUDER than the speech itself. With the add-on's cleanup off, that
+// went straight to the amplifiers, pumped the speakers and ate the headroom any
+// gain needs. It runs BEFORE the gain, so the gain is spent on the voice.
+// RBJ biquad, Q = 0.707 (Butterworth, 12 dB/octave), Direct Form I in float.
+static bool  _hp_on = false;
+static float _hp_b0, _hp_b1, _hp_b2, _hp_a1, _hp_a2;
+static float _hp_x1, _hp_x2, _hp_y1, _hp_y2;
+
+// Samples to drop at the start of each recording (recorder_set_skip_ms). The
+// Atom's PDM mic is started on the button press and its decimation filter
+// spends ~50 ms settling at full scale — a click on every broadcast.
+static uint32_t _skip_total = 0;
+static uint32_t _skip_left  = 0;
+
 void recorder_init() {
   _sbuf = xStreamBufferCreate(RBUF_SIZE, 1);
   if (!_sbuf) ESP_LOGE(REC_TAG, "stream buffer alloc failed");
@@ -36,9 +53,31 @@ void recorder_set_gain(int num, int den) {
   ESP_LOGI(REC_TAG, "software gain set to %d/%d", num, den);
 }
 
+// Cutoff in Hz at 16 kHz; 0 turns it off. Call from on_boot.
+void recorder_set_highpass(float hz) {
+  if (hz <= 0) { _hp_on = false; ESP_LOGI(REC_TAG, "high-pass off"); return; }
+  const float fs = 16000.0f, q = 0.7071f;
+  const float w0 = 2.0f * (float) M_PI * hz / fs;
+  const float c = cosf(w0), alpha = sinf(w0) / (2.0f * q), a0 = 1.0f + alpha;
+  _hp_b0 =  (1.0f + c) / 2.0f / a0;
+  _hp_b1 = -(1.0f + c) / a0;
+  _hp_b2 =  (1.0f + c) / 2.0f / a0;
+  _hp_a1 = -2.0f * c / a0;
+  _hp_a2 =  (1.0f - alpha) / a0;
+  _hp_on = true;
+  ESP_LOGI(REC_TAG, "high-pass %.0f Hz", hz);
+}
+
+void recorder_set_skip_ms(uint32_t ms) {
+  _skip_total = ms * 16;   // 16 samples per ms at 16 kHz
+  ESP_LOGI(REC_TAG, "dropping first %u ms of each recording", (unsigned) ms);
+}
+
 void recorder_start() {
   if (!_sbuf) return;
   xStreamBufferReset(_sbuf);
+  _hp_x1 = _hp_x2 = _hp_y1 = _hp_y2 = 0.0f;
+  _skip_left = _skip_total;
   _rec_done   = false;
   _rec_active = true;
   ESP_LOGI(REC_TAG, "recording started");
@@ -47,16 +86,18 @@ void recorder_start() {
 void recorder_on_data(const uint8_t* data, size_t len) {
   if (!_rec_active || !_sbuf) return;
 
-  // Fast path: no gain — straight passthrough.
-  if (_gain_num == _gain_den) {
+  // Fast path: nothing to do to the samples — straight passthrough.
+  if (_gain_num == _gain_den && !_hp_on && _skip_left == 0) {
     size_t sent = xStreamBufferSend(_sbuf, data, len, 0);
     if (sent < len)
       ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(len - sent));
     return;
   }
 
-  // Slow path: apply gain with saturation. Process in stack-resident chunks
-  // so we don't allocate per callback. Only one callback runs at a time.
+  // Slow path: skip, high-pass, then gain with saturation. Process in
+  // stack-resident chunks so we don't allocate per callback. Only one callback
+  // runs at a time, so the filter state needs no locking.
+  const float gain = (float) _gain_num / (float) _gain_den;
   uint8_t scaled[512];
   size_t processed = 0;
   while (processed < len) {
@@ -68,16 +109,31 @@ void recorder_on_data(const uint8_t* data, size_t len) {
     const int16_t* in  = reinterpret_cast<const int16_t*>(data + processed);
     int16_t*       out = reinterpret_cast<int16_t*>(scaled);
     size_t         n   = chunk / 2;
+    size_t         m   = 0;
     for (size_t i = 0; i < n; i++) {
-      int32_t s = (int32_t)in[i] * _gain_num / _gain_den;
+      float x = (float) in[i];
+      float y = x;
+      if (_hp_on) {
+        // Keep filtering through the skipped stretch, so the filter has
+        // settled by the time samples are kept.
+        y = _hp_b0 * x + _hp_b1 * _hp_x1 + _hp_b2 * _hp_x2
+          - _hp_a1 * _hp_y1 - _hp_a2 * _hp_y2;
+        _hp_x2 = _hp_x1; _hp_x1 = x;
+        _hp_y2 = _hp_y1; _hp_y1 = y;
+      }
+      if (_skip_left > 0) { _skip_left--; continue; }
+      float s = y * gain;
       if (s > INT16_MAX)      s = INT16_MAX;
       else if (s < INT16_MIN) s = INT16_MIN;
-      out[i] = (int16_t)s;
+      out[m++] = (int16_t) lrintf(s);
     }
 
-    size_t sent = xStreamBufferSend(_sbuf, scaled, chunk, 0);
-    if (sent < chunk)
-      ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(chunk - sent));
+    if (m > 0) {
+      size_t bytes = m * 2;
+      size_t sent  = xStreamBufferSend(_sbuf, scaled, bytes, 0);
+      if (sent < bytes)
+        ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(bytes - sent));
+    }
     processed += chunk;
   }
 }

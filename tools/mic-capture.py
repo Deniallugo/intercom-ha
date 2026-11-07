@@ -14,14 +14,16 @@ Then point the device at this machine and trigger a recording:
            intercom_url: "http://<this-machine-ip>:9999/intercom"
     2. flash, then press the device's "Mic test recording" button in Home
        Assistant (or hold the PTT button)
-    3. WAVs land next to this script as mic-01.wav, mic-02.wav, ...
+    3. WAVs land next to this script as mic-<device>-01.wav, -02, ... (never
+       overwriting an earlier capture)
 
 Reading the output — the decisive number is zero-crossings per second, which
 this prints indirectly via the verdict:
     * speech produces hundreds to thousands of sign changes per second
     * under ~50/s is not sound at all, no matter how large the level looks
-    * "impossible jumps" counts neighbouring samples differing by >16000, which
-      audio at 16 kHz cannot do — a non-zero count means bit errors on the wire
+    * "isolated spikes" counts single samples that jump away from both their
+      neighbours; when most of them land on a power of two (512, 1024, 16384)
+      they are flipped bits in the I2S word, not sound
 """
 import math
 import socket
@@ -78,6 +80,35 @@ def read_chunked(conn, rest):
         del buf[: size + 2]  # payload + trailing CRLF
 
 
+def bit_error_stats(samples):
+    """(isolated single-sample spikes, how many of them are a power of two).
+
+    A flipped bit in the I2S word moves ONE sample by exactly 2^k and leaves its
+    neighbours untouched, so it stands out against the local baseline at a
+    power-of-two magnitude. Real audio's local deviations are smoothly
+    distributed and do not pile up on 512 / 1024 / 16384, so the second number
+    is what separates a wiring fault from loud speech.
+
+    Measured here: healthy captures give 0.00-0.07% spikes with few on a power
+    of two; a failing mic gave 3.5-12.6% with 81-91% of them on one.
+
+    This replaces a fixed "neighbour delta > 16000" test that was wrong in both
+    directions — it called any loud capture glitchy, since a real speech
+    transient clears 16000 easily, and it missed bit errors riding on a large
+    baseline, where the flipped bit is big but the absolute delta is not.
+    """
+    n = len(samples)
+    if n < 3:
+        return 0, 0
+    # Deviation from the mean of both neighbours: an isolated spike survives,
+    # slow baseline wander cancels.
+    dev = [samples[i] - (samples[i - 1] + samples[i + 1]) / 2 for i in range(1, n - 1)]
+    typical = sorted(abs(d) for d in dev)[len(dev) // 2]
+    spikes = [abs(d) for d in dev if abs(d) > max(20 * typical, 40)]
+    on_power = sum(1 for a in spikes if abs(a - 2 ** round(math.log2(a))) / a < 0.12)
+    return len(spikes), on_power
+
+
 def report(pcm, path):
     n = len(pcm) // 2
     if n == 0:
@@ -88,8 +119,7 @@ def report(pcm, path):
     mean = sum(abs(s) for s in samples) / n
     dc = sum(samples) / n
     clipped = sum(1 for s in samples if abs(s) >= 32700)
-    # A glitch is a jump between neighbours too large to be sound at 16 kHz.
-    jumps = sum(1 for a, b in zip(samples, samples[1:]) if abs(b - a) > 16000)
+    spikes, on_power = bit_error_stats(samples)
     # The decisive statistic: speech crosses zero hundreds of times a second.
     crossings = sum(1 for a, b in zip(samples, samples[1:]) if (a < 0) != (b < 0))
     per_sec = crossings / (n / RATE)
@@ -102,7 +132,9 @@ def report(pcm, path):
 
     print(f"  wrote {path}  ({n} samples = {n / RATE:.2f} s)")
     print(f"  peak {peak}  mean {mean:.0f}  dc {dc:.0f}")
-    print(f"  clipped {100 * clipped / n:.2f}%   impossible jumps {jumps}")
+    print(f"  clipped {100 * clipped / n:.2f}%   "
+          f"isolated spikes {100 * spikes / n:.2f}% "
+          f"({on_power} of {spikes} on a power of two)")
     print(f"  zero crossings {per_sec:.0f}/s")
     if levels[0] > 0:
         print(f"  noise floor {levels[0]:.0f}  loudest {levels[-1]:.0f}"
@@ -110,8 +142,10 @@ def report(pcm, path):
 
     if mean == 0:
         print("  --> SILENT: nothing arriving. Dead wire, or mic not clocked.")
-    elif jumps > n * 0.001:
-        print("  --> GLITCHING: bit errors on the wire, not audio.")
+    elif spikes > n * 0.005 and on_power > spikes * 0.5:
+        print("  --> BIT ERRORS on the I2S data word, not audio. Check SD/SCK/WS")
+        print("      wiring and the L/R tie — this is not a gain problem, and the")
+        print("      inflated level and noise floor are the errors themselves.")
     elif per_sec < 50:
         print("  --> NOT AUDIO: sub-audio wander. Check gain and DC handling.")
     elif clipped > n * 0.01:
@@ -125,8 +159,7 @@ def main():
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((HOST, PORT))
     srv.listen(4)
-    print(f"listening on {HOST}:{PORT} — hold the button on voice-s3 and speak")
-    count = 0
+    print(f"listening on {HOST}:{PORT} — press 'Mic test recording' on a device and speak")
     while True:
         conn, addr = srv.accept()
         try:
@@ -141,8 +174,12 @@ def main():
             pcm = read_chunked(conn, rest)
             conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
                          b"Connection: close\r\n\r\nok")
-            count += 1
-            path = OUTDIR / f"mic-{count:02d}.wav"
+            # Name by device and never overwrite: earlier captures are the
+            # baseline a new one is compared against.
+            tag = "".join(c if c.isalnum() or c == "-" else "_" for c in device) or "unknown"
+            count = 1
+            while (path := OUTDIR / f"mic-{tag}-{count:02d}.wav").exists():
+                count += 1
             with wave.open(str(path), "wb") as w:
                 w.setnchannels(CHANNELS)
                 w.setsampwidth(WIDTH)

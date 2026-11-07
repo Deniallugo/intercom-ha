@@ -1,7 +1,12 @@
-# Voice S3 — bare ESP32-S3 + PCM5102A line-out + INMP441 mic + one button.
+# Voice S3 — bare ESP32-S3 + PCM5102A + ZK-502MT amp + INMP441 mic + one button.
 #
-# Role: a Music Assistant player that is also a full Assist satellite.
-#   • music / TTS  → PCM5102A → 3.5 mm jack → your amp or powered speakers
+# Role: a Music Assistant player that is also a full Assist satellite, in one box
+# with its own amplifier, driving two external passive speakers.
+#   • music / TTS  → PCM5102A → internal 3.5 mm patch cable → ZK-502MT AUX
+#                    → 2 × 50 W (4 Ω, 24 V) → two passive speakers
+#   • power        → 24 V / 3 A barrel → amp direct, and MP1584 buck → 5 V → devkit.
+#                    USB-C is for flashing and logs only. Wiring and the rules for
+#                    plugging USB in while 24 V is live: docs/DEVICES.md → Voice S3.
 #   • "okay nabu"  → hands-free Assist
 #   • tap button   → Assist without the wake word
 #   • hold button  → whole-home intercom broadcast (intercom-addon)
@@ -18,7 +23,7 @@ substitutions:
   # Where the "Mic test recording" button uploads to. Separate from
   # ${intercom_url} so pointing a mic test at tools/mic-capture.py on a laptop
   # does not also divert PTT broadcasts away from the add-on.
-  mic_test_url: "http://192.168.31.149:9999/intercom"
+  mic_test_url: "http://192.168.31.82:9999/intercom"
 
 packages:
   secrets: !include secrets-voice.yaml
@@ -35,11 +40,18 @@ esphome:
     - priority: 600.0
       then:
         - lambda: |-
-            // No recorder_set_gain(): the intercom path's +6 dB is taken in the
+            // No recorder_set_gain(): the intercom path's +12 dB is taken in the
             // data callback's shift instead, out of bits this would have to
             // discard anyway. recorder_set_gain() multiplies already-truncated
             // samples to buy the same level, so it stays at unity.
             recorder_init();
+            // Measured (tools/mic-voice-s3-*.wav): 1-10 Hz drift up to 12 dB
+            // LOUDER than the speech, plus a broadband rumble falling ~12
+            // dB/octave from 100 Hz — 25-30 dB above the Atom's floor, and
+            // with no tones in it, so not mains or the buck converter. 180 Hz
+            // cuts the bulk of that rumble; intelligibility lives at 300 Hz-4
+            // kHz, so the voice loses only its fundamental's lowest part.
+            recorder_set_highpass(180);
 
     # Raw mic tap for the intercom recorder. micro_wake_word / voice_assistant
     # consume the mic through microphone sources (which convert for us); this
@@ -47,17 +59,24 @@ esphome:
     # 24-bit left-justified in a 32-bit slot, so the sample sits in the top bits.
     # recorder.h and the add-on both expect 16 kHz / 16-bit / mono.
     #
-    # `>> 15` is +6 dB, out of the low 8 bits a plain `>> 16` discards — so it
-    # costs no resolution, and measurement says it cannot clip: the loudest
-    # close-range capture peaked at −15.7 dBFS, leaving 9.7 dB of headroom after
-    # this.
+    # `>> 14` is +12 dB, out of the low 8 bits a plain `>> 16` discards — the
+    # 24-bit sample sits in bits 31..8, so anything down to `>> 8` still reads
+    # real bits and this costs no resolution.
     #
-    # +6 dB and no more, because big shifts here were measured and reverted:
-    # `>> 13` (+18 dB) reached a metre, `>> 10` (+36 dB) pinned the peak and
-    # clipped 12.3% of a capture, and SNR was 13-15 dB at every setting — gain
-    # lifts the noise floor with the signal, so it only arrives louder, never
-    # clearer. Level is now made up in the add-on instead (denoise.py), after the
-    # hiss between words is pushed down and in float, where it cannot clip.
+    # Measured, not guessed: re-scaling the five unclipped captures in `tools/`
+    # by another x2 leaves 0.00% clipped, worst case −5.1 dBFS peak on the
+    # loudest close-range one, and puts a normal room capture's speech at
+    # −20.8 dBFS — which is exactly denoise.py's TARGET_SPEECH_RMS, i.e. the
+    # level the add-on would otherwise have to make up. That matters now that
+    # the add-on's cleanup is off by default: with `denoise: false` nothing
+    # downstream sets the level, so this shift IS the broadcast level.
+    #
+    # +12 dB and no more. x4 from here (+18 dB) pins that same capture at
+    # 0.0 dBFS and begins clipping, and `>> 10` (+36 dB) clipped 12.3% of a
+    # capture outright. And note what none of it buys: SNR was 13-15 dB at every
+    # setting, because gain lifts the noise floor with the signal. This is
+    # level, not clarity — the hiss is denoise.py's job, where it is pushed down
+    # before any make-up and in float, where it cannot clip.
     - priority: 200.0
       then:
         - lambda: |-
@@ -72,7 +91,7 @@ esphome:
               // a loud transient clips cleanly instead of wrapping to full-scale
               // opposite sign — which sounds like a gunshot in the broadcast.
               for (size_t i = 0; i < frames; i++) {
-                int32_t s = in[i] >> 15;   // +6 dB; see the note above
+                int32_t s = in[i] >> 14;   // +12 dB; see the note above
                 if (s > INT16_MAX) s = INT16_MAX;
                 else if (s < INT16_MIN) s = INT16_MIN;
                 out[i] = static_cast<int16_t>(s);
@@ -116,7 +135,8 @@ logger:
 # mic and the DAC to the same clock, and re-create the busy-bus problem.
 
 i2s_audio:
-  # Bus 0 — PCM5102A DAC → 3.5 mm jack. The PCM5102 makes its own MCLK from an
+  # Bus 0 — PCM5102A DAC → 3.5 mm socket → patch cable → ZK-502MT AUX. The
+  # PCM5102 makes its own MCLK from an
   # internal PLL, so its SCK pin is tied to GND and no mclk pin is declared here.
   - id: i2s_out
     i2s_lrclk_pin: GPIO6     # → LCK
@@ -155,7 +175,7 @@ speaker:
     dac_type: external       # PCM5102 is an external DAC (no I²C control bus)
     bits_per_sample: 16bit
     sample_rate: 48000
-    channel: stereo          # real stereo DAC → both channels out the jack
+    channel: stereo          # real stereo DAC → amp L/R → the two speakers
     # Stay resident instead of tearing down after 500 ms of starved buffer (the
     # default). A restart races the driver's own not-yet-released bus lock —
     # "Parent bus is busy" — then backs off a full second, turning a brief stream
@@ -258,14 +278,20 @@ micro_wake_word:
     microphone: inmp441_mic
     channels: 0              # the mic emits one (left) channel
     # Measured from a real capture: speech peaks at 5404/32767 = −15.7 dBFS with
-    # no gain at all, so this mic needs none. (An earlier 64 here came from a
-    # −60 dBFS reading taken while the wiring was faulty; it clipped everything.)
+    # no gain at all — a quiet mic with headroom to spend, not one that needs
+    # none. (An earlier 64 here came from a −60 dBFS reading taken while the
+    # wiring was faulty; it clipped everything, which is the other end of this.)
     #
-    # 2 is +6 dB, matching the intercom shift. This path gets no help from the
-    # add-on's cleanup — detection happens here, on the device — so a small
-    # fixed boost is the only lever, and 15.7 dB of measured headroom makes it
-    # free of clipping. 8 (+18 dB) was tried and reverted: louder, not clearer.
-    gain_factor: 2
+    # 4 is +12 dB, matching the intercom shift. This path gets no help from the
+    # add-on's cleanup — detection happens here, on the device — so a fixed
+    # boost is the only lever there is. Free of clipping at this setting:
+    # re-scaled captures peak at −5.1 dBFS worst case with 0.00% clipped.
+    #
+    # 8 (+18 dB) is where clipping starts and was tried and reverted: louder,
+    # not clearer. If this now false-triggers, `probability_cutoff` below is the
+    # lever to raise — not this, which is what gets a quiet voice across the
+    # room up to a level the model responds to at all.
+    gain_factor: 4
   models:
     - model: okay_nabu
       id: okay_nabu
@@ -322,7 +348,13 @@ voice_assistant:
   microphone:
     microphone: inmp441_mic
     channels: 0
-    gain_factor: 1           # see the note on the wake word's source above
+    # 2 here x `volume_multiplier: 2.0` below = +12 dB, the same total as the
+    # wake word and the intercom shift. This was unity on the grounds that
+    # `auto_gain` already AGCs the pipeline, which is true but arrives late: the
+    # AGC and the VAD both work better fed a signal that is already up, and STT
+    # accuracy on a far voice was what prompted this. Both stages saturate, and
+    # +12 dB is the measured clipping-free ceiling — see the wake word above.
+    gain_factor: 2
   media_player: voice_player
   noise_suppression_level: 2
   auto_gain: 31dBFS
@@ -338,11 +370,18 @@ voice_assistant:
   # Microphone released — HA is now thinking, which can take ten seconds or more.
   # Bring music straight back to full for that stretch. Nothing needs quiet here,
   # and a near-silent line is what lets a powered speaker with auto-standby drop
-  # out; it then eats the first half second of the reply waking back up.
+  # out; it then eats the first half second of the reply waking back up. The
+  # built-in ZK-502MT is expected to have no standby, so this should no longer be
+  # what saves the reply —
+  # it is kept because a line-out build into a powered speaker still needs it.
+  #
+  # This said 15 while the comment said "back to full" — it never un-ducked.
+  # It matters beyond music: intercom broadcasts play through media_src too, so
+  # a run that ends without on_end/on_error left every later broadcast 15 dB down.
   on_stt_vad_end:
     - mixer_speaker.apply_ducking:
         id: media_src
-        decibel_reduction: 15
+        decibel_reduction: 0
         duration: 0.3s
 
   # The reply is about to play — duck again so it is intelligible over the music.
@@ -428,15 +467,17 @@ voice_assistant:
 #   tap (< 1.2 s)   → talk to Assist, same as saying "okay nabu"
 #   hold (≥ 1.2 s)  → record while held and broadcast to the other devices
 #
-# Wire: GPIO21 → button → GND (internal pull-up, active LOW).
+# Wire: GPIO18 → button → GND (internal pull-up, active LOW).
 #
 # NOT 38 or 39, measured: with the switch open both flicker at 20-30 edges/s
 # continuously, sub-2 ms glitches included — a floating input, not bounce. They
 # are the first pads past the MSPI block (26-37, soc/esp32s3/spi_pins.h) and this
 # module's octal PSRAM keeps that bus switching at 40 MHz, which a pin held only
-# by the ~45 kOhm internal pull-up is too high-impedance to sit beside. GPIO21 is
-# the last RTC-domain pad (SOC_RTCIO_PIN_COUNT 22), well away from MSPI, and
-# reads rock-solid. GPIO33-37 remain hard-off-limits: PSRAM owns them.
+# by the ~45 kOhm internal pull-up is too high-impedance to sit beside. GPIO18 is
+# in the RTC domain (pads 0-21, SOC_RTCIO_PIN_COUNT 22), well away from MSPI.
+# Any free RTC pad behaves the same: 1, 2, 4, 8, 9, 13-18, 21 — 5/6/7/10/11/12 are
+# the I2S buses, 0/3 strapping, 19/20 USB, and 22-25 do not exist on the S3.
+# GPIO33-37 remain hard-off-limits: PSRAM owns them.
 #
 globals:
   - id: intercom_recording
@@ -533,7 +574,7 @@ binary_sensor:
     id: ptt_button
     name: "Button"
     pin:
-      number: GPIO21
+      number: GPIO18
       mode: INPUT_PULLUP
       inverted: true
     filters:

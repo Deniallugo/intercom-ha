@@ -18,9 +18,11 @@ Three stages, in this order:
                    between words goes quiet instead of hissing. A *downward
                    expander*, not a hard gate: gain moves continuously with
                    level, which is what stops speech onsets from being chopped.
-  3. normalise   — one scale factor to bring the peak to TARGET_PEAK. Computed
-                   in float over the whole buffer, so unlike device-side gain it
-                   can never clip, and unlike an AGC it never pumps.
+  3. normalise   — one scale factor to bring speech to a fixed level, with
+                   a lookahead peak limiter holding TARGET_PEAK. Computed in
+                   float over the whole buffer, so unlike device-side gain it
+                   can never clip. Also available alone as level(), which is
+                   what a broadcast gets when the cleanup is turned off.
 
 Length, sample rate and format are preserved exactly, so callers can keep using
 the same duration arithmetic.
@@ -59,7 +61,7 @@ HIGHPASS_HZ = 80.0
 #      24   2.0   -6.8 dB  -3.3 dB  +3.5 dB
 #
 # More bands buy nothing and cost time linearly (0.18s at 8, 0.52s at 24), so
-# 8 it is. The voice loss is given back by _restore_level, leaving hiss ~4 dB
+# 8 it is. The voice loss is given back by _set_level, leaving hiss ~4 dB
 # down. That is a real, audible improvement and also close to the ceiling: the
 # microphone only delivers 10-13 dB of SNR, so there is not much more to win
 # without artefacts.
@@ -149,16 +151,40 @@ ATTACK_MS = 5.0
 RELEASE_MS = 40.0
 
 # ── Normalise ────────────────────────────────────────────────────────────────
-# This stage restores the speech to the level it arrived at — it does NOT make
-# the broadcast louder. Getting this wrong is what made the first version sound
-# like "louder, including the noise": it normalised to a fixed target, which on
-# this material demanded 6x make-up and lifted the suppressed floor right back
-# up with the voice. The expander lowers the noise; nothing here is allowed to
-# undo that.
+# With the cleanup on, speech is brought to this RMS (-20.8 dBFS), measured as
+# the p90 frame level.
 #
-# Level is the device's job (a small fixed shift) and the media player's. If a
-# broadcast genuinely needs more, raise this — in dB, so it is obvious that it
-# costs noise.
+# It has to be an absolute target, because the broadcast shares a media player
+# with music: measured, a raw upload is -26 to -29 dBFS RMS and the cleanup
+# takes it to -37, while music masters sit near -12 dBFS and the chime around
+# this file's own -9.5. At one volume setting that makes the chime audible and
+# the speech inaudible — which is exactly how this reads on a real speaker.
+#
+# An earlier version DID normalise, was reverted for sounding "louder, including
+# the noise", and that was fair at the time: the noise reduction then was 0.2 dB,
+# so gain brought the hiss up with the voice 1:1. It is safe now only because
+# the band subtraction and the expander run FIRST — measured, speech ends up
+# 1.6-10.5 dB louder than the untouched original while the noise floor stays
+# 6.8-19.4 dB BELOW it. Order is what makes this legitimate; do not move it.
+TARGET_SPEECH_RMS = 3000.0
+
+# Without the cleanup (level(), the default), speech goes to -16 dBFS instead.
+# Measured: raw uploads carry speech at -27 to -31 dBFS against a chime
+# (chimes.py, half scale) near -9. On voice-s3's 2 x 50 W amplifier that gap is
+# merely uneven; on the Atom Echo's small speaker, already near the top of its
+# volume for the chime, speech was audible only if the talker had been right on
+# the mic. This path makes no claim about the noise floor — there is no noise
+# reduction to pay for the gain, so the hiss comes up with the voice. That is
+# the trade for a broadcast that can be heard; turn the cleanup on to get both.
+#
+# Speech has a 16-17 dB crest factor, so a plain scale factor bounded by the
+# -3 dBFS ceiling cannot get it above about -20 dBFS; the peak limiter in
+# _set_level is what buys the rest, pulling down the odd plosive instead of the
+# whole broadcast.
+LEVEL_SPEECH_RMS = 5200.0
+
+# Trim on top of the target, in dB, if broadcasts want to be generally louder
+# or quieter. Bounded by the peak ceiling and MAX_MAKEUP regardless.
 MAKEUP_DB = 0.0
 
 # -3 dBFS ceiling. Leaves headroom for the chimes concatenated around this
@@ -194,9 +220,9 @@ def process(pcm: bytes, *, sample_rate: int, enabled: bool = True) -> bytes:
 
     work = _highpass(samples, sample_rate)
 
-    # `speech` is measured here, before anything attenuates, and handed to
-    # _restore_level so the voice ends up exactly where it started — see
-    # MAKEUP_DB. Everything between the two only ever takes level away.
+    # `floor`/`speech` set the expander threshold. Level is no longer derived
+    # from them — _set_level aims at an absolute target instead, because the
+    # broadcast has to hold its own against music on the same media player.
     floor, speech, thresh = _measure(work, sample_rate)
 
     # Multiband subtraction first: it is the only stage that reduces noise while
@@ -212,11 +238,34 @@ def process(pcm: bytes, *, sample_rate: int, enabled: bool = True) -> bytes:
 
     if thresh > 0:
         _expand(work, sample_rate, thresh)
-    scale = _restore_level(work, sample_rate, speech)
+    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS)
 
     log.info("denoise: floor %.0f  speech %.0f  thresh %.0f  level x%.2f",
              floor, speech, thresh, scale)
     # work holds float64; to_pcm rounds and clamps it back to int16.
+    return to_pcm(work)
+
+
+def level(pcm: bytes, *, sample_rate: int) -> bytes:
+    """High-pass and normalise only — the cleanup's level stage on its own.
+
+    What a broadcast gets with `denoise: false`: no band subtraction, no
+    expander, nothing that changes the character of the sound, but the speech
+    still lands at TARGET_SPEECH_RMS like a cleaned broadcast would. Same
+    pass-through guarantees as process().
+    """
+    if len(pcm) < 4:
+        return pcm
+    n = len(pcm) // 2
+    try:
+        samples = array.array("h")
+        samples.frombytes(pcm[: n * 2])
+    except (ValueError, struct.error) as e:
+        log.warning("level: cannot unpack PCM (%s) — passing through", e)
+        return pcm
+    work = _highpass(samples, sample_rate)
+    scale = _set_level(work, sample_rate, LEVEL_SPEECH_RMS)
+    log.info("level: x%.2f", scale)
     return to_pcm(work)
 
 
@@ -367,17 +416,17 @@ def _expand(work: "array.array", sample_rate: int, thresh: float) -> None:
             work[i] *= gain
 
 
-def _restore_level(work: "array.array", sample_rate: int, was: float) -> float:
-    """Bring speech back to `was` (its level before expansion). Returns the factor.
+def _set_level(work: "array.array", sample_rate: int, target: float) -> float:
+    """Bring speech to `target` RMS. Returns the factor applied.
 
-    Deliberately NOT a normaliser: the target is the level the audio already
-    had, so the only audible change is that the noise between words is quieter.
-    MAKEUP_DB adds deliberate extra level on top if it is set.
+    Runs LAST, after the noise has been suppressed — see TARGET_SPEECH_RMS for
+    why that order is the whole justification for touching level at all.
 
     Bounds that have each mattered: the peak may not exceed TARGET_PEAK (the
-    chimes still have to fit, and nothing may clip), the factor is capped at
-    MAX_MAKEUP, and a buffer with no speech in it is left alone so a dead mic is
-    never presented as full-scale hiss.
+    chimes still have to fit, and nothing may clip) — held by _limit rather than
+    by shrinking the factor, so one plosive cannot keep the whole broadcast
+    quiet; the factor is capped at MAX_MAKEUP; and a buffer with no speech in it
+    is left alone so a dead mic is never presented as full-scale hiss.
     """
     peak = 0.0
     for v in work:
@@ -391,15 +440,61 @@ def _restore_level(work: "array.array", sample_rate: int, was: float) -> float:
 
     rms = _frame_rms(work, sample_rate)
     now = rms[min(len(rms) - 1, int(len(rms) * SPEECH_PERCENTILE))] if rms else 0.0
-    wanted = (was / now) if now > 0 else 1.0
+    wanted = (target / now) if now > 0 else 1.0
     wanted *= 10.0 ** (MAKEUP_DB / 20.0)
-    scale = min(MAX_MAKEUP, wanted, TARGET_PEAK / peak)
-    if scale == 1.0:
-        return 1.0
+    scale = min(MAX_MAKEUP, wanted)
 
-    for i, v in enumerate(work):
-        work[i] = v * scale
+    if scale != 1.0:
+        for i, v in enumerate(work):
+            work[i] = v * scale
+    if peak * scale > TARGET_PEAK:
+        _limit(work, sample_rate, TARGET_PEAK)
     return scale
+
+
+# Peak limiter timing. The lookahead lets the gain be fully down by the time a
+# peak arrives (no overshoot, so TARGET_PEAK is a hard ceiling), and the release
+# is slow enough not to flutter on a voiced syllable's individual cycles.
+LIMIT_LOOKAHEAD_MS = 2.0
+LIMIT_RELEASE_MS = 80.0
+
+
+def _limit(work: "array.array", sample_rate: int, ceiling: float) -> None:
+    """Hold |work| <= ceiling with a lookahead peak limiter, in place.
+
+    Per sample, the gain needed to keep that sample under the ceiling; the
+    minimum of that over +-lookahead, so the gain is already down before a peak
+    and still down just after it; then an upward-only release, so recovery is
+    smooth. Every output gain is <= the window minimum, so nothing can exceed
+    the ceiling.
+    """
+    n = len(work)
+    look = max(1, int(sample_rate * LIMIT_LOOKAHEAD_MS / 1000.0))
+    rel = 1.0 - math.exp(-1.0 / (sample_rate * LIMIT_RELEASE_MS / 1000.0))
+
+    need = [1.0] * n
+    for i, v in enumerate(work):
+        av = -v if v < 0 else v
+        if av > ceiling:
+            need[i] = ceiling / av
+
+    # Sliding-window minimum over [i - look, i + look] (monotonic deque).
+    from collections import deque
+    q = deque()
+    env = 1.0
+    for j in range(n + look):
+        if j < n:
+            while q and need[q[-1]] >= need[j]:
+                q.pop()
+            q.append(j)
+        i = j - look
+        if i < 0:
+            continue
+        while q[0] < i - look:
+            q.popleft()
+        g = need[q[0]]
+        env = g if g < env else env + (g - env) * rel
+        work[i] *= env
 
 
 def to_pcm(work) -> bytes:
