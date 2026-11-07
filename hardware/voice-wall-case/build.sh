@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+OPENSCAD="${OPENSCAD:-$(command -v openscad || echo /Applications/OpenSCAD-2021.01.app/Contents/MacOS/OpenSCAD)}"
+[ -x "$OPENSCAD" ] || { echo "OpenSCAD not found (set \$OPENSCAD)"; exit 1; }
+cd "$(dirname "$0")"
+mkdir -p stl
+PARTS="amp-shell amp-lid amp-sled voice-shell voice-lid voice-tray sleeve plunger dome holder clamp plate lock coupon-amp coupon-voice"
+for part in $PARTS; do
+    echo "rendering $part ..."
+    "$OPENSCAD" -D "part=\"$part\"" -o "stl/$part.stl" voice-wall-case.scad
+done
+echo "done -> stl/"
