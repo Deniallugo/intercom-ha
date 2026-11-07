@@ -107,35 +107,32 @@ tag (see `.github/workflows/build.yml`).
 | `channels` | `1` | Channel count |
 | `tts_engine` | `tts.piper` | HA TTS engine for text announcements |
 | `keep_recordings` | `10` | Mic recordings retained for playback in the panel (`0` disables) |
-| `denoise` | `false` | Clean up broadcast audio: high-pass, band subtraction, expander, level. Off — no noise reduction, but speech is still levelled to −16 dBFS |
+| `denoise` | `true` | Clean up broadcast audio: high-pass, band subtraction, expander, level to −16 dBFS. Off — no noise reduction, but speech is still levelled to −16 dBFS |
 
 ### Broadcast cleanup
 
-**Off by default.** With `denoise: false` a broadcast gets no noise reduction,
-so a mic that has gone wrong is audible as a mic that has gone wrong. It still
-gets its **level** set (`denoise.level()`): a high-pass, then speech brought to
-−16 dBFS with a lookahead peak limiter holding −3 dBFS. Measured, raw uploads
-carry speech at −21 to −33 dBFS against a chime near −9; on the Atom Echo's
-small speaker that made a broadcast audible only if the talker had been right
-on the mic. The hiss comes up with the voice — there is no noise reduction to
-pay for the gain. The retained recording stays the raw upload either way.
+**On by default.** Every broadcast has its speech brought to **−16 dBFS**,
+with a lookahead peak limiter holding −3 dBFS. Measured, raw uploads carry
+speech at −21 to −33 dBFS against a chime near −9; on the Atom Echo's small
+speaker that made a broadcast audible only if the talker had been right on the
+mic. The cleanup is what lets that gain happen without the hiss coming up with
+it — measured on voice-s3 in its case, at the same −16 dBFS of speech:
 
-Everything below is what `denoise: true` turns on (to a gentler −20.8 dBFS,
-which keeps the noise floor below the raw original).
+| | speech | floor between words |
+|---|---|---|
+| raw upload | −31.0 dBFS | −57.8 dBFS |
+| `denoise: false` (level only) | −16.0 | −42.9 |
+| `denoise: true` | −16.2 | **−60.2** |
 
-Raw has one consequence worth knowing: without stage 4 nothing sets the level,
-so speech arrives wherever the device captured it — which is why the device-side
-gain is +12 dB rather than +6 (`devices/voice-s3.yaml`, `>> 14`). That puts a
-healthy capture at −20.8 dBFS, the same level stage 4 aims for, about 11 dB
-below the chime. Lower the chime amplitude in `chimes.py` rather than reaching
-for the cleanup if that gap is the only thing you want fixed.
+With `denoise: false` a broadcast still gets the level (`denoise.level()`), but
+no noise reduction, so a mic that has gone wrong is audible as one. The retained
+recording is the raw upload either way.
 
 The INMP441 has no gain control, and device-side digital gain buys level but not
 clarity: SNR was 13-15 dB at unity, at +18 dB and at +36 dB alike, because gain
 lifts the noise floor with the signal. So the device takes a fixed +12 dB — the
-measured clipping-free ceiling, and enough to land speech at the same
-−20.8 dBFS the cleanup targets — while the noise work happens in the add-on,
-where there is CPU to spare and float headroom.
+measured clipping-free ceiling — while the level and the noise work happen in
+the add-on, where there is CPU to spare and float headroom.
 
 `denoise.py` runs four stages over each upload before it is broadcast:
 
@@ -152,7 +149,8 @@ where there is CPU to spare and float headroom.
    *geometric mean* of the measured floor and the measured speech level (their
    midpoint in dB); a fixed multiple of the floor landed above the speech on
    real captures and attenuated everything equally, achieving nothing.
-4. **set level** — brings speech to `TARGET_SPEECH_RMS` (−20.8 dBFS).
+4. **set level** — brings speech to `TARGET_SPEECH_RMS` (−16 dBFS), with a
+   lookahead limiter holding −3 dBFS peaks.
 
 Stage 4 has to use an absolute target because the broadcast shares a media
 player with music. Measured: a raw upload is −26 to −29 dBFS RMS and the cleanup
@@ -162,8 +160,11 @@ one volume setting that makes the chime audible and the speech inaudible.
 Raising the level is only legitimate **because it runs last**, on already-quiet
 noise. An earlier version normalised before the band subtraction existed and
 sounded like "louder, including the noise" — correctly, since the noise
-reduction then was 0.2 dB. Now speech ends up 1.6–5 dB above the untouched
-original while the noise floor sits 9–17 dB *below* it. Don't reorder these.
+reduction then was 0.2 dB. Now, on real captures, speech ends up 11–15 dB above
+the untouched original while the floor between words stays 1–4 dB *below* it.
+On synthetic white noise it can land ~2 dB above — real mic noise is
+rumble-heavy, which the band subtraction handles far better — so the tests
+bound that at +3 dB. Don't reorder these.
 
 The band split is complementary — each band is a one-pole low-pass of what is
 left, subtracted from the residual — so with all gains at 1 the bands sum back
@@ -173,7 +174,7 @@ ripple that colours the voice even when nothing is being attenuated.
 Measured against a high-passed reference across eight real captures: **audible
 hiss (1-8 kHz median) 7-12 dB down, voice level within ±0.5 dB, and the gaps
 between words 11-14 dB quieter** without going dead. ~0.22 s of CPU per 5 s
-upload. Set `denoise: true` to put it back in the broadcast path.
+upload. Set `denoise: false` to take it out of the broadcast path.
 
 Both `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` are taste calls, swept and
 documented in the module: raise them if the gaps sound abrupt, lower them if

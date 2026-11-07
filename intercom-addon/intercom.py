@@ -36,11 +36,13 @@ OPTIONS_FILE = "/data/options.json"
 CONFIG_WWW = "/config/www"
 PICKER_HTML_FILE = Path(__file__).parent / "picker.html"
 
-# Whether to clean up broadcast audio when the option is absent. Off: no noise
-# reduction, so a mic fault reaches the speakers plainly instead of being
-# half-hidden by processing. The LEVEL is still set either way
-# (denoise.level) — the raw upload is far too quiet for a small speaker.
-DEFAULT_DENOISE = False
+# Whether to clean up broadcast audio when the option is absent. On: speech is
+# brought to -16 dBFS either way (a raw upload is far too quiet for a small
+# speaker), and without the cleanup the hiss comes up with it — measured on
+# voice-s3 in its case, a -42.9 dBFS floor instead of -60.2. The retained
+# recording stays raw regardless, so mic faults remain visible there; turn this
+# off to hear them in the broadcast too.
+DEFAULT_DENOISE = True
 
 # How many mic recordings to retain when the option is absent. 0 disables
 # retention entirely.

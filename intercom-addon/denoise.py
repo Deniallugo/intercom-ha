@@ -151,37 +151,30 @@ ATTACK_MS = 5.0
 RELEASE_MS = 40.0
 
 # ── Normalise ────────────────────────────────────────────────────────────────
-# With the cleanup on, speech is brought to this RMS (-20.8 dBFS), measured as
-# the p90 frame level.
+# Speech is brought to this RMS (-16 dBFS), measured as the p90 frame level —
+# by process() after the cleanup, and by level() when the cleanup is off.
 #
 # It has to be an absolute target, because the broadcast shares a media player
-# with music: measured, a raw upload is -26 to -29 dBFS RMS and the cleanup
-# takes it to -37, while music masters sit near -12 dBFS and the chime around
-# this file's own -9.5. At one volume setting that makes the chime audible and
-# the speech inaudible — which is exactly how this reads on a real speaker.
+# with music and follows a chime: measured, raw uploads carry speech at -21 to
+# -33 dBFS, while music masters sit near -12 dBFS and the chime (chimes.py, half
+# scale) near -9. On voice-s3's 2 x 50 W amplifier that gap is merely uneven; on
+# the Atom Echo's small speaker it made speech audible only if the talker had
+# been right on the mic.
 #
-# An earlier version DID normalise, was reverted for sounding "louder, including
-# the noise", and that was fair at the time: the noise reduction then was 0.2 dB,
-# so gain brought the hiss up with the voice 1:1. It is safe now only because
-# the band subtraction and the expander run FIRST — measured, speech ends up
-# 1.6-10.5 dB louder than the untouched original while the noise floor stays
-# 6.8-19.4 dB BELOW it. Order is what makes this legitimate; do not move it.
-TARGET_SPEECH_RMS = 3000.0
-
-# Without the cleanup (level(), the default), speech goes to -16 dBFS instead.
-# Measured: raw uploads carry speech at -27 to -31 dBFS against a chime
-# (chimes.py, half scale) near -9. On voice-s3's 2 x 50 W amplifier that gap is
-# merely uneven; on the Atom Echo's small speaker, already near the top of its
-# volume for the chime, speech was audible only if the talker had been right on
-# the mic. This path makes no claim about the noise floor — there is no noise
-# reduction to pay for the gain, so the hiss comes up with the voice. That is
-# the trade for a broadcast that can be heard; turn the cleanup on to get both.
+# Raising level raises the noise with it unless something pays for it first,
+# and the cleanup is what pays: measured on real captures at this target, speech
+# ends up 11-15 dB louder than it arrived while the floor between words stays
+# 1-4 dB BELOW the raw original (voice-s3 in its case: -60.2 dBFS against -57.8
+# raw, and against -42.9 with level() alone at the same loudness). On synthetic
+# white noise the floor can end up ~2 dB above the original — real mic noise is
+# rumble-heavy, which the band subtraction handles far better than flat hiss —
+# so the tests bound that at +3 dB rather than demanding it stay below.
 #
 # Speech has a 16-17 dB crest factor, so a plain scale factor bounded by the
 # -3 dBFS ceiling cannot get it above about -20 dBFS; the peak limiter in
 # _set_level is what buys the rest, pulling down the odd plosive instead of the
 # whole broadcast.
-LEVEL_SPEECH_RMS = 5200.0
+TARGET_SPEECH_RMS = 5200.0
 
 # Trim on top of the target, in dB, if broadcasts want to be generally louder
 # or quieter. Bounded by the peak ceiling and MAX_MAKEUP regardless.
@@ -251,8 +244,9 @@ def level(pcm: bytes, *, sample_rate: int) -> bytes:
 
     What a broadcast gets with `denoise: false`: no band subtraction, no
     expander, nothing that changes the character of the sound, but the speech
-    still lands at TARGET_SPEECH_RMS like a cleaned broadcast would. Same
-    pass-through guarantees as process().
+    still lands at TARGET_SPEECH_RMS like a cleaned broadcast would — the hiss
+    rises with it, since nothing has lowered it first. Same pass-through
+    guarantees as process().
     """
     if len(pcm) < 4:
         return pcm
@@ -264,7 +258,7 @@ def level(pcm: bytes, *, sample_rate: int) -> bytes:
         log.warning("level: cannot unpack PCM (%s) — passing through", e)
         return pcm
     work = _highpass(samples, sample_rate)
-    scale = _set_level(work, sample_rate, LEVEL_SPEECH_RMS)
+    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS)
     log.info("level: x%.2f", scale)
     return to_pcm(work)
 
