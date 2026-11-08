@@ -15,23 +15,14 @@ arch:
   - aarch64
   - amd64
 options:
-  ha_url: "http://homeassistant.local:8123"
-  port: 9999
-  sample_rate: 16000
-  bits_per_sample: 16
-  channels: 1
   tts_engine: "tts.piper"
-  keep_recordings: 10
+  keep_recordings: 0
   denoise: true
 schema:
-  ha_url: str
-  port: int
-  sample_rate: int(8000,48000)
-  bits_per_sample: int(16,16)
-  channels: int(1,1)
   tts_engine: str
   keep_recordings: int(0,200)
   denoise: bool
+  lan_token: password?
 map:
   - config:rw
 ports:

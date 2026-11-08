@@ -9,7 +9,8 @@ from aiohttp import ClientSession, ClientTimeout
 
 log = logging.getLogger(__name__)
 
-SUPERVISOR_CORE = "http://supervisor/core"
+SUPERVISOR = "http://supervisor"
+SUPERVISOR_CORE = f"{SUPERVISOR}/core"
 HA_API = f"{SUPERVISOR_CORE}/api"
 # REST has no device/entity registry; only the WebSocket API does.
 SUPERVISOR_WS = "ws://supervisor/core/websocket"
@@ -141,6 +142,29 @@ class HAClient:
         if audio_resp.status != 200:
             raise RuntimeError(f"tts audio fetch returned {audio_resp.status}")
         return await audio_resp.read()
+
+    async def get_core_config(self) -> dict:
+        """HA's /api/config (location, version, internal_url, external_url…)."""
+        resp = await self.session.get(
+            f"{HA_API}/config", headers=self._auth_headers()
+        )
+        if resp.status != 200:
+            raise RuntimeError(f"supervisor /core/api/config returned {resp.status}")
+        return await resp.json()
+
+    async def supervisor_get(self, path: str) -> dict:
+        """GET a Supervisor API path (e.g. /addons/self/info) and return its
+        "data". Any add-on may read */info endpoints."""
+        resp = await self.session.get(
+            f"{SUPERVISOR}{path}", headers=self._auth_headers()
+        )
+        if resp.status != 200:
+            raise RuntimeError(f"supervisor {path} returned {resp.status}")
+        body = await resp.json()
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, dict):
+            raise RuntimeError(f"supervisor {path}: no data in response")
+        return data
 
     async def ws_commands(self, *types: str) -> list:
         """Run argument-less WebSocket commands on one connection and return

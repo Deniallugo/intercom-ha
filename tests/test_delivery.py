@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "intercom-addon"))
 import intercom as srv  # noqa: E402
 import players as players_mod  # noqa: E402
 from airtime import Airtime  # noqa: E402
+from conftest import MEDIA_BASE  # noqa: E402
 
 ANNOUNCE = srv.MEDIA_ANNOUNCE
 # PAUSE | VOLUME_SET | PLAY_MEDIA | PLAY ... without MEDIA_ANNOUNCE (e.g. Cast)
@@ -93,7 +94,13 @@ def www_dir(monkeypatch, tmp_path):
 
 @pytest.fixture
 def fake_options(monkeypatch):
-    monkeypatch.setattr(srv, "load_options", lambda: {"ha_url": "http://ha.test:8123"})
+    monkeypatch.setattr(srv, "load_options", lambda: {})
+
+
+def served(label: str) -> str:
+    """The URL players got for the media published as `label`."""
+    [name] = [n for n, lab in srv.media_store.items() if lab == label]
+    return f"{MEDIA_BASE}/media/{name}"
 
 
 @pytest.fixture
@@ -138,7 +145,7 @@ async def test_announce_capable_player_gets_announce_and_no_ducking(
     results = await srv._play_on_targets(b"RIFF", "wav", 1.0, ["media_player.echo"], name="t1")
 
     fake_ha.play_media.assert_awaited_once_with(
-        "media_player.echo", "http://ha.test:8123/local/t1.wav", announce=True)
+        "media_player.echo", served("t1"), announce=True)
     # The player keeps its own music: no snapshot, pause or resume.
     fake_ha.get_state.assert_not_called()
     fake_ha.pause.assert_not_called()
@@ -154,7 +161,7 @@ async def test_player_without_announce_falls_back_to_ducker(
     results = await srv._play_on_targets(b"RIFF", "wav", 0.1, ["media_player.cast"], name="t2")
 
     fake_ha.play_media.assert_awaited_once_with(
-        "media_player.cast", "http://ha.test:8123/local/t2.wav")
+        "media_player.cast", served("t2"))
     fake_ha.pause.assert_awaited_once_with("media_player.cast")
     assert results["media_player.cast"]["via"] == "duck"
     await asyncio.sleep(1.8)                       # 0.1 + 1.5 s restore
@@ -180,7 +187,7 @@ async def test_unreadable_states_fall_back_to_the_old_path(
     fake_ha.get_states.side_effect = RuntimeError("503")
     results = await srv._play_on_targets(b"RIFF", "wav", 1.0, ["media_player.x"], name="t4")
     fake_ha.play_media.assert_awaited_once_with(
-        "media_player.x", "http://ha.test:8123/local/t4.wav")
+        "media_player.x", served("t4"))
     assert results["media_player.x"]["outcome"] == "ok"
 
 
@@ -236,13 +243,13 @@ async def test_busy_speaker_queues_instead_of_cutting_off(
     assert queued["outcome"] == "queued" and queued["ok"] is None
     assert 0.2 < queued["wait"] <= 0.4
     # Not yet sent to the busy speaker.
-    assert [c.args[1].rsplit("/", 1)[1] for c in fake_ha.play_media.await_args_list] == [
-        "p1.wav", "p2.wav"]
+    assert [c.args[1] for c in fake_ha.play_media.await_args_list] == [
+        served("p1"), served("p2")]
     assert fast_delete == [] or len(fast_delete) == 1      # p1's file only
 
     await asyncio.sleep(0.6)
-    urls = [(c.args[0], c.args[1].rsplit("/", 1)[1]) for c in fake_ha.play_media.await_args_list]
-    assert urls[-1] == ("media_player.a", "p2.wav")
+    urls = [(c.args[0], c.args[1]) for c in fake_ha.play_media.await_args_list]
+    assert urls[-1] == ("media_player.a", served("p2"))
     # The queued entry is replaced in place (it is the same dict that
     # last_broadcast holds).
     assert second["media_player.a"] == {

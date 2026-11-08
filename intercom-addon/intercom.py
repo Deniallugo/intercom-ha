@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import re
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from aiohttp import web
+from aiohttp.abc import AbstractAccessLogger
 
 from ha_client import HAClient
 from chimes import ChimeMixer
@@ -19,18 +21,25 @@ import channel
 import players
 import announce
 import denoise
+import media
 import recordings
 
 ha = HAClient()
 
-# Default format at import (so tests can call handlers directly); _run()
-# rebuilds it from options.json.
-mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
+# Uploads are 16-bit mono PCM; the rate comes per request in X-Sample-Rate
+# (firmware without the header records at 16 kHz). Announcements use `mixer`.
+DEFAULT_SAMPLE_RATE = 16000
+# Standard rates only: each gets its own cached chimes.
+SAMPLE_RATES = frozenset({8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000})
+mixer = ChimeMixer(sample_rate=DEFAULT_SAMPLE_RATE, sample_width=2, channels=1)
+_mixers: dict[int, ChimeMixer] = {DEFAULT_SAMPLE_RATE: mixer}
 # Fallback for players without MEDIA_ANNOUNCE: pause, play, resume.
 ducker = Ducker(ha)
 # One broadcast at a time per speaker; later ones wait (bounded).
 airtime = Airtime()
 talkback = TalkbackWindows()
+media_store = media.MediaStore()
+lan_address = media.LanAddress()
 
 # In-memory, per source: {"last_seen": unix_ts, "last_broadcast": {...}}.
 activity: dict[str, dict] = {}
@@ -54,7 +63,14 @@ PICKER_HTML_FILE = Path(__file__).parent / "picker.html"
 # (voice-s3: -42.9 dBFS floor instead of -60.2).
 DEFAULT_DENOISE = True
 
-DEFAULT_KEEP_RECORDINGS = 10
+# Off by default: every conversation on disk is a privacy cost to opt into.
+DEFAULT_KEEP_RECORDINGS = 0
+
+# A served media name lives this long past the audio's end (players may start
+# late; the name is unguessable). The /config/www fallback is public, so it
+# keeps the old short window.
+MEDIA_GRACE_SECONDS = 60.0
+WWW_GRACE_SECONDS = 10.0
 
 # X-Session-ID ends up in a /config/www filename: reject anything that could
 # traverse out of it.
@@ -69,6 +85,36 @@ STATES_TIMEOUT = 2.0
 
 def safe_session_id(raw: str) -> str:
     return raw if _SAFE_SESSION_ID.match(raw) else str(uuid.uuid4())
+
+
+def parse_sample_rate(raw: Optional[str]) -> Optional[int]:
+    """X-Sample-Rate -> Hz; DEFAULT_SAMPLE_RATE if absent, None if invalid."""
+    if raw is None or not raw.strip():
+        return DEFAULT_SAMPLE_RATE
+    try:
+        rate = int(raw.strip())
+    except ValueError:
+        return None
+    return rate if rate in SAMPLE_RATES else None
+
+
+def mixer_for(sample_rate: int) -> ChimeMixer:
+    """16-bit mono mixer at `sample_rate` (chimes are rendered once per rate)."""
+    mx = _mixers.get(sample_rate)
+    if mx is None:
+        mx = _mixers[sample_rate] = ChimeMixer(
+            sample_rate=sample_rate, sample_width=2, channels=1)
+    return mx
+
+
+def lan_token() -> str:
+    """Shared secret for the LAN port; '' = no authentication."""
+    try:
+        value = load_options().get("lan_token") or ""
+    except (OSError, json.JSONDecodeError, AttributeError) as e:
+        log.warning("could not read the lan_token option (%s) — auth off", e)
+        return ""
+    return value.strip() if isinstance(value, str) else ""
 
 
 def load_options() -> dict:
@@ -191,24 +237,30 @@ async def handle_intercom(request: web.Request) -> web.Response:
     source = (request.headers.get("X-Device-Name") or "unknown").strip() or "unknown"
     want_reply = (request.path.rstrip("/").endswith("/reply")
                   or _truthy(request.headers.get("X-Intercom-Reply")))
+    rate = parse_sample_rate(request.headers.get("X-Sample-Rate"))
+    if rate is None:
+        return web.json_response(
+            {"error": f"X-Sample-Rate must be one of {sorted(SAMPLE_RATES)}"},
+            status=400)
+    mx = mixer_for(rate)
 
     pcm = await request.read()
     # Whole frames only: a stray odd byte would shift the closing chime by one
     # byte and play it as noise.
-    frame = mixer.sample_width * mixer.channels
+    frame = mx.sample_width * mx.channels
     pcm = pcm[: len(pcm) - len(pcm) % frame]
     if not pcm:
         log.warning("empty body from session=%s, ignoring", session_id[:8])
         return web.Response(status=400)
 
-    duration = mixer.pcm_duration_seconds(pcm)
-    log.info("received  session=%s  source=%s  pcm=%d bytes  duration=%.1fs",
-             session_id[:8], source, len(pcm), duration)
+    duration = mx.pcm_duration_seconds(pcm)
+    log.info("received  session=%s  source=%s  pcm=%d bytes  %d Hz  duration=%.1fs",
+             session_id[:8], source, len(pcm), rate, duration)
 
     # Saved before routing, so it survives a failed broadcast.
     try:
         kept = recordings.save(
-            mixer.build_plain_wav(pcm),
+            mx.build_plain_wav(pcm),
             source=source,
             session_id=session_id,
             keep=keep_recordings(),
@@ -253,16 +305,16 @@ async def handle_intercom(request: web.Request) -> web.Response:
     try:
         if denoise_enabled():
             clean = await asyncio.to_thread(
-                denoise.process, pcm, sample_rate=mixer.sample_rate)
+                denoise.process, pcm, sample_rate=rate)
         else:
             clean = await asyncio.to_thread(
-                denoise.level, pcm, sample_rate=mixer.sample_rate)
+                denoise.level, pcm, sample_rate=rate)
     except Exception:
         log.exception("denoise failed — broadcasting raw audio")
         clean = pcm
 
-    wav = mixer.build_wav(clean)
-    total_duration = mixer.total_duration_seconds(clean)
+    wav = mx.build_wav(clean)
+    total_duration = mx.total_duration_seconds(clean)
     log.info("WAV built  %s  (%.2fs incl. chimes)", session_id[:8], total_duration)
 
     results = await _play_on_targets(
@@ -308,7 +360,8 @@ def delivery_counts(results: dict) -> dict:
 
 
 async def handle_announce(request: web.Request) -> web.Response:
-    """Speak `text` via TTS on `targets` (all media players if omitted)."""
+    """Speak `text` via TTS on `targets`; omitted or empty = every intercom
+    device (the channel), never every media_player in HA."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -328,15 +381,12 @@ async def handle_announce(request: web.Request) -> web.Response:
             status=400,
         )
     if not targets:
-        try:
-            available = await fetch_media_players()
-        except Exception as e:
-            log.error("announce: failed to fetch media players: %s", e)
-            return web.json_response({"error": str(e)}, status=502)
-        targets = [p["entity_id"] for p in available]
+        state = players.load_players()
+        members, _ = await registry_members()
+        targets = channel.channel_players(state, members) or list(state["default"])
 
     if not targets:
-        log.warning("announce: no media players available; skipping")
+        log.warning("announce: no intercom devices known; skipping")
         return web.Response(status=204)
 
     opts = load_options()
@@ -349,10 +399,16 @@ async def handle_announce(request: web.Request) -> web.Response:
 
     wav, ext, duration = announce.build_announcement_wav(audio, mixer)
     log.info("announce  text=%r  targets=%d", text[:40], len(targets))
-    await _play_on_targets(
+    results = await _play_on_targets(
         wav, ext, duration, targets, name=f"announce-{uuid.uuid4()}"
     )
-    return web.Response(status=204)
+    # Same contract as /intercom: 502 only if nobody was (or will be) reached.
+    counts = delivery_counts(results)
+    ok = counts["delivered"] or counts["queued"]
+    body = {"targets": list(targets), "results": results, **counts}
+    if not ok:
+        body["error"] = "not delivered to any speaker"
+    return web.json_response(body, status=200 if ok else 502)
 
 
 async def handle_devices_get(request: web.Request) -> web.Response:
@@ -465,7 +521,7 @@ async def handle_recording_delete(request: web.Request) -> web.Response:
 async def _play_on_targets(
     wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str
 ) -> dict:
-    """Write the media to /config/www and play it on `targets`.
+    """Publish the media (see _publish_media) and play it on `targets`.
 
     Players with MEDIA_ANNOUNCE get play_media(announce=True) and handle
     their own music (ESPHome: announcement pipeline; Sonos: audio clip).
@@ -482,25 +538,21 @@ async def _play_on_targets(
         {"ok": None,  "outcome": "queued",  "wait": seconds}
 
     A queued entry is replaced in place by its final result."""
-    filename = f"{name}.{ext}"
-    filepath = Path(CONFIG_WWW) / filename
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    filepath.write_bytes(wav_bytes)
-    log.info("media written  %s  (%.2fs)", filepath, duration)
-
     results: dict = {}
     if not targets:
-        log.warning("no targets; skipping play for %s", filename)
-        _spawn(_delete_after(filepath, duration + 10))
+        log.warning("no targets; skipping play for %s", name)
         return results
 
+    # The name stays valid long enough for a queued delivery (airtime's
+    # max_wait); the file goes `linger` after the last delivery starts.
+    filepath, media_url, keep_for = await _publish_media(
+        wav_bytes, ext, duration, name=name, wait=airtime.max_wait)
+    linger = keep_for - airtime.max_wait
+    filename = name   # for logs; the served name is a secret
     try:
-        opts = load_options()
-        ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
-        media_url = f"{ha_url}/local/{filename}"
         states = await _player_states()
     except Exception:
-        _spawn(_delete_after(filepath, duration + 10))
+        _spawn(_delete_after(filepath, linger))
         raise
 
     now_jobs, later_jobs = [], []
@@ -535,9 +587,10 @@ async def _play_on_targets(
             results[player] = result
 
     if later_jobs:
-        _spawn(_deliver_later(later_jobs, results, media_url, duration, filepath))
+        _spawn(_deliver_later(later_jobs, results, media_url, duration, filepath,
+                              linger))
     else:
-        _spawn(_delete_after(filepath, duration + 10))
+        _spawn(_delete_after(filepath, linger))
     return results
 
 
@@ -609,7 +662,8 @@ async def _deliver(player: str, media_url: str, duration: float, slot,
 
 
 async def _deliver_later(jobs: list, results: dict, media_url: str,
-                         duration: float, filepath: Path) -> None:
+                         duration: float, filepath: Path,
+                         linger: float) -> None:
     """Play queued jobs as their slots open; the media file outlives them."""
     async def one(player, slot, use_announce):
         await asyncio.sleep(max(0.0, slot.start - airtime.now()))
@@ -618,7 +672,67 @@ async def _deliver_later(jobs: list, results: dict, media_url: str,
     try:
         await asyncio.gather(*(one(*job) for job in jobs))
     finally:
-        await _delete_after(filepath, duration + 10)
+        await _delete_after(filepath, linger)
+
+
+async def _publish_media(body: bytes, ext: str, duration: float, *,
+                         name: str, wait: float = 0.0) -> tuple[Path, str, float]:
+    """Make `body` fetchable by the players: (file, URL, seconds to keep it).
+
+    Served by the add-on under a random name; /config/www (public at /local/)
+    only if the LAN port is not published. `wait` = longest queue delay."""
+    base, ha_url = await lan_address.resolve(ha)
+    if base:
+        keep_for = duration + wait + MEDIA_GRACE_SECONDS
+        path = media_store.put(body, ext, keep_for, label=name)
+        log.info("media published  %s  (%.2fs, %d bytes)", name, duration, len(body))
+        return path, f"{base}/media/{path.name}", keep_for
+    filename = f"{name}.{ext}"
+    path = Path(CONFIG_WWW) / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    keep_for = duration + wait + WWW_GRACE_SECONDS
+    log.warning("LAN port not published — media in %s (public at /local/ "
+                "for up to %.0fs)", path, keep_for)
+    return path, f"{ha_url}/local/{filename}", keep_for
+
+
+async def handle_media_get(request: web.Request) -> web.StreamResponse:
+    """GET /media/{name} — a broadcast, for the players. No auth: HA's
+    ffmpeg proxy and Cast fetch it bare; the random name is the secret."""
+    name = request.match_info.get("name", "")
+    path = media_store.lookup(name)
+    if path is None:
+        return web.Response(status=404)
+    return web.FileResponse(path, headers={
+        "Content-Type": media.content_type(name),
+        "Cache-Control": "no-store",
+    })
+
+
+# AppKey needs aiohttp >= 3.9; older Alpine images get a plain key.
+LAN_TOKEN_KEY = web.AppKey("lan_token", str) if hasattr(web, "AppKey") else "lan_token"
+
+# Paths on the LAN port that never need lan_token.
+_LAN_PUBLIC_PREFIX = "/media/"
+
+
+@web.middleware
+async def lan_auth(request: web.Request, handler):
+    """With lan_token set, require `Authorization: Bearer <token>` (or
+    ?token=<token>, for firmware that can only change its URL)."""
+    token = request.app.get(LAN_TOKEN_KEY) or ""
+    if token and not request.path.startswith(_LAN_PUBLIC_PREFIX):
+        auth = request.headers.get("Authorization", "")
+        given = auth[7:].strip() if auth[:7].lower() == "bearer " else \
+            request.query.get("token", "")
+        if not hmac.compare_digest(given.encode(), token.encode()):
+            log.warning("LAN request to %s from %s rejected: bad or missing token",
+                        request.path, request.remote)
+            return web.json_response(
+                {"error": "unauthorized"}, status=401,
+                headers={"WWW-Authenticate": "Bearer"})
+    return await handler(request)
 
 
 # The loop holds tasks weakly; keep them alive until done.
@@ -634,6 +748,9 @@ def _spawn(coro) -> asyncio.Task:
 
 async def _delete_after(filepath: Path, delay: float) -> None:
     await asyncio.sleep(delay)
+    if filepath.parent == media_store.directory():
+        media_store.remove(filepath.name)
+        return
     try:
         filepath.unlink()
         log.info("cleaned up %s", filepath.name)
@@ -641,11 +758,36 @@ async def _delete_after(filepath: Path, delay: float) -> None:
         log.warning("cleanup failed for %s: %s", filepath.name, e)
 
 
-def make_lan_app() -> web.Application:
-    app = web.Application(client_max_size=10 * 1024 * 1024)
+_LEGACY_WWW_MEDIA = re.compile(
+    r"^(intercom|announce)-[A-Za-z0-9_-]{1,128}\.(wav|mp3)$")
+
+
+def remove_stale_www_media() -> int:
+    """Delete broadcasts a previous run left in /config/www (crash or
+    restart before the cleanup timer). Only our own name pattern."""
+    removed = 0
+    try:
+        candidates = list(Path(CONFIG_WWW).iterdir())
+    except OSError:
+        return 0
+    for path in candidates:
+        if _LEGACY_WWW_MEDIA.match(path.name) and path.is_file():
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as e:
+                log.warning("could not remove stale %s: %s", path.name, e)
+    return removed
+
+
+def make_lan_app(token: Optional[str] = None) -> web.Application:
+    app = web.Application(client_max_size=10 * 1024 * 1024,
+                          middlewares=[lan_auth])
+    app[LAN_TOKEN_KEY] = lan_token() if token is None else token
     app.router.add_post("/intercom", handle_intercom)
     app.router.add_post("/intercom/reply", handle_intercom)
     app.router.add_post("/announce", handle_announce)
+    app.router.add_get(media.ROUTE, handle_media_get)
     return app
 
 
@@ -663,27 +805,28 @@ def make_ingress_app() -> web.Application:
     return app
 
 
-async def _run() -> None:
-    global mixer
+class PathOnlyAccessLogger(AbstractAccessLogger):
+    """Access log without the query string (?token=...) or media names."""
 
+    def log(self, request, response, time):
+        path = request.path
+        if path.startswith(_LAN_PUBLIC_PREFIX):
+            path = _LAN_PUBLIC_PREFIX + "…"
+        self.logger.info("%s %s %s %d %.3fs", request.remote, request.method,
+                         path, response.status, time)
+
+
+async def _run() -> None:
+    # Removed options (port, sample_rate, bits_per_sample, channels, ha_url)
+    # may linger in options.json; they are ignored.
     opts = load_options()
-    port = opts.get("port", 9999)
+    port = media.LAN_PORT   # the host port is set in the add-on's Network section
     ingress_port = 8099
 
-    sample_rate = opts.get("sample_rate", 16000)
-    bits = opts.get("bits_per_sample", 16)
-    channels = opts.get("channels", 1)
-    # Chimes and denoise handle 16-bit mono only (schema pins it; this catches
-    # a hand-edited options.json).
-    if bits != 16 or channels != 1:
-        log.error("unsupported audio format %s-bit / %s channel(s) — only 16-bit "
-                  "mono is supported; using that", bits, channels)
-        bits, channels = 16, 1
-    mixer = ChimeMixer(
-        sample_rate=sample_rate,
-        sample_width=bits // 8,
-        channels=channels,
-    )
+    media_store.clear()
+    stale = remove_stale_www_media()
+    if stale:
+        log.info("removed %d stale broadcast file(s) from %s", stale, CONFIG_WWW)
 
     try:
         players.migrate_file()
@@ -692,15 +835,19 @@ async def _run() -> None:
 
     log.info("starting intercom relay on port %d (LAN)", port)
     log.info("starting picker UI on port %d (ingress)", ingress_port)
-    log.info("audio format: %d Hz, %d-bit, %d channel(s)",
-             sample_rate, bits, channels)
+    log.info("audio format: 16-bit mono, X-Sample-Rate (default %d Hz)",
+             DEFAULT_SAMPLE_RATE)
     log.info("tts engine: %s", opts.get("tts_engine", "tts.piper"))
     keep = keep_recordings()
     log.info("denoise: %s", "on" if denoise_enabled() else "off")
     log.info("mic recordings: %s",
-             f"keeping newest {keep} in {recordings.RECORDINGS_DIR}" if keep else "disabled")
+             f"keeping newest {keep} in {recordings.RECORDINGS_DIR}" if keep
+             else "off (existing ones kept until deleted in the panel)")
+    lan_app = make_lan_app()
+    log.info("LAN auth: %s", "lan_token required" if lan_app[LAN_TOKEN_KEY] else
+             "off (anyone on the LAN can broadcast; set lan_token)")
 
-    lan_runner = web.AppRunner(make_lan_app())
+    lan_runner = web.AppRunner(lan_app, access_log_class=PathOnlyAccessLogger)
     await lan_runner.setup()
     await web.TCPSite(lan_runner, host="0.0.0.0", port=port).start()
 

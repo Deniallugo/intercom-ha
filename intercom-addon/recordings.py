@@ -1,8 +1,8 @@
 """Keep the raw mic audio (no chimes, no cleanup) of every /intercom upload.
 
 PTT broadcasts and device mic tests alike, so a mic can be judged from the
-panel. Stored in /data/recordings, newest `keep` retained; keep = 0 stores
-nothing and deletes what is there.
+panel. Stored in /data/recordings, newest `keep` retained; keep = 0 (the
+default) stores nothing new and leaves what is there for the panel to delete.
 """
 import logging
 import os
@@ -33,11 +33,13 @@ def _slug(text: str, limit: int) -> str:
 def save(wav_bytes: bytes, *, source: str, session_id: str, keep: int) -> Optional[Path]:
     """Write a new recording and prune to the newest `keep`.
 
-    Returns the path, or None if keep <= 0 (then deletes all). Raises OSError;
-    the caller must not let that cost the broadcast.
+    Returns the path, or None if keep <= 0. keep <= 0 stores nothing new but
+    deletes nothing either: the default went from 10 to 0, and an update must
+    not wipe recordings a user kept under the old default. They stay listed in
+    the panel until deleted there. Raises OSError; the caller must not let that
+    cost the broadcast.
     """
     if keep <= 0:
-        prune(0)
         return None
 
     directory = Path(RECORDINGS_DIR)

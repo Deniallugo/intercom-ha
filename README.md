@@ -89,14 +89,45 @@ tag (see `.github/workflows/build.yml`).
 
 | Option | Default | Description |
 |---|---|---|
-| `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL |
-| `port` | `9999` | TCP port for ESPHome audio uploads |
-| `sample_rate` | `16000` | Audio sample rate (Hz) |
-| `bits_per_sample` | `16` | Sample width |
-| `channels` | `1` | Channel count |
 | `tts_engine` | `tts.piper` | HA TTS engine for text announcements |
-| `keep_recordings` | `10` | Mic recordings retained for playback in the panel (`0` disables) |
+| `keep_recordings` | `0` | Mic recordings retained for playback in the panel. `0` records nothing (recordings kept earlier stay until deleted in the panel) |
 | `denoise` | `true` | Clean up broadcast audio: high-pass, band subtraction, expander, level to −16 dBFS. Off — no noise reduction, but speech is still levelled to −16 dBFS |
+| `lan_token` | *(unset)* | Shared secret for the LAN port (see [Security](#security)). Unset = no authentication, as flashed devices expect |
+
+Not options any more (values left in an older configuration are ignored):
+
+- **Port** — the container always listens on 9999; change the host port in the
+  add-on's **Network** section. The add-on reads the mapping from the
+  Supervisor, so media URLs follow it.
+- **Audio format** — uploads are 16-bit mono PCM; the rate comes with each
+  upload in `X-Sample-Rate` (8000–48000, standard rates), `16000` if the header
+  is missing (all current firmware).
+- **HA URL** — the add-on asks the Supervisor for the host's IP (and HA's
+  `internal_url` as a fallback).
+
+### Security
+
+- **Who may broadcast.** Port 9999 is open to the LAN. Set `lan_token` and
+  every LAN endpoint except `/media/` requires `Authorization: Bearer <token>`
+  (or `?token=<token>` in the URL); anything else gets `401`. Flashed devices
+  send no token, so set it only together with the firmware change below.
+- **Firmware change for `lan_token`** (not made yet): the shortest is the URL —
+  `include/uploader.h` sends the URL path verbatim (max 63 characters), so
+  `intercom_url: "http://homeassistant.local:9999/intercom?token=<token>"`
+  (and the same for `mic_test_url`) works without touching C++. Cleaner: add an
+  `Authorization: Bearer %s` line to the request header in `uploader.h`, fed
+  from a `!secret intercom_token` substitution.
+- **Where broadcasts live.** Media is served by the add-on itself at
+  `http://<host IP>:<port>/media/<name>` — a random 192-bit name per broadcast,
+  valid for its length + 60 s (plus up to 30 s of queueing), never written to
+  `/config/www`. No token is needed there: ESPHome speakers get the URL through
+  HA's ffmpeg proxy (HA fetches it, then the speaker fetches from HA), Cast and
+  other players fetch it bare. Only if the Network section unpublishes the
+  port does the add-on fall back to `/config/www` (public at `/local/`, also
+  through Nabu Casa), for the audio's length + 10 s.
+- **Announcements** without `targets` go to the intercom devices only — never
+  to every `media_player` in HA (TVs, phones, Cast groups).
+- **Recordings** are off by default (`keep_recordings: 0`).
 
 ### Who hears whom
 
@@ -145,23 +176,32 @@ sound abrupt, lower if hiss remains). Preview a capture with
 
 ### Mic recordings
 
-Every upload to `/intercom` is also saved as a raw, chime-free WAV in
-`/data/recordings` (newest `keep_recordings`; `0` keeps nothing and deletes old
-ones). The side-panel lists them with player, download and delete.
+With `keep_recordings` above 0, every upload to `/intercom` is also saved as a
+raw, chime-free WAV in `/data/recordings` (the newest `keep_recordings`). The
+default `0` saves nothing; recordings kept under an earlier setting are not
+deleted behind your back — they stay listed in the side-panel (player,
+download, delete) until you delete them there.
 
 The **Mic test recording** button (voice-s3, atom-echo) records 5 s and uploads
 to the `mic_test_url` substitution — the add-on by default, so the test is saved
-here **and played on the device's target speakers**. For level/SNR statistics,
+here (with `keep_recordings` > 0) **and played on the device's target speakers**. For level/SNR statistics,
 point `mic_test_url` at `tools/mic-capture.py`; PTT is unaffected.
 
 ### HTTP API
 
-The add-on listens on `port` (default `9999`):
+The add-on listens on port `9999` (host port set in the Network section).
+With `lan_token` set, all but `/media/` need `Authorization: Bearer <token>`
+or `?token=<token>`.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/intercom` | Receive a PCM audio upload from a device and broadcast it to the channel |
 | `POST` | `/intercom/reply` | Same, but only to whoever last spoke to this device (30 s window) |
+| `POST` | `/announce` | Render `text` via TTS and play it on `targets`; omitted or empty → the intercom devices (never every player in HA). Same JSON answer as `/intercom` (`204` if there is nobody to play to) |
+| `GET` | `/media/<name>` | A broadcast's audio, for the players; random name, expires (no token) |
+
+Upload headers: `X-Device-Name` (ESPHome node name), `X-Session-ID`,
+`X-Sample-Rate` (optional, default `16000`), `X-Intercom-Reply: 1` (optional).
 
 How a broadcast is played:
 
@@ -185,7 +225,6 @@ How a broadcast is played:
 
   `outcome` is `ok`, `error`, `skipped`, `busy` or `queued`; a queued result is
   updated in `/api/devices` → `last_broadcast` once it plays.
-| `POST` | `/announce` | Render text via TTS and play on targets (omit `targets` → all players) |
 
 Trigger an announcement from a Home Assistant automation with a `rest_command`:
 
@@ -194,6 +233,9 @@ rest_command:
   intercom_announce:
     url: "http://homeassistant.local:9999/announce"
     method: POST
+    # with lan_token set:
+    # headers:
+    #   Authorization: !secret intercom_bearer   # "Bearer <token>"
     content_type: "application/json"
     payload: >
       {"text": "{{ text }}", "targets": {{ targets | tojson }}}

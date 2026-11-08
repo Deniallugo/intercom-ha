@@ -309,3 +309,36 @@ async def test_tts_get_audio_raises_when_audio_fetch_fails(env_token):
     client = HAClient(session=fake_session)
     with pytest.raises(RuntimeError):
         await client.tts_get_audio("tts.piper", "hi")
+
+
+async def test_get_core_config_reads_api_config(env_token):
+    fake_resp = MagicMock(status=200)
+    fake_resp.json = AsyncMock(return_value={"internal_url": "http://192.168.1.2:8123"})
+    fake_session = MagicMock()
+    fake_session.get = AsyncMock(return_value=fake_resp)
+    config = await HAClient(session=fake_session).get_core_config()
+    assert config["internal_url"] == "http://192.168.1.2:8123"
+    assert fake_session.get.await_args.args[0] == "http://supervisor/core/api/config"
+
+
+async def test_supervisor_get_unwraps_data(env_token):
+    fake_resp = MagicMock(status=200)
+    fake_resp.json = AsyncMock(return_value={"result": "ok",
+                                             "data": {"network": {"9999/tcp": 9999}}})
+    fake_session = MagicMock()
+    fake_session.get = AsyncMock(return_value=fake_resp)
+    data = await HAClient(session=fake_session).supervisor_get("/addons/self/info")
+    assert data == {"network": {"9999/tcp": 9999}}
+    url, kwargs = fake_session.get.await_args.args[0], fake_session.get.await_args.kwargs
+    assert url == "http://supervisor/addons/self/info"
+    assert kwargs["headers"]["Authorization"] == "Bearer tok"
+
+
+@pytest.mark.parametrize("status,body", [(403, {}), (200, {"result": "ok"})])
+async def test_supervisor_get_raises_on_error(env_token, status, body):
+    fake_resp = MagicMock(status=status)
+    fake_resp.json = AsyncMock(return_value=body)
+    fake_session = MagicMock()
+    fake_session.get = AsyncMock(return_value=fake_resp)
+    with pytest.raises(RuntimeError):
+        await HAClient(session=fake_session).supervisor_get("/network/info")

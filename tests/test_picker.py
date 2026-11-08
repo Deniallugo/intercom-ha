@@ -306,9 +306,18 @@ def www_dir(monkeypatch, tmp_path):
     return d
 
 
+MEDIA_BASE = "http://192.0.2.10:9999"   # = conftest.media_server
+
+
+def published(prefix: str) -> list[bytes]:
+    """Bodies of live served media whose label starts with `prefix`."""
+    return [(srv.media_store.directory() / name).read_bytes()
+            for name, label in srv.media_store.items() if label.startswith(prefix)]
+
+
 @pytest.fixture
 def fake_options(monkeypatch):
-    monkeypatch.setattr(srv, "load_options", lambda: {"ha_url": "http://ha.test:8123"})
+    monkeypatch.setattr(srv, "load_options", lambda: {})
 
 
 async def test_intercom_known_source_uses_route(
@@ -553,11 +562,14 @@ async def test_intercom_malicious_session_id_cannot_escape_www_dir(
         headers={"X-Session-ID": "../../../pwned", "X-Device-Name": "src-a"},
     )
     assert resp.status == 200
-    # The traversal must not write outside the www dir.
+    # The traversal must not write anywhere: the label is a fresh uuid and
+    # the served file has a random name inside the media dir.
     assert not (www_dir.parent / "pwned.wav").exists()
     assert list(www_dir.parent.glob("*.wav")) == []
-    # A media file was still written, safely inside www_dir.
-    assert len(list(www_dir.glob("intercom-*.wav"))) == 1
+    assert list(www_dir.glob("*")) == []
+    [(name, label)] = srv.media_store.items()
+    assert "pwned" not in label and "/" not in label
+    assert (srv.media_store.directory() / name).is_file()
 
 
 async def test_intercom_missing_players_file_returns_200_no_call(
@@ -596,9 +608,9 @@ async def test_intercom_wav_includes_chimes(
         headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
     )
 
-    wav_files = list(www_dir.glob("intercom-*.wav"))
+    wav_files = published("intercom-")
     assert len(wav_files) == 1
-    wav = wav_files[0].read_bytes()
+    wav = wav_files[0]
     pcm_len = struct.unpack_from("<I", wav, 40)[0]
     # Chime is 120ms at 16k/16/1 = 3840 bytes each side.
     # Total PCM = 3840 + 200 + 3840 = 7880.
@@ -619,7 +631,7 @@ async def test_intercom_odd_length_upload_keeps_closing_chime_aligned(
         "/intercom", data=b"\xAA\xBB" * 100 + b"\x7f",
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
     )
-    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
+    wav = published("intercom-")[0]
     assert struct.unpack_from("<I", wav, 40)[0] == 7880   # odd byte dropped
     assert wav.endswith(srv.mixer.chime_out)
 
@@ -633,7 +645,7 @@ async def test_intercom_levels_but_does_not_clean_when_denoise_off(
         "default": [],
     }))
     monkeypatch.setattr(srv, "load_options",
-                        lambda: {"ha_url": "http://ha.test:8123", "denoise": False})
+                        lambda: {"denoise": False})
     calls = []
     cleanup_calls = []
 
@@ -656,7 +668,7 @@ async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     )
     assert calls == [pcm]
     assert cleanup_calls == []
-    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
+    wav = published("intercom-")[0]
     assert wav[44 + 3840:44 + 3840 + 200] == b"\x11\x22" * 100
 
 
@@ -669,7 +681,7 @@ async def test_intercom_cleans_when_denoise_on(
         "default": [],
     }))
     monkeypatch.setattr(srv, "load_options",
-                        lambda: {"ha_url": "http://ha.test:8123", "denoise": True})
+                        lambda: {"denoise": True})
     process_calls, level_calls = [], []
 
     def fake_process(pcm, *, sample_rate):
@@ -690,7 +702,7 @@ async def test_intercom_cleans_when_denoise_on(
     )
     assert process_calls == [(pcm, 16000)]
     assert level_calls == []
-    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
+    wav = published("intercom-")[0]
     assert wav[44 + 3840:44 + 3840 + 200] == b"\x33\x44" * 100
 
 
@@ -846,29 +858,68 @@ async def test_announce_explicit_targets_plays_and_chimes(
         "text": "dinner is ready",
         "targets": ["media_player.kitchen", "media_player.bedroom"],
     })
-    assert resp.status == 204
+    assert resp.status == 200
     fake_ha.tts_get_audio.assert_awaited_once()
     assert fake_ha.tts_get_audio.await_args.args == ("tts.piper", "dinner is ready")
     played = [c.args[0] for c in fake_ha.play_media.call_args_list]
     assert played == ["media_player.kitchen", "media_player.bedroom"]
-    wav_files = list(www_dir.glob("announce-*.wav"))
-    assert len(wav_files) == 1
+    assert len(published("announce-")) == 1
+    url = fake_ha.play_media.call_args_list[0].args[1]
+    assert url.startswith(MEDIA_BASE + "/media/") and url.endswith(".wav")
 
 
-async def test_announce_omitted_targets_uses_all_players(
+async def test_announce_omitted_targets_uses_intercom_devices_only(
+    aiohttp_client, announce_app, players_file, www_dir, fake_options, fake_ha,
+):
+    """No targets = the channel, not every media_player (TVs, phones, Cast)."""
+    fake_ha.tts_get_audio.return_value = _wav_bytes(b"\x01\x02" * 100)
+    fake_ha.get_states.return_value = [
+        {"entity_id": "media_player.living_room_tv", "attributes": {}},
+        {"entity_id": "media_player.atom_echo_player", "attributes": {}},
+    ]
+    fake_ha.get_registry.return_value = registry(
+        ("d1", "Atom Echo", "media_player.atom_echo_player"),
+        ("d2", "Speaker S3", "media_player.speaker_s3_player"),
+    )
+    players_file.write_text(json.dumps({
+        "routes": {}, "default": [],
+        "excluded": ["media_player.speaker_s3_player"],
+    }))
+    client = await aiohttp_client(announce_app)
+    resp = await client.post("/announce", json={"text": "hello house"})
+    assert resp.status == 200
+    played = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    assert played == ["media_player.atom_echo_player"]
+    body = await resp.json()
+    assert body["targets"] == ["media_player.atom_echo_player"]
+    assert body["delivered"] == 1
+
+
+async def test_announce_reports_failure_as_502(
     aiohttp_client, announce_app, www_dir, fake_options, fake_ha,
 ):
     fake_ha.tts_get_audio.return_value = _wav_bytes(b"\x01\x02" * 100)
-    fake_ha.get_states.return_value = [
-        {"entity_id": "media_player.kitchen", "attributes": {}},
-        {"entity_id": "light.bulb", "attributes": {}},
-        {"entity_id": "media_player.bedroom", "attributes": {}},
-    ]
+    fake_ha.play_media.side_effect = RuntimeError("HA unreachable")
     client = await aiohttp_client(announce_app)
-    resp = await client.post("/announce", json={"text": "hello house"})
-    assert resp.status == 204
-    played = [c.args[0] for c in fake_ha.play_media.call_args_list]
-    assert played == ["media_player.kitchen", "media_player.bedroom"]
+    resp = await client.post("/announce", json={
+        "text": "hi", "targets": ["media_player.kitchen"]})
+    assert resp.status == 502
+    body = await resp.json()
+    assert body["failed"] == 1 and body["error"]
+
+
+async def test_announce_omitted_targets_falls_back_to_default_players(
+    aiohttp_client, announce_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.tts_get_audio.return_value = _wav_bytes(b"\x01\x02" * 100)
+    fake_ha.get_registry.side_effect = RuntimeError("ws down")
+    players_file.write_text(json.dumps({
+        "routes": {}, "default": ["media_player.kitchen"]}))
+    client = await aiohttp_client(announce_app)
+    resp = await client.post("/announce", json={"text": "hi", "targets": []})
+    assert resp.status == 200
+    assert [c.args[0] for c in fake_ha.play_media.call_args_list] == [
+        "media_player.kitchen"]
 
 
 async def test_announce_empty_text_returns_400(
@@ -909,15 +960,16 @@ async def test_announce_non_wav_tts_plays_without_chime(
     resp = await client.post("/announce", json={
         "text": "hi", "targets": ["media_player.kitchen"],
     })
-    assert resp.status == 204
-    assert list(www_dir.glob("announce-*.mp3")) != []
+    assert resp.status == 200
+    [(name, _)] = srv.media_store.items()
+    assert name.endswith(".mp3")
 
 
 async def test_announce_no_players_available_returns_204_noop(
-    aiohttp_client, announce_app, www_dir, fake_options, fake_ha,
+    aiohttp_client, announce_app, players_file, www_dir, fake_options, fake_ha,
 ):
     fake_ha.get_states.return_value = [
-        {"entity_id": "light.bulb", "attributes": {}},
+        {"entity_id": "media_player.living_room_tv", "attributes": {}},
     ]
     client = await aiohttp_client(announce_app)
     resp = await client.post("/announce", json={"text": "nobody home"})

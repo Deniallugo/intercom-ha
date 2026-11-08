@@ -49,7 +49,7 @@
             style="width: 100%; box-sizing: border-box; font-size: 1rem; padding: 0.5rem;"></textarea>
   <div class="chips" id="ann-chips"></div>
   <select id="ann-add"><option value="">+ add speaker…</option></select>
-  <span class="hint" id="ann-allhint"> (no speakers = announce on all)</span>
+  <span class="hint" id="ann-allhint"> (no speakers = all intercom devices)</span>
   <div style="margin-top: 0.6rem;">
     <button class="save" id="ann-send">Announce</button>
     <span id="ann-toast" class="toast"></span>
@@ -333,9 +333,10 @@ function renderRecordings(data) {
   if (!data.keep) {
     const off = document.createElement("div");
     off.className = "hint";
-    off.textContent = "Retention is off — set keep_recordings in the add-on configuration.";
+    off.textContent = "Recording is off — set keep_recordings in the add-on configuration."
+      + (data.items.length ? " Recordings kept earlier stay here until you delete them." : "");
     list.appendChild(off);
-    return;
+    if (!data.items.length) return;
   }
   if (!data.items.length) {
     const none = document.createElement("div");
