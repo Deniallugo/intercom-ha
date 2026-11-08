@@ -27,3 +27,37 @@ def media_server(monkeypatch, tmp_path):
     srv.media_store.clear()
     yield resolve
     srv.media_store.clear()
+
+
+class FakeStreams:
+    """Stand-in for denoise.Stream: records each one made (rate, full mode,
+    bytes fed) and returns `out(pcm, full)` from finish()."""
+
+    def __init__(self, out=lambda pcm, full: pcm):
+        self.made = []
+        self.out = out
+
+    def __call__(self, *, sample_rate, full=True):
+        streams = self
+
+        class _Stream:
+            def __init__(self):
+                self.sample_rate, self.full, self.fed = sample_rate, full, b""
+
+            def feed(self, pcm):
+                self.fed += pcm
+
+            def finish(self):
+                return streams.out(self.fed, self.full)
+
+        s = _Stream()
+        self.made.append(s)
+        return s
+
+
+@pytest.fixture
+def fake_streams(monkeypatch):
+    """Replace denoise.Stream with FakeStreams; set `.out` to change the output."""
+    fakes = FakeStreams()
+    monkeypatch.setattr(srv.denoise, "Stream", fakes)
+    return fakes

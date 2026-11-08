@@ -116,18 +116,11 @@ async def test_upload_without_header_is_16k(aiohttp_client, setup):
         assert w.getframerate() == 16000
 
 
-async def test_upload_uses_x_sample_rate(aiohttp_client, setup, monkeypatch):
-    seen = []
-
-    def fake_level(pcm, *, sample_rate):
-        seen.append(sample_rate)
-        return pcm
-
-    monkeypatch.setattr(srv.denoise, "level", fake_level)
+async def test_upload_uses_x_sample_rate(aiohttp_client, setup, fake_streams):
     client = await aiohttp_client(srv.make_lan_app(token=""))
     resp = await _post(client, headers={"X-Sample-Rate": "48000"})
     assert resp.status == 200
-    assert seen == [48000]
+    assert [s.sample_rate for s in fake_streams.made] == [48000]
     [item] = recordings.listing()
     with wave.open(str(recordings.path_for(item["name"])), "rb") as w:
         assert w.getframerate() == 48000

@@ -42,6 +42,10 @@ class Ducker:
             else:
                 log.info("ducking   %s  state=%s  → no-op", target, snap.state)
 
+    def holds(self, target: str) -> bool:
+        """True while `target` is paused (or snapshotted) awaiting restore."""
+        return target in self._snapshots
+
     def schedule_restore(self, targets: list[str], delay: float) -> None:
         """Restore each target in `delay` s, extending any pending restore."""
         deadline = self._now() + delay

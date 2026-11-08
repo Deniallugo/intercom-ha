@@ -640,70 +640,48 @@ async def test_intercom_odd_length_upload_keeps_closing_chime_aligned(
 
 async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
+    fake_streams,
 ):
-    """denoise: false skips process() but still runs level()."""
+    """denoise: false runs the level-only stream, not the full cleanup."""
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": [],
     }))
     monkeypatch.setattr(srv, "load_options",
                         lambda: {"denoise": False})
-    calls = []
-    cleanup_calls = []
-
-    # Count, not raise: the handler swallows cleanup exceptions.
-    def no_cleanup(pcm, *, sample_rate):
-        cleanup_calls.append(pcm)
-        return pcm
-
-    def fake_level(pcm, *, sample_rate):
-        calls.append(pcm)
-        return b"\x11\x22" * (len(pcm) // 2)
-
-    monkeypatch.setattr(srv.denoise, "process", no_cleanup)
-    monkeypatch.setattr(srv.denoise, "level", fake_level)
+    fake_streams.out = lambda pcm, full: (b"\x33\x44" if full else b"\x11\x22") * (len(pcm) // 2)
     client = await aiohttp_client(lan_app)
     pcm = b"\xAA\xBB" * 100
     await client.post(
         "/intercom", data=pcm,
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
     )
-    assert calls == [pcm]
-    assert cleanup_calls == []
+    [stream] = fake_streams.made
+    assert (stream.full, stream.sample_rate, stream.fed) == (False, 16000, pcm)
     wav = published("intercom-")[0]
     assert wav[44 + 3840:44 + 3840 + 200] == b"\x11\x22" * 100
 
 
 async def test_intercom_cleans_when_denoise_on(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
+    fake_streams,
 ):
-    """denoise: true broadcasts what process() returns; level() is not called."""
+    """denoise: true broadcasts the full cleanup's output, fed the upload."""
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": [],
     }))
     monkeypatch.setattr(srv, "load_options",
                         lambda: {"denoise": True})
-    process_calls, level_calls = [], []
-
-    def fake_process(pcm, *, sample_rate):
-        process_calls.append((pcm, sample_rate))
-        return b"\x33\x44" * (len(pcm) // 2)
-
-    def fake_level(pcm, *, sample_rate):
-        level_calls.append(pcm)
-        return pcm
-
-    monkeypatch.setattr(srv.denoise, "process", fake_process)
-    monkeypatch.setattr(srv.denoise, "level", fake_level)
+    fake_streams.out = lambda pcm, full: (b"\x33\x44" if full else b"\x11\x22") * (len(pcm) // 2)
     client = await aiohttp_client(lan_app)
     pcm = b"\xAA\xBB" * 100
     await client.post(
         "/intercom", data=pcm,
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
     )
-    assert process_calls == [(pcm, 16000)]
-    assert level_calls == []
+    [stream] = fake_streams.made
+    assert (stream.full, stream.sample_rate, stream.fed) == (True, 16000, pcm)
     wav = published("intercom-")[0]
     assert wav[44 + 3840:44 + 3840 + 200] == b"\x33\x44" * 100
 
