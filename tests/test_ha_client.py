@@ -138,7 +138,11 @@ async def test_tts_get_audio_posts_then_fetches(env_token):
     post_url = fake_session.post.await_args.args[0]
     post_kwargs = fake_session.post.await_args.kwargs
     assert post_url == "http://supervisor/core/api/tts_get_url"
-    assert post_kwargs["json"] == {"engine_id": "tts.piper", "message": "hello there"}
+    assert post_kwargs["json"] == {
+        "engine_id": "tts.piper", "message": "hello there",
+        "options": {"preferred_format": "wav", "preferred_sample_rate": 16000,
+                    "preferred_sample_channels": 1},
+    }
     assert post_kwargs["headers"]["Authorization"] == "Bearer tok"
     get_url = fake_session.get.await_args.args[0]
     assert get_url == "http://supervisor/core/api/tts_proxy/x.wav"
@@ -342,3 +346,20 @@ async def test_supervisor_get_raises_on_error(env_token, status, body):
     fake_session.get = AsyncMock(return_value=fake_resp)
     with pytest.raises(RuntimeError):
         await HAClient(session=fake_session).supervisor_get("/network/info")
+
+
+async def test_tts_get_audio_retries_without_wav_options(env_token):
+    rejected = MagicMock(status=400)
+    ok = MagicMock(status=200)
+    ok.json = AsyncMock(return_value={"path": "/api/tts_proxy/x.mp3"})
+    get_resp = MagicMock(status=200)
+    get_resp.read = AsyncMock(return_value=b"mp3")
+    fake_session = MagicMock()
+    fake_session.post = AsyncMock(side_effect=[rejected, ok])
+    fake_session.get = AsyncMock(return_value=get_resp)
+
+    client = HAClient(session=fake_session)
+    assert await client.tts_get_audio("tts.piper", "hi") == b"mp3"
+    first, second = fake_session.post.await_args_list
+    assert "options" in first.kwargs["json"]
+    assert second.kwargs["json"] == {"engine_id": "tts.piper", "message": "hi"}

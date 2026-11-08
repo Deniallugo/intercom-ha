@@ -12,6 +12,9 @@ log = logging.getLogger(__name__)
 SUPERVISOR = "http://supervisor"
 SUPERVISOR_CORE = f"{SUPERVISOR}/core"
 HA_API = f"{SUPERVISOR_CORE}/api"
+# HA's TTS manager converts any engine's output to this (tts preferred_*).
+TTS_WAV_OPTIONS = {"preferred_format": "wav", "preferred_sample_rate": 16000,
+                   "preferred_sample_channels": 1}
 # REST has no device/entity registry; only the WebSocket API does.
 SUPERVISOR_WS = "ws://supervisor/core/websocket"
 WS_TIMEOUT = 10.0
@@ -125,11 +128,22 @@ class HAClient:
         POSTs /api/tts_get_url to make HA render the speech, then GETs the
         returned proxy path (kept on the internal supervisor proxy).
         """
+        # Ask for WAV: the default is MP3, which the add-on can neither chime
+        # nor time, so a short message held the speaker's queue for 30 s.
+        body = {"engine_id": engine_id, "message": message,
+                "options": dict(TTS_WAV_OPTIONS)}
         resp = await self.session.post(
-            f"{HA_API}/tts_get_url",
-            headers=self._auth_headers(),
-            json={"engine_id": engine_id, "message": message},
+            f"{HA_API}/tts_get_url", headers=self._auth_headers(), json=body,
         )
+        if resp.status != 200:
+            # An older HA or engine may reject the preferred_* options.
+            log.warning("tts_get_url with WAV options returned %s; retrying "
+                        "without them", resp.status)
+            resp.release()
+            body = {"engine_id": engine_id, "message": message}
+            resp = await self.session.post(
+                f"{HA_API}/tts_get_url", headers=self._auth_headers(), json=body,
+            )
         if resp.status != 200:
             raise RuntimeError(f"tts_get_url returned {resp.status}")
         data = await resp.json()
