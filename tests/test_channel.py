@@ -98,3 +98,38 @@ def test_plan_fallback_and_muted():
 def test_plan_reply_excludes_nobody_but_self():
     p = channel.plan("a", state(), [], reply_to="media_player.b")
     assert (p.mode, p.targets) == ("reply", ["media_player.b"])
+
+
+def _two_voice_members():
+    return channel.build_members(reg(
+        [dev("d1", "Voice S3"), dev("d2", "Atom Echo")],
+        [ent("media_player.voice_s3_player_2", "d1"),
+         ent("media_player.atom_echo_player", "d2")],
+    ))
+
+
+def test_stale_manual_self_loses_to_registry():
+    # selves names an entity that no longer exists; the registry places
+    # voice-s3, so its real speaker is the self and it hears the channel.
+    members = _two_voice_members()
+    s = state(selves={"voice-s3": "media_player.office_voice_s3_player"})
+    assert channel.self_player("voice-s3", s, members) == "media_player.voice_s3_player_2"
+    p = channel.plan("voice-s3", s, members)
+    assert p.targets == ["media_player.atom_echo_player"]
+    rows = {r["name"]: r for r in channel.describe(s, members, {}, None)}
+    assert rows["voice-s3"]["media_player"] == "media_player.voice_s3_player_2"
+    assert rows["voice-s3"]["listening"] is True
+    assert sum(1 for r in channel.describe(s, members, {}, None)
+               if r["device_id"] == members[0].device_id) == 1
+
+
+def test_manual_self_on_intercom_speaker_still_wins():
+    members = _two_voice_members()
+    s = state(selves={"voice-s3": "media_player.atom_echo_player"})
+    assert channel.self_player("voice-s3", s, members) == "media_player.atom_echo_player"
+
+
+def test_manual_self_kept_when_registry_cannot_place_source():
+    members = _two_voice_members()
+    s = state(selves={"kitchen-mic": "media_player.sonos"})
+    assert channel.self_player("kitchen-mic", s, members) == "media_player.sonos"

@@ -154,7 +154,10 @@ async def fetch_media_players() -> list[dict]:
 
 
 async def handle_picker_index(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(PICKER_HTML_FILE)
+    # no-cache: HA's ingress iframe otherwise keeps showing an old panel
+    # after an update, even across a hard reload of the HA page.
+    return web.FileResponse(PICKER_HTML_FILE,
+                            headers={"Cache-Control": "no-cache"})
 
 
 async def handle_picker_get(request: web.Request) -> web.Response:
@@ -510,12 +513,7 @@ def resolve_device(key: str, state: dict, members: list):
     if key not in channel.known_sources(state, activity):
         member = next((m for m in members if m.node_name == key), None)
         return (key, member) if member else (None, None)
-    manual = state["selves"].get(key)
-    if manual:
-        member = next((m for m in members if m.media_player == manual), None)
-    else:
-        member = channel.match_source(key, members)
-    return key, member
+    return key, channel.self_member(key, state, members)
 
 
 async def handle_device_delete(request: web.Request) -> web.Response:
@@ -570,7 +568,7 @@ async def handle_device_test(request: web.Request) -> web.Response:
     name, member = resolve_device(key, state, members)
     if name is None and member is None:
         return web.json_response({"error": "no such device"}, status=404)
-    mp = (state["selves"].get(name) if name else None) or \
+    mp = (channel.self_player(name, state, members) if name else None) or \
         (member.media_player if member else None)
     if not mp:
         return web.json_response(

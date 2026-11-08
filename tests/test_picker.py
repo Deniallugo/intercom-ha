@@ -1241,6 +1241,7 @@ async def test_ingress_app_serves_page_and_device_routes(aiohttp_client, players
     client = await aiohttp_client(srv.make_ingress_app())
     resp = await client.get("/")
     assert resp.status == 200
+    assert resp.headers["Cache-Control"] == "no-cache"
     html = await resp.text()
     assert "<title>Intercom</title>" in html
     # Errors are shown as text, never parsed as HTML.

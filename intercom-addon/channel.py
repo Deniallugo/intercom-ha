@@ -4,7 +4,9 @@ Intercom devices are ESPHome devices with a media_player, taken from HA's
 device and entity registries (see HAClient.get_registry). A source
 (X-Device-Name = ESPHome node name) is matched to its device by:
 
-1. selves[source] in players.json (manual; beats everything),
+1. selves[source] in players.json (manual), unless it names a speaker that
+   is not an intercom device while the registry does place the source: an
+   old manual entry for a renamed or removed entity must not win,
 2. the config entry's data.device_name == node name (exact),
 3. slug(node name) == slug(device name / name_by_user) — ESPHome registers
    the device under friendly_name, and "Atom Echo" ~ "atom-echo".
@@ -86,11 +88,24 @@ def match_source(source: str, members: list[Member]) -> Optional[Member]:
     return hits[0] if len(hits) == 1 else None
 
 
-def self_player(source: str, state: dict, members: list[Member]) -> Optional[str]:
+def self_member(source: str, state: dict, members: list[Member]) -> Optional[Member]:
+    """The registry device for `source`, honouring a manual selves entry when
+    it names an intercom speaker."""
     manual = state["selves"].get(source)
     if manual:
+        hit = next((m for m in members if m.media_player == manual), None)
+        if hit:
+            return hit
+    return match_source(source, members)
+
+
+def self_player(source: str, state: dict, members: list[Member]) -> Optional[str]:
+    """`source`'s own speaker. A manual selves entry wins unless it names a
+    non-intercom speaker and the registry has a match (stale entry)."""
+    manual = state["selves"].get(source)
+    m = self_member(source, state, members)
+    if manual and (m is None or m.media_player == manual):
         return manual
-    m = match_source(source, members)
     return m.media_player if m else None
 
 
@@ -138,17 +153,14 @@ def describe(state: dict, members: list[Member], activity: dict,
     sources = known_sources(state, activity)
     claimed: dict[str, str] = {}   # source -> device_id
     for s in sources:
-        if s in state["selves"]:
-            hit = next((m for m in members if m.media_player == state["selves"][s]), None)
-        else:
-            hit = match_source(s, members)
+        hit = self_member(s, state, members)
         if hit and hit.device_id not in claimed.values():
             claimed[s] = hit.device_id
     by_device = {d: s for s, d in claimed.items()}
     channel = set(channel_players(state, members))
 
     def row(name, member):
-        mp = (state["selves"].get(name) if name else None) or (member.media_player if member else None)
+        mp = (self_player(name, state, members) if name else None) or (member.media_player if member else None)
         act = activity.get(name, {}) if name else {}
         st = (entity_states or {}).get(mp) if mp else None
         if act.get("last_seen") or (name and name in state["routes"]):
