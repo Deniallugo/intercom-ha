@@ -82,6 +82,12 @@ MEDIA_ANNOUNCE = 1 << 20
 # Reading player states (announce support, availability) before playing.
 STATES_TIMEOUT = 2.0
 
+# Largest upload on the LAN port (30 s at 48 kHz is ~2.9 MB).
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# The upload reaches the denoiser in pieces this long (seconds of audio): one
+# thread hop per network chunk would cost more than it saves.
+DENOISE_BATCH_SECONDS = 0.25
+
 
 def safe_session_id(raw: str) -> str:
     return raw if _SAFE_SESSION_ID.match(raw) else str(uuid.uuid4())
@@ -235,7 +241,12 @@ async def handle_intercom(request: web.Request) -> web.Response:
 
     POST /intercom/reply (or X-Intercom-Reply: 1) asks to answer whoever
     last spoke to this device within talkback.WINDOW_SECONDS; with nobody to
-    answer it goes to the channel like a plain PTT."""
+    answer it goes to the channel like a plain PTT.
+
+    The firmware streams the recording while the button is held, so whatever
+    does not need the end of the audio runs during the upload: routing,
+    pausing speakers that get the Ducker, most of the denoise. What is left
+    after the last byte is the denoise's whole-message part and play_media."""
     session_id = safe_session_id(request.headers.get("X-Session-ID", ""))
     source = (request.headers.get("X-Device-Name") or "unknown").strip() or "unknown"
     want_reply = (request.path.rstrip("/").endswith("/reply")
@@ -247,26 +258,45 @@ async def handle_intercom(request: web.Request) -> web.Response:
             status=400)
     mx = mixer_for(rate)
 
-    pcm = await request.read()
+    # Speakers paused ahead of the audio; restored however this ends (a
+    # delivered one already has its own, later restore, which this keeps).
+    ducked: list[str] = []
+    route = asyncio.ensure_future(_route_ahead(source, want_reply, ducked))
+    cleaner = _Cleaner(rate, full=denoise_enabled())
+    try:
+        return await _intercom(request, mx, session_id, source, route, cleaner)
+    finally:
+        _discard(route)
+        cleaner.discard()
+        if ducked:
+            ducker.schedule_restore(ducked, 0.0)
+
+
+async def _intercom(request: web.Request, mx: ChimeMixer, session_id: str,
+                    source: str, route: asyncio.Future,
+                    cleaner: "_Cleaner") -> web.Response:
+    pcm = await _read_upload(request, cleaner)
     # Whole frames only: a stray odd byte would shift the closing chime by one
     # byte and play it as noise.
     frame = mx.sample_width * mx.channels
-    pcm = pcm[: len(pcm) - len(pcm) % frame]
+    if len(pcm) % frame:
+        pcm = pcm[: len(pcm) - len(pcm) % frame]
     if not pcm:
         log.warning("empty body from session=%s, ignoring", session_id[:8])
         return web.Response(status=400)
 
     duration = mx.pcm_duration_seconds(pcm)
     log.info("received  session=%s  source=%s  pcm=%d bytes  %d Hz  duration=%.1fs",
-             session_id[:8], source, len(pcm), rate, duration)
+             session_id[:8], source, len(pcm), mx.sample_rate, duration)
 
     # Saved before routing, so it survives a failed broadcast.
+    keep = keep_recordings()
     try:
         kept = recordings.save(
-            mx.build_plain_wav(pcm),
+            mx.build_plain_wav(pcm) if keep > 0 else b"",
             source=source,
             session_id=session_id,
-            keep=keep_recordings(),
+            keep=keep,
         )
         if kept is not None:
             log.info("recording kept  %s", kept.name)
@@ -276,53 +306,46 @@ async def handle_intercom(request: web.Request) -> web.Response:
     received_at = time.time()
     activity.setdefault(source, {})["last_seen"] = received_at
 
-    state = players.load_players()
-    if source not in state["routes"]:
-        # [] = the channel; listed so the device shows up in the UI.
-        state["routes"][source] = []
-        players.save_players(state)
-        log.info("enrolled new source=%s (channel)", source)
-
-    members, _ = await registry_members(source)
-
-    me = channel.self_player(source, state, members)
-    reply_to = None
-    if want_reply:
-        # Windows are keyed by the receiving device's own player.
-        reply_to = talkback.reply_target(me) if me else None
-        if reply_to is None:
-            log.info("reply from %s: nobody to answer; using the channel", source)
-
-    plan = channel.plan(source, state, members, reply_to=reply_to)
-    targets = plan.targets
-    if me is None and source != "unknown":
-        log.warning("source=%s matches no HA device; it may hear itself "
-                    "(set its speaker in 'selves')", source)
-    log.info("route  source=%s  mode=%s  targets=%s", source, plan.mode, targets)
-
-    if me:
-        talkback.record(me, targets)
-
-    # Only the broadcast is cleaned; the saved recording stays raw. Pure-Python
-    # DSP takes seconds, hence the thread. A failure falls back to raw audio.
+    # Only the broadcast is cleaned; the saved recording stays raw. Its tail
+    # runs in a thread while the routing is settled and the player states
+    # are read. A failure falls back to raw audio.
+    clean_task = asyncio.ensure_future(cleaner.finish())
+    states_task = None
     try:
-        if denoise_enabled():
-            clean = await asyncio.to_thread(
-                denoise.process, pcm, sample_rate=rate)
-        else:
-            clean = await asyncio.to_thread(
-                denoise.level, pcm, sample_rate=rate)
-    except Exception:
-        log.exception("denoise failed — broadcasting raw audio")
-        clean = pcm
+        state, plan = await route
+        if source not in state["routes"]:
+            # [] = the channel; listed so the device shows up in the UI.
+            # Re-read: the panel may have saved during the upload.
+            state = players.load_players()
+            if source not in state["routes"]:
+                state["routes"][source] = []
+                players.save_players(state)
+                log.info("enrolled new source=%s (channel)", source)
+        targets = plan.targets
+        log.info("route  source=%s  mode=%s  targets=%s", source, plan.mode, targets)
+        if plan.self_player:
+            talkback.record(plan.self_player, targets)
+        # Fresh states (availability, announce support) for the delivery.
+        states_task = asyncio.ensure_future(_player_states()) if targets else None
 
-    wav = mx.build_wav(clean)
-    total_duration = mx.total_duration_seconds(clean)
-    log.info("WAV built  %s  (%.2fs incl. chimes)", session_id[:8], total_duration)
+        try:
+            clean = await clean_task
+        except Exception:
+            log.exception("denoise failed — broadcasting raw audio")
+            clean = pcm
+    finally:
+        _discard(clean_task)
 
-    results = await _play_on_targets(
-        wav, "wav", total_duration, targets, name=f"intercom-{session_id}"
-    )
+    try:
+        wav = mx.build_wav(clean)
+        total_duration = mx.total_duration_seconds(clean)
+        log.info("WAV built  %s  (%.2fs incl. chimes)", session_id[:8], total_duration)
+
+        results = await _play_on_targets(
+            wav, "wav", total_duration, targets, name=f"intercom-{session_id}",
+            states=states_task)
+    finally:
+        _discard(states_task)
     # Same dict as `results`: a queued target's outcome lands here later.
     activity[source]["last_broadcast"] = {
         "ts": received_at,
@@ -344,6 +367,115 @@ async def handle_intercom(request: web.Request) -> web.Response:
         "results": results,
         **counts,
     }, status=status)
+
+
+async def _read_upload(request: web.Request, cleaner: "_Cleaner") -> bytes:
+    """The body, read as it arrives and handed to `cleaner` piece by piece.
+    Bounded like request.read() (the app's client_max_size)."""
+    limit = getattr(request, "client_max_size",
+                    getattr(request, "_client_max_size", MAX_UPLOAD_BYTES))
+    body = bytearray()
+    async for chunk in request.content.iter_any():
+        body += chunk
+        if limit and len(body) >= limit:
+            raise web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=len(body))
+        cleaner.feed(chunk)
+    return bytes(body)
+
+
+async def _route_ahead(source: str, want_reply: bool, ducked: list):
+    """(players state, channel.Plan) for `source`, worked out while it is
+    still talking; then pauses the targets that will go through the Ducker,
+    adding each to `ducked` before it is touched. Writes nothing: the
+    enrollment and the talkback window wait for a usable upload."""
+    state = players.load_players()
+    members, _ = await registry_members(source)
+    me = channel.self_player(source, state, members)
+    reply_to = None
+    if want_reply:
+        # Windows are keyed by the receiving device's own player.
+        reply_to = talkback.reply_target(me) if me else None
+        if reply_to is None:
+            log.info("reply from %s: nobody to answer; using the channel", source)
+    plan = channel.plan(source, state, members, reply_to=reply_to)
+    if me is None and source != "unknown":
+        log.warning("source=%s matches no HA device; it may hear itself "
+                    "(set its speaker in 'selves')", source)
+    await _duck_ahead(plan.targets, ducked)
+    return state, plan
+
+
+async def _duck_ahead(targets: list[str], ducked: list) -> None:
+    """Pause now, not after the upload, the targets _deliver would duck: no
+    MEDIA_ANNOUNCE, available, and free (a queued one ducks in its slot).
+    Their snapshot is then already taken when _deliver asks for it."""
+    if not targets:
+        return
+    states = await _player_states()
+    if states is None:
+        return
+    picks = []
+    for player in dict.fromkeys(targets):
+        state = states.get(player)
+        if (skip_reason(state, True) or supports_announce(state)
+                or airtime.busy_for(player) > 0 or ducker.holds(player)):
+            continue
+        picks.append(player)
+    if not picks:
+        return
+    ducked.extend(picks)
+    log.info("ducking ahead of the audio: %s", picks)
+    await asyncio.gather(*(ducker.snapshot_and_pause([p]) for p in picks))
+
+
+class _Cleaner:
+    """denoise.Stream (or its level-only form) fed off the event loop as the
+    upload arrives, in DENOISE_BATCH_SECONDS pieces, one at a time."""
+
+    def __init__(self, sample_rate: int, *, full: bool):
+        self._stream = denoise.Stream(sample_rate=sample_rate, full=full)
+        self._batch = max(2, int(sample_rate * 2 * DENOISE_BATCH_SECONDS))
+        self._pending = bytearray()
+        self._tail: Optional[asyncio.Future] = None
+
+    def feed(self, chunk: bytes) -> None:
+        self._pending += chunk
+        if len(self._pending) >= self._batch:
+            self._flush()
+
+    def _flush(self) -> None:
+        if not self._pending:
+            return
+        data = bytes(self._pending)
+        self._pending.clear()
+        self._tail = asyncio.ensure_future(self._feed_after(self._tail, data))
+
+    async def _feed_after(self, previous: Optional[asyncio.Future], data: bytes) -> None:
+        if previous is not None:
+            await previous
+        await asyncio.to_thread(self._stream.feed, data)
+
+    async def finish(self) -> bytes:
+        """The cleaned PCM; raises if any piece failed."""
+        self._flush()
+        if self._tail is not None:
+            await self._tail
+        return await asyncio.to_thread(self._stream.finish)
+
+    def discard(self) -> None:
+        """Drop pending work (upload failed or done with)."""
+        self._pending.clear()
+        _discard(self._tail)
+
+
+def _discard(fut: Optional[asyncio.Future]) -> None:
+    """Cancel `fut` if still running and keep its exception from being
+    reported as never retrieved."""
+    if fut is None:
+        return
+    if not fut.done():
+        fut.cancel()
+    fut.add_done_callback(lambda f: f.cancelled() or f.exception())
 
 
 def delivery_counts(results: dict) -> dict:
@@ -611,9 +743,12 @@ async def handle_recording_delete(request: web.Request) -> web.Response:
 
 
 async def _play_on_targets(
-    wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str
+    wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str,
+    states: Optional[asyncio.Future] = None,
 ) -> dict:
     """Publish the media (see _publish_media) and play it on `targets`.
+
+    `states`: a _player_states() already under way; else it is read here.
 
     Players with MEDIA_ANNOUNCE get play_media(announce=True) and handle
     their own music (ESPHome: announcement pipeline; Sonos: audio clip).
@@ -642,7 +777,7 @@ async def _play_on_targets(
     linger = keep_for - airtime.max_wait
     filename = name   # for logs; the served name is a secret
     try:
-        states = await _player_states()
+        states = await (states if states is not None else _player_states())
     except Exception:
         _spawn(_delete_after(filepath, linger))
         raise
@@ -873,7 +1008,7 @@ def remove_stale_www_media() -> int:
 
 
 def make_lan_app(token: Optional[str] = None) -> web.Application:
-    app = web.Application(client_max_size=10 * 1024 * 1024,
+    app = web.Application(client_max_size=MAX_UPLOAD_BYTES,
                           middlewares=[lan_auth])
     app[LAN_TOKEN_KEY] = lan_token() if token is None else token
     app.router.add_post("/intercom", handle_intercom)

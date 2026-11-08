@@ -188,7 +188,9 @@ device name or an HA device id).
 
 ### Broadcast cleanup
 
-`denoise.py` processes each upload before broadcast (the stored recording stays raw):
+`denoise.py` processes each upload before broadcast (the stored recording stays raw),
+as it arrives (`denoise.Stream`; same output, bit for bit, as processing the
+whole message at the end):
 
 1. high-pass at 80 Hz — removes room rumble (35 % of a capture's RMS was below 80 Hz);
 2. 8-band spectral subtraction — the only stage that reduces hiss under speech;
@@ -244,7 +246,14 @@ How a broadcast is played:
   players, Sonos, …) get `play_media` with `announce: true` and keep their own
   music: ESPHome plays it on the `announcement_pipeline` (via HA's ffmpeg
   proxy), Sonos as an audio clip over the queue. Other players fall back to
-  pause → play → resume.
+  pause → play → resume. The pause comes when the upload starts, not when it
+  ends: such a speaker goes quiet while the button is held, and resumes after
+  the broadcast (at once if the upload breaks off or is empty). A speaker
+  still busy with an earlier broadcast is paused in its own turn, as before.
+- The upload is read as it streams in. Routing, the pause above and most of
+  the cleanup (high-pass, band split, frame levels) run while the button is
+  held; after the last byte only the whole-message part of the cleanup is
+  left (noise percentiles, gains, expander, level), about a third of it.
 - A speaker still playing a broadcast is not cut off: the next one waits its
   turn (at most 30 s, else it is dropped as `busy`). Unavailable speakers are
   skipped.
