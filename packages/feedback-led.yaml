@@ -1,0 +1,166 @@
+# Talker feedback on one RGB status LED (Atom Echo). Pairs with intercom.yaml.
+#
+#   off                 normal
+#   red                 on air (hold threshold passed)
+#   dim red             sending — waiting for the add-on's answer
+#   blue pulse          incoming message
+#   green flash         delivered
+#   red blinking        not delivered: add-on down, refused (502) or timed out
+#   white double flash  busy (a message is playing, or the recorder is busy)
+#   white fast flicker  recording limit reached
+#   yellow slow pulse   no Wi-Fi, or the add-on unreachable
+#   purple              mic test (device file)
+#
+# No sounds: the Atom shares its I²S clock pins between mic and speaker, so it
+# can't beep while recording, and every playback allocates DMA memory it is
+# short of.
+#
+# Needs ${led_pin}.
+
+light:
+  - platform: esp32_rmt_led_strip
+    rgb_order: GRB
+    chipset: SK6812
+    pin: ${led_pin}
+    num_leds: 1
+    name: "Status LED"
+    id: status_led
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 0s
+    effects:
+      - pulse:
+          name: Incoming
+          transition_length: 500ms
+          update_interval: 500ms
+          min_brightness: 10%
+          max_brightness: 100%
+      - pulse:
+          name: Offline
+          transition_length: 1500ms
+          update_interval: 1500ms
+          min_brightness: 0%
+          max_brightness: 50%
+      - strobe:
+          name: Error
+          colors:
+            - state: true
+              brightness: 100%
+              red: 100%
+              green: 0%
+              blue: 0%
+              duration: 150ms
+            - state: false
+              duration: 150ms
+      - strobe:
+          name: Flicker
+          colors:
+            - state: true
+              brightness: 100%
+              red: 100%
+              green: 100%
+              blue: 100%
+              duration: 60ms
+            - state: false
+              duration: 60ms
+
+script:
+  # The steady state, by priority. Every transient effect ends here.
+  - id: fb_idle
+    mode: restart
+    then:
+      - lambda: |-
+          auto set = [](float r, float g, float b, float br, const char* fx) {
+            auto c = id(status_led).turn_on();
+            c.set_rgb(r, g, b);
+            c.set_brightness(br);
+            c.set_effect(fx);
+            c.set_transition_length(0);
+            c.perform();
+          };
+          if (id(mic_test_running)) return;               // the mic test owns it
+          if (id(ptt_talking))                set(1, 0, 0, 1.0f, "None");
+          else if (id(ptt_finish).is_running()) set(1, 0, 0, 0.25f, "None");
+          else if (id(incoming))              set(0, 0, 1, 1.0f, "Incoming");
+          else if (id(offline))               set(1, 0.8f, 0, 1.0f, "Offline");
+          else {
+            auto c = id(status_led).turn_off();
+            c.set_transition_length(0);
+            c.perform();
+          }
+
+  - id: fb_on_air
+    then:
+      - script.execute: fb_idle
+
+  - id: fb_sending
+    then:
+      # Let the limit flicker finish first.
+      - if:
+          condition:
+            not:
+              script.is_running: fb_limit
+          then:
+            - script.execute: fb_idle
+
+  - id: fb_delivered
+    mode: restart
+    then:
+      - light.turn_on:
+          id: status_led
+          red: 0%
+          green: 100%
+          blue: 0%
+          brightness: 100%
+          effect: None
+      - delay: 600ms
+      - script.execute: fb_idle
+
+  - id: fb_failed
+    mode: restart
+    then:
+      - light.turn_on:
+          id: status_led
+          effect: Error
+      - delay: 2s
+      - script.execute: fb_idle
+
+  - id: fb_busy
+    mode: restart
+    then:
+      - repeat:
+          count: 2
+          then:
+            - light.turn_on:
+                id: status_led
+                red: 100%
+                green: 100%
+                blue: 100%
+                brightness: 100%
+                effect: None
+            - delay: 100ms
+            - light.turn_off:
+                id: status_led
+                transition_length: 0s
+            - delay: 100ms
+      - script.execute: fb_idle
+
+  - id: fb_limit
+    mode: restart
+    then:
+      - light.turn_on:
+          id: status_led
+          effect: Flicker
+      - delay: 600ms
+      - script.execute: fb_idle
+
+  - id: fb_incoming_start
+    then:
+      - script.execute: fb_idle
+  - id: fb_incoming_end
+    then:
+      - script.execute: fb_idle
+
+  # The yellow pulse is the signal; fb_idle shows it once `offline` is set.
+  - id: fb_boot_offline
+    then:
+      - script.execute: fb_idle

@@ -1,0 +1,98 @@
+# Talker feedback as short tones (devices without an LED), and a separate
+# intercom volume. Pairs with intercom.yaml. Tones: include/feedback.h.
+#
+#   tick         on air (hold threshold passed)
+#   blip-blip    delivered
+#   bonk-bonk    not delivered (add-on down, 502, timeout); once at boot if
+#                the add-on is unreachable
+#   busy tone    a message is playing, or the recorder is busy
+#   triple beep  recording limit reached
+#
+# The tones go to their own mixer source, so they play over music and over an
+# incoming message rather than replacing them. The mic hears them: the tick
+# lands in the recording ~${hold_ms} ms in.
+#
+# Needs ${feedback_src} (a mixer source speaker, nothing else plays on it) and
+# ${announce_src} (the mixer source of the main player's announcement pipeline).
+
+substitutions:
+  feedback_rate: "48000"      # the mixer's rate: the media pipelines' rate
+
+esphome:
+  includes:
+    - ../include/feedback.h
+
+interval:
+  - interval: 20ms
+    then:
+      - lambda: fb_pump(id(${feedback_src}));
+
+# Incoming messages only: the mixer attenuates the announcement source while
+# one plays, so Assist replies, alarms and music keep the player's volume.
+number:
+  - platform: template
+    id: intercom_volume
+    name: "Intercom volume"
+    icon: mdi:account-voice
+    entity_category: config
+    unit_of_measurement: "%"
+    min_value: 5
+    max_value: 100
+    step: 5
+    optimistic: true
+    restore_value: true
+    initial_value: 100
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(incoming);'
+          then:
+            - script.execute: fb_incoming_start
+
+script:
+  - id: fb_idle
+    then:
+      - logger.log:
+          format: "feedback: idle"
+          level: VERY_VERBOSE
+  - id: fb_sending
+    then:
+      - logger.log:
+          format: "feedback: sending"
+          level: VERY_VERBOSE
+
+  - id: fb_on_air
+    then:
+      - lambda: fb_play(id(${feedback_src}), FB_TICK, ${feedback_rate});
+  - id: fb_delivered
+    then:
+      - lambda: fb_play(id(${feedback_src}), FB_DELIVERED, ${feedback_rate});
+  - id: fb_failed
+    then:
+      - lambda: fb_play(id(${feedback_src}), FB_ERROR, ${feedback_rate});
+  - id: fb_busy
+    then:
+      - lambda: fb_play(id(${feedback_src}), FB_BUSY, ${feedback_rate});
+  - id: fb_limit
+    then:
+      - lambda: fb_play(id(${feedback_src}), FB_LIMIT, ${feedback_rate});
+  - id: fb_boot_offline
+    then:
+      - lambda: fb_play(id(${feedback_src}), FB_ERROR, ${feedback_rate});
+
+  - id: fb_incoming_start
+    then:
+      - mixer_speaker.apply_ducking:
+          id: ${announce_src}
+          decibel_reduction: !lambda |-
+            float v = id(intercom_volume).state;
+            if (std::isnan(v) || v >= 99.5f) return 0;
+            int db = (int) lroundf(-20.0f * log10f(v / 100.0f));
+            return db > 51 ? 51 : db;
+          duration: 0ms
+  - id: fb_incoming_end
+    then:
+      - mixer_speaker.apply_ducking:
+          id: ${announce_src}
+          decibel_reduction: 0
+          duration: 0ms

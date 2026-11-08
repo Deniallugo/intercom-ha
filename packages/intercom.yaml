@@ -1,0 +1,459 @@
+# Push-to-talk, the same on every intercom device: button, gestures, upload,
+# delivery result, Do-not-disturb, add-on URL and reachability.
+#
+# Gestures (recording starts at the press, so the first word is never lost):
+#   hold ≥ ${hold_ms} ms          talk to the channel
+#   tap, then press and hold       reply to whoever last spoke to this device
+#                                  (POST with X-Intercom-Reply; the add-on falls
+#                                  back to the channel when there is nobody)
+#   tap                            ptt_hook_tap after ${double_tap_ms} ms (Assist,
+#                                  or nothing) — the wait tells it from a double tap
+#   tap while a message/alarm      silence it, at once
+#   plays
+#   hold while a message plays,    "busy"
+#   or while the recorder is busy
+#
+# The device file provides:
+#   substitutions  mic_id, player_id, ptt_pin, tail_ms, intercom_url
+#                  (optional: ptt_pullup, hold_ms, double_tap_ms, max_talk_s,
+#                  local_audio, addon_probe_interval)
+#   scripts        ptt_hook_talk_start  hold confirmed (stop the wake word, Assist)
+#                  ptt_hook_talk_end    before the mic is released (re-arm it)
+#                  ptt_hook_tap         single tap
+#                  ptt_hook_dismiss     tap while alarm_active (stop the alarm)
+#   media player   on_announcement → script.execute: intercom_announce_start
+#                  on_idle, on_play → script.execute: intercom_announce_end
+#   a feedback package: feedback-led.yaml or feedback-sound.yaml (fb_* scripts)
+
+substitutions:
+  ptt_pullup: "true"
+  # Shorter is snappier for talk, longer forgives a slow tap. Both 0.4–0.5 s.
+  hold_ms: "450"
+  # A single tap acts this long after its release.
+  double_tap_ms: "300"
+  # Past this the add-on's cleanup of a long message on a Pi can outlast the
+  # uploader's 25 s wait for its answer.
+  max_talk_s: "30"
+  # C++ expression: true while the main player plays the device's own audio
+  # (Assist reply, alarm), which is not an incoming message.
+  local_audio: "false"
+  addon_probe_interval: 60s
+
+esphome:
+  includes:
+    - ../include/recorder.h
+    - ../include/uploader.h
+  on_boot:
+    # Before the heap fragments: one task for every upload and probe.
+    - priority: 600.0
+      then:
+        - lambda: uploader_init();
+    - priority: -100.0
+      then:
+        - script.execute: addon_boot_check
+
+globals:
+  # This press holds the recorder (mic started, upload connecting).
+  - id: ptt_rec
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Hold confirmed and streaming.
+  - id: ptt_talking
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Second press of a double tap: talk as a reply.
+  - id: ptt_reply
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Pressed while a message or alarm played: release silences it.
+  - id: ptt_dismiss
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # An intercom message (or another announcement) is playing.
+  - id: incoming
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Set by devices with Assist, from the wake chime until the reply ends.
+  - id: assist_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Set by devices with alarms while one rings; a tap runs ptt_hook_dismiss.
+  - id: alarm_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: mic_test_running
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # No Wi-Fi, or the add-on refused the last connection.
+  - id: offline
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+# ── Add-on address ────────────────────────────────────────────────────────────
+# Stored on the device, so a new host or a lan_token (`?token=…`) needs no
+# reflash. Changing intercom_url in YAML later doesn't override a stored value:
+# press "Reset intercom URL".
+
+text:
+  - platform: template
+    id: intercom_url_text
+    name: "Intercom URL"
+    icon: mdi:link-variant
+    entity_category: config
+    mode: text
+    max_length: 255
+    optimistic: true
+    restore_value: true
+    initial_value: "${intercom_url}"
+    # Also fires when the stored value is restored at boot, before Wi-Fi.
+    on_value:
+      - lambda: |-
+          if (wifi::global_wifi_component->is_connected()) uploader_probe(x.c_str());
+
+button:
+  - platform: template
+    name: "Reset intercom URL"
+    icon: mdi:link-variant-off
+    entity_category: config
+    on_press:
+      - text.set:
+          id: intercom_url_text
+          value: "${intercom_url}"
+
+switch:
+  # Incoming messages are stopped as they start. The add-on doesn't know about
+  # it yet, so the first ~0.1 s of its chime still plays and it counts the
+  # message as delivered here.
+  - platform: template
+    id: dnd
+    name: "Do not disturb"
+    icon: mdi:bell-off
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+event:
+  # For automations: talk / reply when the hold is confirmed, then
+  # delivered / failed when the add-on has answered.
+  - platform: template
+    id: ptt_event
+    name: "Talk"
+    icon: mdi:account-voice
+    event_types:
+      - talk
+      - reply
+      - delivered
+      - failed
+
+binary_sensor:
+  - platform: gpio
+    id: ptt_button
+    name: "Talk button"
+    pin:
+      number: ${ptt_pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: ${ptt_pullup}
+    filters:
+      - delayed_on: 25ms      # debounce
+      - delayed_off: 25ms
+    on_press:
+      - if:
+          condition:
+            script.is_running: ptt_tap_wait
+          then:
+            - script.stop: ptt_tap_wait
+            - globals.set:
+                id: ptt_reply
+                value: 'true'
+          else:
+            - globals.set:
+                id: ptt_reply
+                value: 'false'
+      - lambda: |-
+          id(ptt_rec) = false;
+          id(ptt_dismiss) = id(incoming) || id(alarm_active);
+          if (id(ptt_dismiss)) return;
+          // Busy: the hold watcher says so at the threshold; a tap still works.
+          if (uploader_is_uploading() || id(mic_test_running) ||
+              id(ptt_finish).is_running() || recorder_is_active())
+            return;
+          id(${mic_id}).start();   // our own listener slot
+          recorder_start();
+          id(ptt_rec) = uploader_begin(id(intercom_url_text).state.c_str(),
+                                       App.get_name().c_str());
+          if (!id(ptt_rec)) { recorder_cancel(); id(${mic_id}).stop(); }
+      - script.execute: ptt_hold_watch
+    on_release:
+      - if:
+          condition:
+            script.is_running: ptt_hold_watch
+          # ── short press ──
+          then:
+            - script.stop: ptt_hold_watch
+            - if:
+                condition:
+                  lambda: 'return id(ptt_rec);'
+                then:
+                  - script.execute: ptt_drop
+            - if:
+                condition:
+                  lambda: 'return id(ptt_dismiss);'
+                then:
+                  - script.execute: ptt_silence
+                else:
+                  - if:
+                      condition:
+                        lambda: 'return id(ptt_reply);'
+                      then:
+                        - logger.log: "double tap without a hold — nothing to send"
+                      else:
+                        - script.execute: ptt_tap_wait
+          # ── hold released ──
+          else:
+            - if:
+                condition:
+                  lambda: 'return id(ptt_talking);'
+                then:
+                  - script.execute: ptt_finish
+      - globals.set:
+          id: ptt_dismiss
+          value: 'false'
+
+  - platform: template
+    id: addon_reachable
+    name: "Intercom add-on"
+    device_class: connectivity
+    entity_category: diagnostic
+
+script:
+  # Running at release → it was a tap; finished → a hold.
+  - id: ptt_hold_watch
+    mode: restart
+    then:
+      - delay: ${hold_ms}ms
+      - if:
+          condition:
+            lambda: 'return id(ptt_dismiss) || !id(ptt_rec);'
+          then:
+            - logger.log: "talk refused — a message is playing or the recorder is busy"
+            - script.execute: fb_busy
+          else:
+            - if:
+                condition:
+                  lambda: 'return uploader_failed();'
+                # Already couldn't connect: say so now, not after the hold.
+                then:
+                  - logger.log:
+                      level: WARN
+                      format: "talk failed — add-on unreachable"
+                  - script.execute: ptt_drop
+                  - script.execute: fb_failed
+                  - event.trigger:
+                      id: ptt_event
+                      event_type: failed
+                else:
+                  - lambda: |-
+                      uploader_commit(id(ptt_reply));
+                      id(ptt_talking) = true;
+                  - logger.log:
+                      format: "talk: on air%s"
+                      args: ['id(ptt_reply) ? " (reply)" : ""']
+                  - script.execute: ptt_hook_talk_start
+                  - script.execute: fb_on_air
+                  - event.trigger:
+                      id: ptt_event
+                      event_type: !lambda 'return id(ptt_reply) ? "reply" : "talk";'
+                  - script.execute: ptt_limit
+
+  - id: ptt_tap_wait
+    mode: restart
+    then:
+      - delay: ${double_tap_ms}ms
+      - script.execute: ptt_hook_tap
+
+  # Throw away a press that never went on air: nothing reaches the add-on.
+  - id: ptt_drop
+    then:
+      - lambda: |-
+          recorder_cancel();
+          uploader_cancel();
+          id(${mic_id}).stop();
+          id(ptt_rec) = false;
+
+  - id: ptt_silence
+    then:
+      - if:
+          condition:
+            lambda: 'return id(incoming);'
+          then:
+            - logger.log: "tap — silencing the incoming message"
+            - media_player.stop:
+                id: ${player_id}
+                announcement: true
+      - if:
+          condition:
+            lambda: 'return id(alarm_active);'
+          then:
+            - script.execute: ptt_hook_dismiss
+
+  - id: ptt_limit
+    mode: restart
+    then:
+      - delay: ${max_talk_s}s
+      - if:
+          condition:
+            lambda: 'return id(ptt_talking);'
+          then:
+            - logger.log: "talk: ${max_talk_s} s limit reached"
+            - script.execute: fb_limit
+            - script.execute: ptt_finish
+
+  # Close out a broadcast, then report what the add-on said. A press meanwhile
+  # is "busy": wait_until outlasts the uploader's worst case (8 s final send +
+  # 25 s for the answer), so the next press is never refused for nothing.
+  - id: ptt_finish
+    mode: single
+    then:
+      - globals.set:
+          id: ptt_talking
+          value: 'false'
+      - script.stop: ptt_limit
+      - if:
+          condition:
+            lambda: 'return !uploader_failed();'
+          then:
+            - delay: ${tail_ms}ms   # so the last word isn't clipped
+      - lambda: recorder_stop();
+      - script.execute: fb_sending
+      # Re-arm the wake word before releasing our slot so the mic never has
+      # zero listeners (that tears down its I²S driver).
+      - script.execute: ptt_hook_talk_end
+      - lambda: |-
+          id(${mic_id}).stop();
+          id(ptt_rec) = false;
+      - wait_until:
+          condition:
+            lambda: 'return !uploader_is_uploading();'
+          timeout: 45s
+      - if:
+          condition:
+            lambda: 'return !uploader_is_uploading() && uploader_delivered_ok();'
+          then:
+            - logger.log:
+                format: "talk: delivered (%d, delivered=%d queued=%d)"
+                args: ['uploader_http_status()', 'uploader_delivered()', 'uploader_queued()']
+            - script.execute: fb_delivered
+            - event.trigger:
+                id: ptt_event
+                event_type: delivered
+          else:
+            - logger.log:
+                level: WARN
+                format: "talk: not delivered (result %d, HTTP %d, failed=%d)"
+                args: ['uploader_result()', 'uploader_http_status()', 'uploader_failed_targets()']
+            - script.execute: fb_failed
+            - event.trigger:
+                id: ptt_event
+                event_type: failed
+
+  # Called by the device's media player triggers.
+  - id: intercom_announce_start
+    then:
+      - if:
+          condition:
+            lambda: 'return !(${local_audio});'
+          then:
+            - globals.set:
+                id: incoming
+                value: 'true'
+            - if:
+                condition:
+                  switch.is_on: dnd
+                then:
+                  - logger.log: "do not disturb — stopping an incoming message"
+                  - media_player.stop:
+                      id: ${player_id}
+                      announcement: true
+                else:
+                  - script.execute: fb_incoming_start
+  - id: intercom_announce_end
+    then:
+      - if:
+          condition:
+            lambda: 'return id(incoming);'
+          then:
+            - globals.set:
+                id: incoming
+                value: 'false'
+            - script.execute: fb_incoming_end
+
+  # One error signal at boot if the add-on can't be reached.
+  - id: addon_boot_check
+    then:
+      - wait_until:
+          condition:
+            wifi.connected:
+          timeout: 60s
+      - delay: 2s
+      - lambda: uploader_probe(id(intercom_url_text).state.c_str());
+      - wait_until:
+          condition:
+            lambda: 'return !uploader_is_probing();'
+          timeout: 10s
+      - if:
+          condition:
+            lambda: 'return uploader_addon_state() != UPL_ADDON_UP;'
+          then:
+            - logger.log:
+                level: WARN
+                format: "intercom add-on unreachable at %s"
+                args: ['id(intercom_url_text).state.c_str()']
+            - script.execute: fb_boot_offline
+
+interval:
+  # Network failure mid-stream: stop at once instead of at release.
+  - interval: 250ms
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ptt_talking) && uploader_failed();'
+          then:
+            - logger.log:
+                level: WARN
+                format: "talk: upload failed while talking"
+            - script.execute: ptt_finish
+
+  - interval: ${addon_probe_interval}
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !id(ptt_rec);'
+          then:
+            - lambda: uploader_probe(id(intercom_url_text).state.c_str());
+
+  - interval: 2s
+    then:
+      - lambda: |-
+          int st = uploader_addon_state();
+          if (st != UPL_ADDON_UNKNOWN &&
+              (!id(addon_reachable).has_state() ||
+               id(addon_reachable).state != (st == UPL_ADDON_UP)))
+            id(addon_reachable).publish_state(st == UPL_ADDON_UP);
+          bool off = !wifi::global_wifi_component->is_connected() ||
+                     st == UPL_ADDON_DOWN;
+          if (off != id(offline)) {
+            id(offline) = off;
+            id(fb_idle).execute();
+          }
