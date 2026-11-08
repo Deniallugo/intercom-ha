@@ -64,18 +64,42 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
-        # 2024.03.5 bootstraps cosign v2.2.3, which can no longer be
-        # validated. 2026.02.1 is the newest tag that still has a published
-        # builder image (later tags of this deprecated action pull images
-        # that don't exist).
-        uses: home-assistant/builder@2026.02.1
+      # Built with Docker's own actions rather than the deprecated
+      # home-assistant/builder action, which has to download cosign from
+      # GitHub releases first (that download kept failing). Same image names
+      # and base images as before: config.yaml `image`, build.json `build_from`.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push amd64
+        uses: docker/build-push-action@v6
         with:
-          args: |
-            --all \
-            --target /data/intercom-addon \
-            --no-latest
-        env:
-          DOCKER_USERNAME: ${{ github.repository_owner }}
-          DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          context: intercom-addon
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          build-args: BUILD_FROM=ghcr.io/home-assistant/amd64-base:latest
+          tags: ghcr.io/deniallugo/intercom-ha/amd64-intercom-relay:${{ steps.version.outputs.version }}
+          labels: |
+            io.hass.type=addon
+            io.hass.arch=amd64
+            io.hass.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push aarch64
+        uses: docker/build-push-action@v6
+        with:
+          context: intercom-addon
+          platforms: linux/arm64
+          push: true
+          provenance: false
+          build-args: BUILD_FROM=ghcr.io/home-assistant/aarch64-base:latest
+          tags: ghcr.io/deniallugo/intercom-ha/aarch64-intercom-relay:${{ steps.version.outputs.version }}
+          labels: |
+            io.hass.type=addon
+            io.hass.arch=aarch64
+            io.hass.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
