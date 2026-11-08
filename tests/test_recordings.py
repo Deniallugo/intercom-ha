@@ -174,6 +174,7 @@ def players_file(monkeypatch, tmp_path):
 @pytest.fixture
 def fake_ha(monkeypatch):
     monkeypatch.setattr(srv.ha, "play_media", AsyncMock(return_value=204))
+    monkeypatch.setattr(srv.ha, "get_states", AsyncMock(return_value=[]))
     monkeypatch.setattr(srv.ha, "get_state",
                         AsyncMock(return_value={"state": "idle", "attributes": {}}))
     monkeypatch.setattr(srv.ha, "pause", AsyncMock(return_value=200))
@@ -254,7 +255,7 @@ async def test_intercom_upload_is_retained_without_chimes(
     pcm = b"\x01\x00" * 1600  # 0.1 s
     resp = await client.post("/intercom", data=pcm,
                              headers={"X-Session-ID": "sid1", "X-Device-Name": "voice-s3"})
-    assert resp.status == 204
+    assert resp.status == 200
 
     items = recordings.listing()
     assert len(items) == 1 and items[0]["source"] == "voice-s3"
@@ -277,7 +278,7 @@ async def test_intercom_still_broadcasts_when_retention_fails(
     client = await aiohttp_client(lan_app)
     resp = await client.post("/intercom", data=b"\x00" * 64,
                              headers={"X-Session-ID": "sid2", "X-Device-Name": "voice-s3"})
-    assert resp.status == 204
+    assert resp.status == 200
     assert fake_ha.play_media.await_count == 1
 
 

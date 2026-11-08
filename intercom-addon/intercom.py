@@ -13,6 +13,7 @@ from aiohttp import web
 from ha_client import HAClient
 from chimes import ChimeMixer
 from ducking import Ducker
+from airtime import Airtime
 from talkback import TalkbackWindows
 import channel
 import players
@@ -25,7 +26,10 @@ ha = HAClient()
 # Default format at import (so tests can call handlers directly); _run()
 # rebuilds it from options.json.
 mixer = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
+# Fallback for players without MEDIA_ANNOUNCE: pause, play, resume.
 ducker = Ducker(ha)
+# One broadcast at a time per speaker; later ones wait (bounded).
+airtime = Airtime()
 talkback = TalkbackWindows()
 
 # In-memory, per source: {"last_seen": unix_ts, "last_broadcast": {...}}.
@@ -55,6 +59,12 @@ DEFAULT_KEEP_RECORDINGS = 10
 # X-Session-ID ends up in a /config/www filename: reject anything that could
 # traverse out of it.
 _SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+# MediaPlayerEntityFeature.MEDIA_ANNOUNCE (homeassistant/components/
+# media_player/const.py). ESPHome speaker media players report it.
+MEDIA_ANNOUNCE = 1 << 20
+# Reading player states (announce support, availability) before playing.
+STATES_TIMEOUT = 2.0
 
 
 def safe_session_id(raw: str) -> str:
@@ -258,13 +268,43 @@ async def handle_intercom(request: web.Request) -> web.Response:
     results = await _play_on_targets(
         wav, "wav", total_duration, targets, name=f"intercom-{session_id}"
     )
+    # Same dict as `results`: a queued target's outcome lands here later.
     activity[source]["last_broadcast"] = {
         "ts": received_at,
         "mode": plan.mode,
         "targets": list(targets),
         "results": results,
     }
-    return web.Response(status=204)
+    counts = delivery_counts(results)
+    # 502 only when there was someone to reach and nobody was (or will be):
+    # partial delivery is still a delivery, so 200 (207 is WebDAV's and tells
+    # an HTTP client nothing that 200 + the per-target body does not).
+    status = 502 if targets and not (counts["delivered"] or counts["queued"]) else 200
+    log.info("delivery  session=%s  status=%d  %s", session_id[:8], status, counts)
+    return web.json_response({
+        "session": session_id,
+        "source": source,
+        "mode": plan.mode,
+        "targets": list(targets),
+        "results": results,
+        **counts,
+    }, status=status)
+
+
+def delivery_counts(results: dict) -> dict:
+    """{"delivered", "queued", "failed", "skipped"} over per-target results."""
+    counts = {"delivered": 0, "queued": 0, "failed": 0, "skipped": 0}
+    for r in results.values():
+        outcome = r.get("outcome")
+        if outcome == "ok":
+            counts["delivered"] += 1
+        elif outcome == "queued":
+            counts["queued"] += 1
+        elif outcome == "skipped":
+            counts["skipped"] += 1
+        else:
+            counts["failed"] += 1
+    return counts
 
 
 async def handle_announce(request: web.Request) -> web.Response:
@@ -425,9 +465,23 @@ async def handle_recording_delete(request: web.Request) -> web.Response:
 async def _play_on_targets(
     wav_bytes: bytes, ext: str, duration: float, targets: list[str], *, name: str
 ) -> dict:
-    """Write the media to /config/www and play it on `targets`, pausing and
-    later restoring whatever they were playing. Returns per-target results:
-    {entity_id: {"ok": bool, "status": int} | {"ok": False, "error": str}}."""
+    """Write the media to /config/www and play it on `targets`.
+
+    Players with MEDIA_ANNOUNCE get play_media(announce=True) and handle
+    their own music (ESPHome: announcement pipeline; Sonos: audio clip).
+    Others go through the Ducker: pause, play, resume.
+
+    A speaker still playing an earlier broadcast is not interrupted: this one
+    is queued behind it (airtime.py) and played in the background, after the
+    caller has its answer. Returns {entity_id: result}, result being one of
+
+        {"ok": True,  "outcome": "ok",      "via": "announce"|"duck", "status": 200}
+        {"ok": False, "outcome": "error",   "via": ..., "status"?: int, "error": str}
+        {"ok": False, "outcome": "skipped", "reason": "unavailable"|...}
+        {"ok": False, "outcome": "busy",    "error": str}   # queue too long
+        {"ok": None,  "outcome": "queued",  "wait": seconds}
+
+    A queued entry is replaced in place by its final result."""
     filename = f"{name}.{ext}"
     filepath = Path(CONFIG_WWW) / filename
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -440,26 +494,131 @@ async def _play_on_targets(
         _spawn(_delete_after(filepath, duration + 10))
         return results
 
-    # Restore in `finally`, or a failure leaves music paused and a stale
-    # snapshot in the Ducker.
     try:
         opts = load_options()
         ha_url = opts.get("ha_url", "http://homeassistant.local:8123")
-        await ducker.snapshot_and_pause(targets)
         media_url = f"{ha_url}/local/{filename}"
-        log.info("playing on %d player(s): %s", len(targets), targets)
-        for player in targets:
-            try:
-                status = await ha.play_media(player, media_url)
-                log.info("HA API  player=%s  status=%d", player, status)
-                results[player] = {"ok": 200 <= status < 300, "status": status}
-            except Exception as e:
-                log.error("play_media failed for %s: %s", player, e)
-                results[player] = {"ok": False, "error": str(e)}
-    finally:
-        ducker.schedule_restore(list(targets), duration + 1.5)
+        states = await _player_states()
+    except Exception:
+        _spawn(_delete_after(filepath, duration + 10))
+        raise
+
+    now_jobs, later_jobs = [], []
+    for player in dict.fromkeys(targets):
+        state = states.get(player) if states is not None else None
+        reason = skip_reason(state, states is not None)
+        if reason:
+            log.info("skip  %s  (%s)", player, reason)
+            results[player] = {"ok": False, "outcome": "skipped", "reason": reason}
+            continue
+        slot = airtime.book(player, duration)
+        if slot is None:
+            busy = airtime.busy_for(player)
+            log.warning("busy  %s  (free in %.0fs); dropping %s", player, busy, filename)
+            results[player] = {"ok": False, "outcome": "busy",
+                               "error": f"speaker busy for another {busy:.0f}s"}
+            continue
+        job = (player, slot, supports_announce(state))
+        if slot.wait > 0:
+            log.info("queued  %s  starts in %.1fs", player, slot.wait)
+            results[player] = {"ok": None, "outcome": "queued",
+                               "wait": round(slot.wait, 1)}
+            later_jobs.append(job)
+        else:
+            now_jobs.append(job)
+
+    if now_jobs:
+        log.info("playing on %d player(s): %s", len(now_jobs), [j[0] for j in now_jobs])
+        done = await asyncio.gather(
+            *(_deliver(p, media_url, duration, slot, a) for p, slot, a in now_jobs))
+        for (player, _, _), result in zip(now_jobs, done):
+            results[player] = result
+
+    if later_jobs:
+        _spawn(_deliver_later(later_jobs, results, media_url, duration, filepath))
+    else:
         _spawn(_delete_after(filepath, duration + 10))
     return results
+
+
+async def _player_states() -> Optional[dict]:
+    """{entity_id: state object}, or None if HA's states cannot be read
+    (then every target is tried the old way: no announce, Ducker)."""
+    try:
+        states = await asyncio.wait_for(ha.get_states(), STATES_TIMEOUT)
+    except Exception as e:
+        log.warning("could not read player states (%s); playing without "
+                    "announce", str(e) or type(e).__name__)
+        return None
+    if not states:
+        return None
+    return {s.get("entity_id"): s for s in states if isinstance(s, dict)}
+
+
+def supports_announce(state: Optional[dict]) -> bool:
+    """True if the player declares MediaPlayerEntityFeature.MEDIA_ANNOUNCE."""
+    attrs = (state or {}).get("attributes") or {}
+    try:
+        features = int(attrs.get("supported_features") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(features & MEDIA_ANNOUNCE)
+
+
+def skip_reason(state: Optional[dict], states_known: bool) -> Optional[str]:
+    """Why a target cannot play, or None. HA skips entity services on an
+    unavailable entity yet answers 200, which would read as delivered."""
+    if not states_known:
+        return None
+    if state is None:
+        return "not in Home Assistant"
+    if state.get("state") == "unavailable":
+        return "unavailable"
+    return None
+
+
+async def _deliver(player: str, media_url: str, duration: float, slot,
+                   use_announce: bool) -> dict:
+    """play_media on one player in its booked slot; frees the slot on failure."""
+    via = "announce" if use_announce else "duck"
+    try:
+        if use_announce:
+            status = await ha.play_media(player, media_url, announce=True)
+        else:
+            # Restore in `finally`, or a failure leaves music paused and a
+            # stale snapshot in the Ducker.
+            try:
+                await ducker.snapshot_and_pause([player])
+                status = await ha.play_media(player, media_url)
+            finally:
+                ducker.schedule_restore([player], duration + 1.5)
+    except Exception as e:
+        if isinstance(e, asyncio.TimeoutError):
+            error = "timed out"
+        else:
+            error = str(e) or type(e).__name__
+        log.error("play_media failed for %s: %s", player, error)
+        airtime.cancel(slot)
+        return {"ok": False, "outcome": "error", "via": via, "error": error}
+    log.info("HA API  player=%s  via=%s  status=%d", player, via, status)
+    if 200 <= status < 300:
+        return {"ok": True, "outcome": "ok", "via": via, "status": status}
+    airtime.cancel(slot)
+    return {"ok": False, "outcome": "error", "via": via, "status": status,
+            "error": f"HA returned HTTP {status}"}
+
+
+async def _deliver_later(jobs: list, results: dict, media_url: str,
+                         duration: float, filepath: Path) -> None:
+    """Play queued jobs as their slots open; the media file outlives them."""
+    async def one(player, slot, use_announce):
+        await asyncio.sleep(max(0.0, slot.start - airtime.now()))
+        results[player] = await _deliver(player, media_url, duration, slot, use_announce)
+
+    try:
+        await asyncio.gather(*(one(*job) for job in jobs))
+    finally:
+        await _delete_after(filepath, duration + 10)
 
 
 # The loop holds tasks weakly; keep them alive until done.

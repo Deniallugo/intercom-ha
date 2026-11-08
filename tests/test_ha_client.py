@@ -60,6 +60,37 @@ async def test_play_media_posts_correct_body(env_token):
     }
 
 
+async def test_play_media_announce_flag_and_timeout(env_token):
+    fake_resp = MagicMock(status=200)
+    fake_session = MagicMock()
+    fake_session.post = AsyncMock(return_value=fake_resp)
+
+    client = HAClient(session=fake_session)
+    status = await client.play_media(
+        "media_player.kitchen", "http://ha/local/x.wav", announce=True)
+
+    assert status == 200
+    kwargs = fake_session.post.await_args.kwargs
+    assert kwargs["json"] == {
+        "entity_id": "media_player.kitchen",
+        "media_content_id": "http://ha/local/x.wav",
+        "media_content_type": "music",
+        "announce": True,
+    }
+    assert kwargs["timeout"].total == ha_client.PLAY_TIMEOUT
+    fake_resp.release.assert_called_once()
+
+
+async def test_play_media_returns_error_status(env_token):
+    fake_resp = MagicMock(status=500)
+    fake_resp.text = AsyncMock(return_value="boom")
+    fake_session = MagicMock()
+    fake_session.post = AsyncMock(return_value=fake_resp)
+
+    client = HAClient(session=fake_session)
+    assert await client.play_media("media_player.k", "http://ha/x.wav") == 500
+
+
 async def test_pause_posts_pause_service(env_token):
     fake_resp = MagicMock(status=200)
     fake_session = MagicMock()

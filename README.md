@@ -162,6 +162,29 @@ The add-on listens on `port` (default `9999`):
 |---|---|---|
 | `POST` | `/intercom` | Receive a PCM audio upload from a device and broadcast it to the channel |
 | `POST` | `/intercom/reply` | Same, but only to whoever last spoke to this device (30 s window) |
+
+How a broadcast is played:
+
+- Speakers that support announcements (`MEDIA_ANNOUNCE`: ESPHome speaker media
+  players, Sonos, …) get `play_media` with `announce: true` and keep their own
+  music: ESPHome plays it on the `announcement_pipeline` (via HA's ffmpeg
+  proxy), Sonos as an audio clip over the queue. Other players fall back to
+  pause → play → resume.
+- A speaker still playing a broadcast is not cut off: the next one waits its
+  turn (at most 30 s, else it is dropped as `busy`). Unavailable speakers are
+  skipped.
+- `/intercom` answers with JSON (`200`; `502` when there were targets and none
+  was reached):
+
+  ```json
+  {"source": "atom-echo", "mode": "channel", "targets": ["media_player.a", "media_player.b"],
+   "results": {"media_player.a": {"ok": true, "outcome": "ok", "via": "announce", "status": 200},
+               "media_player.b": {"ok": null, "outcome": "queued", "wait": 3.2}},
+   "delivered": 1, "queued": 1, "failed": 0, "skipped": 0}
+  ```
+
+  `outcome` is `ok`, `error`, `skipped`, `busy` or `queued`; a queued result is
+  updated in `/api/devices` → `last_broadcast` once it plays.
 | `POST` | `/announce` | Render text via TTS and play on targets (omit `targets` → all players) |
 
 Trigger an announcement from a Home Assistant automation with a `rest_command`:

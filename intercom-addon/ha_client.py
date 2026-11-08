@@ -5,7 +5,7 @@ import os
 import time
 from typing import Optional
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientTimeout
 
 log = logging.getLogger(__name__)
 
@@ -14,6 +14,9 @@ HA_API = f"{SUPERVISOR_CORE}/api"
 # REST has no device/entity registry; only the WebSocket API does.
 SUPERVISOR_WS = "ws://supervisor/core/websocket"
 WS_TIMEOUT = 10.0
+# A play_media call; several run in parallel inside a device's 8 s upload
+# timeout (include/uploader.h), after denoise.
+PLAY_TIMEOUT = 4.0
 
 # The ESPHome node name (what devices send as X-Device-Name) is not in the
 # device registry: HA keeps it only in the config entry's data
@@ -67,17 +70,37 @@ class HAClient:
             )
         return await resp.json()
 
-    async def play_media(self, entity_id: str, media_url: str) -> int:
+    async def play_media(self, entity_id: str, media_url: str, *,
+                         announce: bool = False) -> int:
+        """Call media_player.play_media; returns the HTTP status.
+
+        announce=True plays it as an announcement (players with
+        MEDIA_ANNOUNCE): ESPHome routes it to its announcement pipeline,
+        through HA's ffmpeg proxy, without touching the media queue; Sonos
+        plays it as an audio clip over the music. The type stays "music", as
+        HA's own tts.speak sends it; ESPHome ignores it.
+
+        Bounded by PLAY_TIMEOUT: the device's upload waits for our reply."""
+        data = {
+            "entity_id": entity_id,
+            "media_content_id": media_url,
+            "media_content_type": "music",
+        }
+        if announce:
+            data["announce"] = True
         resp = await self.session.post(
             f"{HA_API}/services/media_player/play_media",
             headers=self._auth_headers(),
-            json={
-                "entity_id": entity_id,
-                "media_content_id": media_url,
-                "media_content_type": "music",
-            },
+            json=data,
+            timeout=ClientTimeout(total=PLAY_TIMEOUT),
         )
-        return resp.status
+        try:
+            if resp.status >= 300:
+                body = (await resp.text())[:200]
+                log.warning("play_media %s -> %d: %s", entity_id, resp.status, body)
+            return resp.status
+        finally:
+            resp.release()
 
     async def pause(self, entity_id: str) -> int:
         resp = await self.session.post(

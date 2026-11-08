@@ -324,7 +324,7 @@ async def test_intercom_known_source_uses_route(
         "/intercom", data=b"\x00" * 64,
         headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
     )
-    assert resp.status == 204
+    assert resp.status == 200
     called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
     assert called_entities == ["media_player.kitchen"]
 
@@ -382,7 +382,7 @@ async def test_intercom_empty_route_means_channel_not_nowhere(
         "/intercom", data=b"\x00" * 64,
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "atom-echo"},
     )
-    assert resp.status == 204
+    assert resp.status == 200
     assert [c.args[0] for c in fake_ha.play_media.call_args_list] == [
         "media_player.voice_s3_player"]
 
@@ -398,6 +398,9 @@ def _post(client, device, *, path="/intercom", headers=None):
 def _played(fake_ha):
     out = [c.args[0] for c in fake_ha.play_media.call_args_list]
     fake_ha.play_media.reset_mock()
+    # Routing tests press back to back; free the speakers so the next press
+    # plays now instead of queueing behind this one.
+    srv.airtime.reset()
     return out
 
 
@@ -414,9 +417,9 @@ async def test_clean_install_two_devices_hear_each_other_every_press(
     fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
     client = await aiohttp_client(lan_app)
     for _ in range(4):
-        assert (await _post(client, "atom-echo")).status == 204
+        assert (await _post(client, "atom-echo")).status == 200
         assert _played(fake_ha) == ["media_player.voice_s3_player"]
-        assert (await _post(client, "voice-s3")).status == 204
+        assert (await _post(client, "voice-s3")).status == 200
         assert _played(fake_ha) == ["media_player.atom_echo_player"]
 
 
@@ -480,7 +483,7 @@ async def test_muted_source_plays_nowhere(
     }))
     fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
     client = await aiohttp_client(lan_app)
-    assert (await _post(client, "atom-echo")).status == 204
+    assert (await _post(client, "atom-echo")).status == 200
     assert _played(fake_ha) == []
     await _post(client, "voice-s3")
     assert _played(fake_ha) == ["media_player.atom_echo_player"]
@@ -509,7 +512,7 @@ async def test_registry_failure_falls_back_to_default_minus_self(
     }))
     fake_ha.get_registry.side_effect = RuntimeError("ws down")
     client = await aiohttp_client(lan_app)
-    assert (await _post(client, "dev-a")).status == 204
+    assert (await _post(client, "dev-a")).status == 200
     assert _played(fake_ha) == ["media_player.b"]
 
 
@@ -549,7 +552,7 @@ async def test_intercom_malicious_session_id_cannot_escape_www_dir(
         "/intercom", data=b"\x00" * 64,
         headers={"X-Session-ID": "../../../pwned", "X-Device-Name": "src-a"},
     )
-    assert resp.status == 204
+    assert resp.status == 200
     # The traversal must not write outside the www dir.
     assert not (www_dir.parent / "pwned.wav").exists()
     assert list(www_dir.parent.glob("*.wav")) == []
@@ -557,7 +560,7 @@ async def test_intercom_malicious_session_id_cannot_escape_www_dir(
     assert len(list(www_dir.glob("intercom-*.wav"))) == 1
 
 
-async def test_intercom_missing_players_file_returns_204_no_call(
+async def test_intercom_missing_players_file_returns_200_no_call(
     aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha, caplog,
 ):
     # players_file fixture monkeypatches PLAYERS_FILE but never creates it
@@ -570,7 +573,7 @@ async def test_intercom_missing_players_file_returns_204_no_call(
             headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
         )
 
-    assert resp.status == 204
+    assert resp.status == 200
     # source auto-enrolled, default is empty, so no HA calls
     assert fake_ha.play_media.call_args_list == []
     assert json.loads(players_file.read_text())["routes"] == {"src-a": []}
@@ -721,7 +724,7 @@ async def test_play_media_failure_still_restores_and_cleans_up(
         "/intercom", data=b"\xAA\xBB" * 100,
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
     )
-    assert resp.status == 204
+    assert resp.status == 200
     assert [c.args[0] for c in fake_ha.play_media.call_args_list] == [
         "media_player.kitchen", "media_player.bedroom"]
     await _asyncio.sleep(2.0)
@@ -964,7 +967,11 @@ async def test_devices_lists_members_with_state_and_last_broadcast(
     assert lb["mode"] == "channel"
     assert sorted(lb["targets"]) == [
         "media_player.speaker_s3_player", "media_player.voice_s3_player"]
-    assert lb["results"]["media_player.voice_s3_player"] == {"ok": True, "status": 204}
+    assert lb["results"]["media_player.voice_s3_player"] == {
+        "ok": True, "outcome": "ok", "via": "duck", "status": 204}
+    # HA would answer 200 for an unavailable entity and play nothing.
+    assert lb["results"]["media_player.speaker_s3_player"] == {
+        "ok": False, "outcome": "skipped", "reason": "unavailable"}
     assert atom["last_seen"] == lb["ts"]
 
     spk = rows["Speaker S3"]
