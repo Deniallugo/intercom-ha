@@ -81,3 +81,20 @@ media_player:
       format: FLAC
       sample_rate: 48000
       num_channels: 2
+    # The add-on plays broadcasts with `announce: true` and no longer pauses
+    # the music: duck it here while an announcement plays.
+    on_announcement:
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: 15
+          duration: 0.3s
+    on_idle:
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: 0
+          duration: 0.5s
+    on_play:
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: 0
+          duration: 0.5s

@@ -163,6 +163,35 @@ media_player:
       format: FLAC
       sample_rate: 48000
       num_channels: 2
+    # The add-on plays broadcasts with `announce: true` and no longer pauses
+    # the music: duck it here while an announcement plays.
+    on_announcement:
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: 15
+          duration: 0.3s
+    # Not while Assist runs: the wake chime ends mid-listen, and Assist's
+    # on_end/on_error restores the level itself.
+    on_idle:
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_src
+                decibel_reduction: 0
+                duration: 0.5s
+    on_play:
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_src
+                decibel_reduction: 0
+                duration: 0.5s
     # Play with `announcement: true`; speaker.play bypasses the mixer and fails
     # ("Incompatible audio streams").
     files:
@@ -273,7 +302,7 @@ voice_assistant:
         duration: 0.3s
 
   # Un-duck while HA thinks: a silent line lets a powered speaker with standby
-  # sleep and eat the reply's start. Must be 0: broadcasts play via media_src.
+  # sleep and eat the reply's start.
   on_stt_vad_end:
     - mixer_speaker.apply_ducking:
         id: media_src
