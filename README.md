@@ -14,9 +14,16 @@ and music players.
 
 | Device | MCU | Role |
 |---|---|---|
-| **Kitchen** — M5Stack Atom Echo + 1× MAX98357A | ESP32 (no PSRAM) | Button-PTT intercom, TTS announcements, DMA watchdog auto-reboot |
+| **Kitchen** — M5Stack Atom Echo + 1× MAX98357A | ESP32 (no PSRAM) | Button-PTT intercom with a status LED, TTS announcements, DMA watchdog auto-reboot |
 | **Terrace** — M5Stack VoiceS3R + 2× MAX98357A (dual mono) | ESP32-S3 (8 MB PSRAM) | PTT intercom, wake word (`okay nabu`) + HA Assist, Spotify via Music Assistant, TTS announcements |
 | **Voice S3** — bare ESP32-S3 + PCM5102A + ZK-502MT amp + INMP441 + button | ESP32-S3 N16R8 (8 MB PSRAM) | One box on 24 V: stereo Music Assistant player with a built-in 2 × 50 W amp driving two passive speakers, wake word + HA Assist, tap-to-talk / hold-to-intercom. Mic and DAC on separate I²S peripherals, so it keeps listening while playing |
+
+Every intercom device's button works the same (`packages/intercom.yaml`): hold
+to talk, tap then hold to reply to the last speaker, tap for Assist where there
+is one, tap to silence an incoming message. The talker hears (or, on the
+Kitchen, sees) whether the message was delivered. The add-on address is a text
+entity on the device, so a new host or token needs no reflash. Details:
+[docs/DEVICES.md → Talk button](docs/DEVICES.md#talk-button--every-intercom-device).
 
 Wiring, GPIO maps and hardware notes: **[docs/DEVICES.md](docs/DEVICES.md)**.
 
