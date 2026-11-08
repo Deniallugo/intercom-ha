@@ -13,10 +13,12 @@ Three intercom devices plus a playback-only speaker. Repo layout: [README](../RE
 | Wake word + Assist | — | ✓ `okay nabu` | ✓ `okay nabu` |
 | Music Assistant | — | ✓ | ✓ stereo |
 | Mic gain | ×8 (+18 dB) in `recorder.h` | codec PGA | +12 dB on every path |
-| Extra | DMA watchdog reboot | — | timers |
+| Extra | DMA watchdog reboot | timers, mic test | timers, mic test |
 
 On Terrace and Voice S3, mic and playback are on separate I²S buses, so the wake
-word keeps listening during playback.
+word keeps listening during playback. Terrace is built to match Voice S3: the
+same wake chime, Assist ducking, timers and alarm, mic test and 0.5 s tail; only
+the audio hardware sections differ.
 
 ---
 
