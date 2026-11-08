@@ -79,8 +79,9 @@ This repo is a Home Assistant **add-on repository**. In Home Assistant:
 1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add:
    `https://github.com/Deniallugo/intercom-ha`
 2. Install **Intercom Relay**, then **Start** it.
-3. Open the add-on's **Intercom** side-panel (ingress) to pick announcement
-   targets and send text announcements.
+3. Open the add-on's **Intercom** side-panel (ingress): it lists the intercom
+   devices with their speaker status and last broadcast, sends text
+   announcements, and keeps per-device settings under **Advanced**.
 
 Pre-built images are published to GHCR for `aarch64` and `amd64` on each version
 tag (see `.github/workflows/build.yml`).
@@ -142,7 +143,8 @@ the ESPHome config entry's `device_name` (read from
 `/config/.storage/core.config_entries`), else by the device name
 (`atom-echo` ~ "Atom Echo"), else by a manual `selves` entry.
 
-Per device, in `/data/players.json` (set via `PATCH /api/devices/{name}`):
+Per device, in `/data/players.json` (set in the panel's **Advanced** section,
+or via `PATCH /api/devices/{name}`):
 an explicit target list (`override`), `muted` (its PTT goes nowhere), or
 `listen: false` (never receives the channel). If the registry is unreachable,
 the channel falls back to the `default` players, still minus the talker.
@@ -150,6 +152,32 @@ the channel falls back to the `default` players, still minus the talker.
 Replies: a plain PTT always goes to the channel. `POST /intercom/reply` (or
 `X-Intercom-Reply: 1`) goes only to whoever last spoke to this device in the
 past 30 s, or to the channel if nobody did.
+
+### The panel
+
+- **Devices** — one card per intercom device: name (click to rename), speaker
+  online/offline, whether it talks or only listens, its last broadcast and who
+  got it, and **Test sound** (plays the chimes on that device's speaker).
+  Refreshes every few seconds; every change is saved as you make it.
+- **Announcement** — TTS on every device, or on the ticked ones.
+- **Advanced** — per device: whether its button broadcasts (mute), whether it
+  receives the channel, who hears it (everyone else, or only chosen intercom
+  devices), **Remove**; and the mic recordings, when there are any.
+
+**Remove** forgets what the add-on keeps for a device (name, recipients, mute,
+manual speaker, last broadcast). A device that Home Assistant lists stays in
+the panel, so for it Remove also stops it receiving the channel (`listen:
+false`; tick *Receives the channel* to undo, or delete it in HA). Any device
+that sends audio again is enrolled again, like a new one.
+
+The panel follows Home Assistant's theme when it can read it from the parent
+frame (ingress is served from HA's own origin), else the browser's light/dark
+preference.
+
+Ingress-only endpoints used by the panel: `GET /api/devices`,
+`PATCH`/`DELETE /api/devices/{key}`, `POST /api/devices/{key}/test`,
+`POST /api/announce`, `GET`/`DELETE /api/recordings[/{name}]` (`key` is a
+device name or an HA device id).
 
 ### Broadcast cleanup
 

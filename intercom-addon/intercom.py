@@ -498,6 +498,100 @@ async def handle_device_patch(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+def resolve_device(key: str, state: dict, members: list):
+    """(name, member) for a /api/devices/{key}: key is an HA device_id or a
+    device name (X-Device-Name). Either may be None; both None = unknown."""
+    member = next((m for m in members if m.device_id == key), None)
+    if member:
+        name = member.node_name or next(
+            (s for s in channel.known_sources(state, activity)
+             if channel.match_source(s, members) is member), None)
+        return name, member
+    if key not in channel.known_sources(state, activity):
+        member = next((m for m in members if m.node_name == key), None)
+        return (key, member) if member else (None, None)
+    manual = state["selves"].get(key)
+    if manual:
+        member = next((m for m in members if m.media_player == manual), None)
+    else:
+        member = channel.match_source(key, members)
+    return key, member
+
+
+async def handle_device_delete(request: web.Request) -> web.Response:
+    """DELETE /api/devices/{key} — forget a device.
+
+    Clears everything the add-on keeps for its name: alias, override, manual
+    self speaker, mute, last_seen / last_broadcast. A device HA's registry
+    lists cannot be made to vanish from here (it is back on the next poll),
+    so for it "remove" also means "stop receiving the channel" (listen:
+    false); remove it from HA to drop it for good. Any device that talks
+    again is enrolled again, like a new one."""
+    key = request.match_info.get("key", "")
+    state = players.load_players()
+    members, _ = await registry_members()
+    name, member = resolve_device(key, state, members)
+    if name is None and member is None:
+        return web.json_response({"error": "no such device"}, status=404)
+
+    if name:
+        state["routes"].pop(name, None)
+        state["aliases"].pop(name, None)
+        state["selves"].pop(name, None)
+        state["muted"] = [s for s in state["muted"] if s != name]
+        activity.pop(name, None)
+    excluded = False
+    if member and member.media_player:
+        if member.media_player not in state["excluded"]:
+            state["excluded"].append(member.media_player)
+        excluded = True
+    players.save_players(state)
+    log.info("device removed  key=%s  name=%s  registry=%s", key, name,
+             bool(member))
+    return web.json_response({
+        "name": name,
+        "device_id": member.device_id if member else None,
+        "registry": member is not None,
+        "listening": not excluded if member else None,
+    })
+
+
+# A short "is this the right speaker?" sound: the two broadcast chimes.
+TEST_GAP_SECONDS = 0.15
+
+
+async def handle_device_test(request: web.Request) -> web.Response:
+    """POST /api/devices/{key}/test — play the chimes on that device's own
+    speaker. Same per-speaker result as a broadcast; not a broadcast (no
+    last_broadcast, no talkback)."""
+    key = request.match_info.get("key", "")
+    state = players.load_players()
+    members, _ = await registry_members()
+    name, member = resolve_device(key, state, members)
+    if name is None and member is None:
+        return web.json_response({"error": "no such device"}, status=404)
+    mp = (state["selves"].get(name) if name else None) or \
+        (member.media_player if member else None)
+    if not mp:
+        return web.json_response(
+            {"error": "this device has no known speaker in Home Assistant"},
+            status=400)
+    gap = b"\x00" * (int(mixer.sample_rate * TEST_GAP_SECONDS)
+                     * mixer.sample_width * mixer.channels)
+    wav = mixer.build_wav(gap)
+    try:
+        results = await _play_on_targets(
+            wav, "wav", mixer.total_duration_seconds(gap), [mp],
+            name=f"test-{uuid.uuid4()}")
+    except Exception as e:
+        log.error("test sound for %s failed: %s", mp, e)
+        return web.json_response({"media_player": mp, "error": str(e)}, status=502)
+    counts = delivery_counts(results)
+    ok = counts["delivered"] or counts["queued"]
+    body = {"media_player": mp, "result": results.get(mp), **counts}
+    return web.json_response(body, status=200 if ok else 502)
+
+
 async def handle_recordings_list(request: web.Request) -> web.Response:
     return web.json_response({
         "keep": keep_recordings(),
@@ -798,6 +892,8 @@ def make_ingress_app() -> web.Application:
     app.router.add_post("/api/players", handle_picker_post)
     app.router.add_get("/api/devices", handle_devices_get)
     app.router.add_patch("/api/devices/{key}", handle_device_patch)
+    app.router.add_delete("/api/devices/{key}", handle_device_delete)
+    app.router.add_post("/api/devices/{key}/test", handle_device_test)
     app.router.add_post("/api/announce", handle_announce)
     app.router.add_get("/api/recordings", handle_recordings_list)
     app.router.add_get("/api/recordings/{name}", handle_recording_get)

@@ -2,422 +2,783 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Intercom Picker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intercom</title>
 <style>
-  body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 720px; }
-  h1 { margin-top: 0; }
-  .row { padding: 0.75rem 0; border-bottom: 1px solid #eee; }
-  .row:last-child { border-bottom: none; }
-  .src-line { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.4rem; }
-  .src-id { font-family: ui-monospace, monospace; color: #888; font-size: 0.85rem; }
-  .alias-input { padding: 0.25rem 0.5rem; font-size: 0.95rem; flex: 0 0 14rem; }
-  .self-line { margin-bottom: 0.4rem; font-size: 0.9rem; color: #444; }
-  .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.4rem; min-height: 1.6rem; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 0.35rem;
-    padding: 0.2rem 0.6rem; background: #eef; border-radius: 999px;
-    font-size: 0.9rem;
+  /* Colours: our own light/dark palette, replaced by Home Assistant's theme
+     variables when the parent frame can be read (see applyHaTheme). */
+  :root {
+    color-scheme: light dark;
+    --bg: #fafafa; --card: #ffffff; --text: #212121; --muted: #6f6f6f;
+    --border: #e0e0e0; --accent: #0288d1; --ok: #2e7d32; --warn: #a15c00;
+    --err: #c62828; --soft: rgba(127, 127, 127, 0.12);
   }
-  .chip button {
-    border: none; background: transparent; cursor: pointer;
-    font-size: 1rem; line-height: 1; padding: 0; color: #557;
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111111; --card: #1c1c1c; --text: #e1e1e1; --muted: #9e9e9e;
+      --border: #333333; --accent: #4fc3f7; --ok: #66bb6a; --warn: #ffb74d;
+      --err: #ef5350; --soft: rgba(255, 255, 255, 0.08);
+    }
   }
-  .empty { color: #888; font-style: italic; font-size: 0.9rem; }
-  select { padding: 0.35rem 0.5rem; font-size: 0.95rem; }
-  .toolbar { margin-top: 1rem; }
-  .toast { margin-left: 1rem; color: #2a7; }
-  .error { color: #c33; }
-  .hint { color: #666; margin: 0.75rem 0; }
-  button.save { padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
-  .rec { padding: 0.6rem 0; border-bottom: 1px solid #eee; }
-  .rec:last-child { border-bottom: none; }
-  .rec-head { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
-  .rec-src { font-weight: 600; }
-  .rec-meta { color: #888; font-size: 0.85rem; }
-  .rec audio { width: 100%; margin-top: 0.35rem; }
-  .linkish {
-    border: none; background: transparent; padding: 0; cursor: pointer;
-    color: #557; font-size: 0.85rem; text-decoration: underline;
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 1rem; background: var(--bg); color: var(--text);
+    line-height: 1.4;
   }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+  h2 { font-size: 1.1rem; margin: 0 0 0.6rem; }
+  section { margin-bottom: 1.5rem; }
+  .muted { color: var(--muted); }
+  .small { font-size: 0.85rem; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .error { color: var(--err); }
+  .banner {
+    border: 1px solid var(--err); color: var(--err); border-radius: 8px;
+    padding: 0.5rem 0.75rem; margin-bottom: 0.75rem; font-size: 0.9rem;
+  }
+  .banner.info { border-color: var(--border); color: var(--muted); }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.75rem 0.9rem; margin-bottom: 0.6rem;
+  }
+  .card-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.on { background: var(--ok); }
+  .dot.off { background: var(--err); }
+  .alias {
+    font: inherit; font-weight: 600; font-size: 1.05rem; color: var(--text);
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    padding: 0.1rem 0.35rem; min-width: 6rem; flex: 1 1 10rem; max-width: 20rem;
+  }
+  .alias:hover:not(:disabled), .alias:focus { border-color: var(--border); background: var(--bg); }
+  .alias:disabled { opacity: 1; }
+  .badges { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+  .badge {
+    font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 999px;
+    background: var(--soft); color: var(--muted); white-space: nowrap;
+  }
+  .badge.alert { color: var(--warn); }
+  .line { margin-top: 0.3rem; font-size: 0.9rem; }
+  .actions { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+  button {
+    font: inherit; font-size: 0.9rem; cursor: pointer; color: var(--text);
+    background: var(--soft); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.3rem 0.7rem;
+  }
+  button:disabled { opacity: 0.55; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--err); }
+  button.link {
+    background: none; border: none; padding: 0; color: var(--accent);
+    text-decoration: underline; font-size: 0.85rem;
+  }
+  textarea, input[type=text] {
+    font: inherit; color: var(--text); background: var(--card);
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.55rem;
+  }
+  textarea { width: 100%; resize: vertical; }
+  label { cursor: pointer; }
+  .picks { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; margin: 0.4rem 0; }
+  .row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.5rem; }
+  .status { font-size: 0.85rem; min-height: 1em; }
+  details.advanced > summary { cursor: pointer; font-weight: 600; font-size: 1.1rem; }
+  details.advanced[open] > summary { margin-bottom: 0.75rem; }
+  .adv-device h3 { font-size: 1rem; margin: 0; }
+  fieldset { border: none; padding: 0; margin: 0.6rem 0 0; }
+  legend { font-size: 0.9rem; font-weight: 600; padding: 0; margin-bottom: 0.2rem; }
+  .indent { margin-left: 1.5rem; }
+  .rec { padding: 0.5rem 0; border-top: 1px solid var(--border); }
+  .rec:first-child { border-top: none; }
+  .rec-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap; }
+  .rec audio { width: 100%; margin-top: 0.3rem; }
 </style>
 </head>
 <body>
-<h1>Intercom Routes</h1>
-<section id="announce" style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid #eee;">
-  <h2 style="margin: 0 0 0.5rem;">Announce</h2>
-  <textarea id="ann-text" rows="2" placeholder="Type a message to speak…"
-            style="width: 100%; box-sizing: border-box; font-size: 1rem; padding: 0.5rem;"></textarea>
-  <div class="chips" id="ann-chips"></div>
-  <select id="ann-add"><option value="">+ add speaker…</option></select>
-  <span class="hint" id="ann-allhint"> (no speakers = all intercom devices)</span>
-  <div style="margin-top: 0.6rem;">
-    <button class="save" id="ann-send">Announce</button>
-    <span id="ann-toast" class="toast"></span>
+<main>
+<h1>Intercom</h1>
+
+<section id="devices-section" aria-labelledby="devices-title">
+  <h2 id="devices-title">Devices</h2>
+  <div id="banners"></div>
+  <div id="devices"><div class="muted">Loading…</div></div>
+  <div class="muted small" id="devices-foot">
+    Press a device's button and every other device hears it.
   </div>
 </section>
-<section id="recordings" style="margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 2px solid #eee;">
-  <div class="src-line">
-    <h2 style="margin: 0 0.5rem 0 0;">Mic recordings</h2>
-    <button class="linkish" id="rec-refresh">refresh</button>
+
+<section id="announce" aria-labelledby="announce-title">
+  <h2 id="announce-title">Announcement</h2>
+  <div class="card">
+    <textarea id="ann-text" rows="2" placeholder="Type a message to speak…"></textarea>
+    <div class="small muted" style="margin-top: 0.4rem;">Speak on (none ticked = every device):</div>
+    <div class="picks" id="ann-picks"></div>
+    <div class="row">
+      <button class="primary" id="ann-send">Announce</button>
+      <span id="ann-status" class="status"></span>
+    </div>
   </div>
-  <div class="hint" style="margin: 0.2rem 0 0.6rem;">
-    Raw mic audio of recent uploads. A device’s “Mic test recording” lands here
-    (and also plays on its targets) — press it, then refresh.
-  </div>
-  <div id="rec-list"></div>
 </section>
-<div id="status"></div>
-<div id="content"></div>
-<div class="toolbar">
-  <button class="save" id="save">Save</button>
-  <span id="toast" class="toast"></span>
-</div>
+
+<section>
+  <details class="advanced" id="advanced">
+    <summary>Advanced</summary>
+    <div id="adv-devices"></div>
+    <section id="recordings" hidden>
+      <h2>Mic recordings</h2>
+      <div class="muted small" id="rec-hint"></div>
+      <div class="card" id="rec-list"></div>
+    </section>
+  </details>
+</section>
+</main>
+
 <script>
+"use strict";
 const $ = (id) => document.getElementById(id);
-let state = { available: [], routes: {}, default: [], aliases: {}, selves: {} };
+const POLL_MS = 4000;
 
-async function load() {
-  $("status").textContent = "Loading...";
+let data = null;              // last GET ./api/devices
+const cards = new Map();      // key -> {root, refs...}
+const advs = new Map();       // key -> {root, refs...}
+const pending = new Map();    // key -> saves in flight
+const onlyMode = new Map();   // key -> "Only these" chosen, nothing ticked yet
+const annPicked = new Set();  // media_player ids ticked for an announcement
+
+// ---- helpers -----------------------------------------------------------
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null && v !== false) node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children) if (c != null) node.append(c);
+  return node;
+}
+
+function keyOf(d) { return d.device_id || d.name; }
+function titleOf(d) { return d.alias || d.friendly_name || d.name || "Unnamed device"; }
+
+function playerName(mp) {
+  const d = (data && data.devices || []).find((x) => x.media_player === mp);
+  return d ? titleOf(d) : mp;
+}
+
+function ago(ts) {
+  if (!ts) return "";
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 10) return "just now";
+  if (s < 60) return Math.round(s) + " s ago";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return new Date(ts * 1000).toLocaleString();
+}
+
+async function errorText(resp) {
+  let msg = "HTTP " + resp.status;
   try {
-    const resp = await fetch("./api/players");
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    state = await resp.json();
-    state.aliases = state.aliases || {};
-    state.selves  = state.selves  || {};
-    render();
-    $("status").textContent = "";
-  } catch (e) {
-    $("status").innerHTML = '<span class="error">Could not load: ' + e + '</span> <button onclick="load()">Retry</button>';
-    $("content").innerHTML = "";
+    const body = await resp.json();
+    if (body && body.error) msg += ": " + body.error;
+  } catch (_) { /* not JSON */ }
+  return msg;
+}
+
+// Writes `text` (and an optional retry button) into a status element.
+function setStatus(node, kind, text, retry) {
+  node.replaceChildren();
+  clearTimeout(node._timer);
+  if (!text) return;
+  node.append(el("span", {class: kind === "error" ? "error" : kind === "ok" ? "ok" : "muted", text}));
+  if (retry) node.append(" ", el("button", {class: "link", text: "Retry", onclick: retry}));
+  if (kind === "ok") node._timer = setTimeout(() => node.replaceChildren(), 2500);
+}
+
+function outcomeText(r) {
+  if (!r) return "?";
+  switch (r.outcome) {
+    case "ok": return "✓";
+    case "queued": return "queued" + (r.wait ? " " + Math.round(r.wait) + " s" : "");
+    case "busy": return "✗ busy";
+    case "skipped": return "✗ " + (r.reason || "skipped");
+    default: return "✗ " + (r.error || "failed");
   }
 }
 
-function targetsFor(src) {
-  return src === "default" ? state.default : state.routes[src];
-}
-
-function friendlyName(eid) {
-  const t = state.available.find((x) => x.entity_id === eid);
-  return t ? t.friendly_name : eid;
-}
-
-function renderRow(src) {
-  const selected = targetsFor(src);
-  const row = document.createElement("div");
-  row.className = "row";
-
-  const head = document.createElement("div");
-  head.className = "src-line";
-  if (src === "default") {
-    const label = document.createElement("div");
-    label.style.fontWeight = "600";
-    label.textContent = "default";
-    head.appendChild(label);
-  } else {
-    const aliasInput = document.createElement("input");
-    aliasInput.className = "alias-input";
-    aliasInput.placeholder = "alias (e.g. Kitchen)";
-    aliasInput.value = state.aliases[src] || "";
-    aliasInput.addEventListener("input", () => {
-      const v = aliasInput.value.trim();
-      if (v) state.aliases[src] = v;
-      else delete state.aliases[src];
-    });
-    head.appendChild(aliasInput);
-
-    const sid = document.createElement("span");
-    sid.className = "src-id";
-    sid.textContent = src;
-    head.appendChild(sid);
-  }
-  row.appendChild(head);
-
-  if (src !== "default") {
-    const selfLine = document.createElement("div");
-    selfLine.className = "self-line";
-    const lbl = document.createElement("span");
-    lbl.textContent = "this device's speaker: ";
-    selfLine.appendChild(lbl);
-
-    const selfSel = document.createElement("select");
-    const none = document.createElement("option");
-    none.value = "";
-    none.textContent = "(none — talkback disabled)";
-    selfSel.appendChild(none);
-    for (const tgt of state.available) {
-      const opt = document.createElement("option");
-      opt.value = tgt.entity_id;
-      opt.textContent = tgt.friendly_name + " (" + tgt.entity_id + ")";
-      if (state.selves[src] === tgt.entity_id) opt.selected = true;
-      selfSel.appendChild(opt);
-    }
-    selfSel.addEventListener("change", () => {
-      if (selfSel.value) state.selves[src] = selfSel.value;
-      else delete state.selves[src];
-    });
-    selfLine.appendChild(selfSel);
-    row.appendChild(selfLine);
-  }
-
-  const chips = document.createElement("div");
-  chips.className = "chips";
-  if (selected.length === 0) {
-    const e = document.createElement("span");
-    e.className = "empty";
-    e.textContent = "no targets";
-    chips.appendChild(e);
-  } else {
-    for (const eid of selected) {
-      const chip = document.createElement("span");
-      chip.className = "chip";
-      chip.textContent = friendlyName(eid) + " ";
-      const x = document.createElement("button");
-      x.textContent = "×";
-      x.title = eid;
-      x.addEventListener("click", () => {
-        const arr = targetsFor(src);
-        const i = arr.indexOf(eid);
-        if (i >= 0) arr.splice(i, 1);
-        render();
-      });
-      chip.appendChild(x);
-      chips.appendChild(chip);
-    }
-  }
-  row.appendChild(chips);
-
-  const sel = document.createElement("select");
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "+ add speaker…";
-  sel.appendChild(placeholder);
-  for (const tgt of state.available) {
-    if (selected.includes(tgt.entity_id)) continue;
-    const opt = document.createElement("option");
-    opt.value = tgt.entity_id;
-    opt.textContent = tgt.friendly_name + "  (" + tgt.entity_id + ")";
-    sel.appendChild(opt);
-  }
-  sel.addEventListener("change", () => {
-    if (!sel.value) return;
-    targetsFor(src).push(sel.value);
-    render();
+function deliveryNode(results) {
+  const span = el("span");
+  const entries = Object.entries(results || {});
+  entries.forEach(([mp, r], i) => {
+    if (i) span.append(" · ");
+    const cls = r.outcome === "ok" ? "ok" : r.outcome === "queued" ? "warn" : "error";
+    span.append(playerName(mp) + " ", el("span", {class: cls, text: outcomeText(r)}));
   });
-  row.appendChild(sel);
-
-  return row;
+  return span;
 }
 
-function render() {
-  const sources = Object.keys(state.routes).sort();
-  $("content").innerHTML = "";
+// ---- theme ---------------------------------------------------------------
 
-  if (sources.length === 0) {
-    const hint = document.createElement("div");
-    hint.className = "hint";
-    hint.textContent = "No sources enrolled yet. Press the PTT on each Atom Echo once to enroll it.";
-    $("content").appendChild(hint);
-  }
+// The ingress iframe is served from HA's own origin, so HA's theme variables
+// can usually be read off the parent document. If not (another origin, a
+// direct visit), prefers-color-scheme in the CSS above is the fallback.
+const HA_VARS = {
+  "--bg": ["--primary-background-color"],
+  "--card": ["--card-background-color", "--ha-card-background", "--primary-background-color"],
+  "--text": ["--primary-text-color"],
+  "--muted": ["--secondary-text-color"],
+  "--border": ["--divider-color"],
+  "--accent": ["--primary-color"],
+  "--ok": ["--success-color"],
+  "--warn": ["--warning-color"],
+  "--err": ["--error-color"],
+};
 
-  for (const src of [...sources, "default"]) {
-    $("content").appendChild(renderRow(src));
-  }
-  renderAnnounce();
+function luminance(color) {
+  const probe = el("span");
+  probe.style.color = color;
+  document.body.append(probe);
+  const m = getComputedStyle(probe).color.match(/\d+(\.\d+)?/g);
+  probe.remove();
+  if (!m) return null;
+  const [r, g, b] = m.map(Number);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 }
 
-async function save() {
-  $("toast").textContent = "";
+function applyHaTheme() {
+  let style;
   try {
-    // Keep sources enrolled on the server since this page loaded.
-    let merged = false;
-    const cur = await fetch("./api/players");
-    if (cur.ok) {
-      const latest = await cur.json();
-      for (const [src, targets] of Object.entries(latest.routes || {})) {
-        if (!(src in state.routes)) { state.routes[src] = targets; merged = true; }
-      }
-    }
-    const resp = await fetch("./api/players", {
-      method: "POST",
+    if (window.parent === window) return;
+    style = window.parent.getComputedStyle(window.parent.document.documentElement);
+  } catch (_) { return; }   // cross-origin: keep prefers-color-scheme
+  const root = document.documentElement.style;
+  let found = false;
+  for (const [ours, theirs] of Object.entries(HA_VARS)) {
+    const value = theirs.map((v) => style.getPropertyValue(v).trim()).find(Boolean);
+    if (value) { root.setProperty(ours, value); found = true; }
+    else root.removeProperty(ours);
+  }
+  if (!found) { root.removeProperty("color-scheme"); return; }
+  const lum = luminance(getComputedStyle(document.documentElement).getPropertyValue("--bg"));
+  if (lum !== null) root.setProperty("color-scheme", lum < 0.5 ? "dark" : "light");
+}
+
+// ---- saving ----------------------------------------------------------------
+
+async function patchDevice(key, patch, statusNode) {
+  pending.set(key, (pending.get(key) || 0) + 1);
+  setStatus(statusNode, "busy", "Saving…");
+  try {
+    const resp = await fetch("./api/devices/" + encodeURIComponent(key), {
+      method: "PATCH",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({
-        routes:  state.routes,
-        default: state.default,
-        aliases: state.aliases,
-        selves:  state.selves,
-      }),
+      body: JSON.stringify(patch),
     });
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({}));
-      throw new Error("HTTP " + resp.status + (body.error ? ": " + body.error : ""));
-    }
-    if (merged) render();   // show the sources that appeared meanwhile
-    $("toast").textContent = "Saved";
-    setTimeout(() => { $("toast").textContent = ""; }, 2000);
+    if (!resp.ok) throw new Error(await errorText(resp));
+    setStatus(statusNode, "ok", "Saved");
+    return true;
   } catch (e) {
-    $("toast").innerHTML = '<span class="error">Save failed: ' + e + '</span>';
+    setStatus(statusNode, "error", "Not saved — " + e.message,
+              () => patchDevice(key, patch, statusNode));
+    return false;
+  } finally {
+    pending.set(key, pending.get(key) - 1);
+    if (!pending.get(key)) pending.delete(key);
+    refresh();
   }
 }
 
-$("save").addEventListener("click", save);
+// ---- device cards ------------------------------------------------------------
 
-let annTargets = [];
+function buildCard(key) {
+  const c = {};
+  c.dot = el("span", {class: "dot"});
+  c.alias = el("input", {type: "text", class: "alias", "aria-label": "Device name"});
+  c.badges = el("span", {class: "badges"});
+  c.testBtn = el("button", {text: "Test sound", title: "Play a short chime on this device's speaker"});
+  c.status = el("span", {class: "status"});
+  c.speaker = el("div", {class: "line"});
+  c.last = el("div", {class: "line"});
+  c.root = el("div", {class: "card"},
+    el("div", {class: "card-head"}, c.dot, c.alias, c.badges,
+       el("span", {class: "actions"}, c.status, c.testBtn)),
+    c.speaker, c.last);
 
-function renderAnnounce() {
-  const chips = $("ann-chips");
-  chips.innerHTML = "";
-  for (const eid of annTargets) {
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.textContent = friendlyName(eid) + " ";
-    const x = document.createElement("button");
-    x.textContent = "×";
-    x.title = eid;
-    x.addEventListener("click", () => {
-      annTargets = annTargets.filter((e) => e !== eid);
-      renderAnnounce();
-    });
-    chip.appendChild(x);
-    chips.appendChild(chip);
+  let timer = null;
+  const saveAlias = () => {
+    clearTimeout(timer); timer = null;
+    const d = current(key);
+    if (!d || !d.name) return;
+    const v = c.alias.value.trim();
+    if (v === (d.alias || "") || (!v && !d.alias)) return;
+    patchDevice(key, {alias: v || null}, c.status);
+  };
+  c.alias.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(saveAlias, 1200); });
+  c.alias.addEventListener("change", saveAlias);
+  c.alias.addEventListener("keydown", (e) => { if (e.key === "Enter") c.alias.blur(); });
+  c.aliasDirty = () => timer !== null || document.activeElement === c.alias;
+
+  c.testBtn.addEventListener("click", async () => {
+    c.testBtn.disabled = true;
+    setStatus(c.status, "busy", "Playing…");
+    try {
+      const resp = await fetch("./api/devices/" + encodeURIComponent(key) + "/test", {method: "POST"});
+      const body = await resp.json().catch(() => ({}));
+      if (body.result) {
+        const r = body.result;
+        if (r.outcome === "ok") setStatus(c.status, "ok", "Played — did you hear it?");
+        else if (r.outcome === "queued") setStatus(c.status, "ok", "Queued behind a broadcast (" + Math.round(r.wait || 0) + " s)");
+        else setStatus(c.status, "error", "Not played — " + outcomeText(r).replace(/^✗ /, ""));
+      } else if (!resp.ok) {
+        throw new Error(body.error ? "HTTP " + resp.status + ": " + body.error : "HTTP " + resp.status);
+      } else {
+        setStatus(c.status, "ok", "Played");
+      }
+    } catch (e) {
+      setStatus(c.status, "error", "Test failed — " + e.message);
+    } finally {
+      c.testBtn.disabled = false;
+    }
+  });
+  return c;
+}
+
+function current(key) {
+  return data && data.devices.find((d) => keyOf(d) === key);
+}
+
+function updateCard(c, d) {
+  const online = d.online;
+  c.dot.className = "dot" + (online === true ? " on" : online === false ? " off" : "");
+  c.dot.title = online === true ? "online" : online === false ? "offline" : "state unknown";
+
+  c.alias.placeholder = d.friendly_name || d.name || "Unnamed device";
+  c.alias.disabled = !d.name;
+  c.alias.title = d.name ? "Rename (saved automatically)"
+    : "Can be renamed once it has talked, or in Home Assistant";
+  if (!c.aliasDirty()) c.alias.value = d.alias || (d.name ? "" : titleOf(d));
+
+  const badges = [];
+  if (d.has_mic) badges.push([d.media_player ? "talks & listens" : "talks"]);
+  else badges.push(["listens"]);
+  if (d.muted) badges.push(["button muted", true]);
+  if (d.media_player && d.device_id && !d.listening && data.registry.ok) badges.push(["doesn't receive", true]);
+  if (d.override) badges.push(["custom recipients", true]);
+  c.badges.replaceChildren(...badges.map(([t, alert]) => el("span", {class: "badge" + (alert ? " alert" : ""), text: t})));
+
+  c.testBtn.disabled = !d.media_player;
+  c.testBtn.title = d.media_player ? "Play a short chime on " + d.media_player
+                                   : "No speaker for this device in Home Assistant";
+
+  if (!d.media_player) {
+    c.speaker.replaceChildren(el("span", {class: "warn",
+      text: "No speaker found in Home Assistant — it can talk, but nothing plays on it."}));
+  } else if (online === false) {
+    c.speaker.replaceChildren(el("span", {class: "error", text: "Speaker offline"}),
+      el("span", {class: "muted", text: " (" + (d.state || "unavailable") + ")"}));
+  } else if (online === true) {
+    c.speaker.replaceChildren(el("span", {class: "muted", text: "Speaker online · " + d.state}));
+  } else {
+    c.speaker.replaceChildren(el("span", {class: "muted", text: "Speaker state unknown"}));
   }
-  const sel = $("ann-add");
-  sel.innerHTML = '<option value="">+ add speaker…</option>';
-  for (const tgt of state.available) {
-    if (annTargets.includes(tgt.entity_id)) continue;
-    const opt = document.createElement("option");
-    opt.value = tgt.entity_id;
-    opt.textContent = tgt.friendly_name + "  (" + tgt.entity_id + ")";
-    sel.appendChild(opt);
+
+  const lb = d.last_broadcast;
+  if (lb) {
+    const head = "Talked " + ago(lb.ts);
+    if (lb.mode === "muted") {
+      c.last.replaceChildren(head + " — muted, nobody heard it");
+    } else if (!lb.targets.length) {
+      c.last.replaceChildren(head + " — ", el("span", {class: "error", text: "nobody to send to"}));
+    } else {
+      c.last.replaceChildren(head + (lb.mode === "reply" ? " (reply)" : "") + " → ", deliveryNode(lb.results));
+    }
+  } else if (d.last_seen) {
+    c.last.replaceChildren(el("span", {class: "muted", text: "Talked " + ago(d.last_seen)}));
+  } else {
+    c.last.replaceChildren(el("span", {class: "muted small",
+      text: d.has_mic ? "No broadcast since the add-on started" : "Hasn't talked yet"}));
   }
 }
 
-$("ann-add").addEventListener("change", (e) => {
-  if (!e.target.value) return;
-  annTargets.push(e.target.value);
-  renderAnnounce();
-});
+function renderDevices() {
+  const box = $("devices");
+  const devices = data.devices;
+  const reg = data.registry || {};
 
-$("ann-send").addEventListener("click", async () => {
-  const text = $("ann-text").value.trim();
-  $("ann-toast").textContent = "";
-  if (!text) {
-    $("ann-toast").innerHTML = '<span class="error">Enter a message first</span>';
+  const banners = [];
+  if (!reg.ok) {
+    banners.push(el("div", {class: "banner",
+      text: "Couldn't read Home Assistant's device list (" + (reg.error || "unknown error") +
+            "). Showing devices that have talked; broadcasts go to the fallback speakers."}));
+  }
+  if (data.states_error) {
+    banners.push(el("div", {class: "banner info",
+      text: "Speaker states unavailable: " + data.states_error}));
+  }
+  $("banners").replaceChildren(...banners);
+
+  if (!devices.length) {
+    cards.clear();
+    box.replaceChildren(el("div", {class: "card muted", text: reg.ok
+      ? "No intercom devices yet. ESPHome devices with a speaker show up here by " +
+        "themselves once they are added to Home Assistant; any other device " +
+        "appears after its first button press."
+      : "No devices to show. Until Home Assistant's device list can be read, a " +
+        "device appears here after its first button press."}));
     return;
   }
+
+  const keys = devices.map(keyOf);
+  for (const k of [...cards.keys()]) if (!keys.includes(k)) cards.delete(k);
+  const nodes = devices.map((d) => {
+    const k = keyOf(d);
+    if (!cards.has(k)) cards.set(k, buildCard(k));
+    const c = cards.get(k);
+    updateCard(c, d);
+    return c.root;
+  });
+  // Re-attach only if the order changed, so a focused input keeps focus.
+  if (nodes.length !== box.children.length || nodes.some((n, i) => box.children[i] !== n)) {
+    box.replaceChildren(...nodes);
+  }
+}
+
+// ---- advanced: per-device settings ---------------------------------------------
+
+function buildAdv(key) {
+  const a = {};
+  a.title = el("h3");
+  a.ids = el("div", {class: "mono muted"});
+  a.status = el("span", {class: "status"});
+
+  a.talk = el("input", {type: "checkbox"});
+  a.talkNote = el("span", {class: "muted small"});
+  a.listen = el("input", {type: "checkbox"});
+  a.listenNote = el("span", {class: "muted small"});
+
+  const radioName = "who-" + key;
+  a.everyone = el("input", {type: "radio", name: radioName, value: "all"});
+  a.only = el("input", {type: "radio", name: radioName, value: "only"});
+  a.picks = el("div", {class: "picks indent"});
+  a.whoNote = el("div", {class: "muted small indent"});
+  a.who = el("fieldset", {},
+    el("legend", {text: "Who hears its button"}),
+    el("div", {}, el("label", {}, a.everyone, " Everyone else (default)")),
+    el("div", {}, el("label", {}, a.only, " Only these devices:")),
+    a.picks, a.whoNote);
+
+  a.remove = el("button", {class: "danger", text: "Remove device"});
+  a.removeNote = el("div", {class: "muted small"});
+
+  a.root = el("div", {class: "card adv-device"},
+    el("div", {class: "card-head"}, a.title, el("span", {class: "actions"}, a.status)),
+    a.ids,
+    a.talkRow = el("div", {class: "row"}, el("label", {}, a.talk, " Its button broadcasts"), a.talkNote),
+    el("div", {class: "row"}, el("label", {}, a.listen, " Receives the channel"), a.listenNote),
+    a.who,
+    el("div", {class: "row"}, a.remove),
+    a.removeNote);
+
+  a.talk.addEventListener("change", () => patchDevice(key, {muted: !a.talk.checked}, a.status));
+  a.listen.addEventListener("change", () => patchDevice(key, {listen: a.listen.checked}, a.status));
+  a.everyone.addEventListener("change", () => {
+    onlyMode.delete(key);
+    const d = current(key);
+    if (d && d.override) patchDevice(key, {override: null}, a.status);
+    else renderAdvanced();
+  });
+  a.only.addEventListener("change", () => {
+    onlyMode.set(key, true);
+    renderAdvanced();
+  });
+  a.remove.addEventListener("click", () => removeDevice(key, a));
+  return a;
+}
+
+function pickedOverride(a) {
+  return [...a.picks.querySelectorAll("input:checked")].map((i) => i.value);
+}
+
+function updateAdv(a, d) {
+  const key = keyOf(d);
+  const busy = pending.has(key);
+  a.title.textContent = titleOf(d);
+  a.ids.textContent = [d.name ? "device name: " + d.name : "never talked",
+                       d.media_player || "no media_player"].join(" · ");
+
+  // Button (mute)
+  // A device that never talked has no button to mute (or none we know of).
+  a.talkRow.hidden = !d.name;
+  if (!busy) a.talk.checked = !d.muted;
+
+  // Listen
+  const canListen = Boolean(d.media_player && d.device_id);
+  a.listen.disabled = !canListen;
+  if (!busy) a.listen.checked = Boolean(d.listening);
+  a.listenNote.textContent = canListen ? ""
+    : d.media_player ? "(only for devices Home Assistant lists as intercoms)"
+    : "(no speaker in Home Assistant)";
+
+  // Recipients
+  a.who.hidden = !d.name || d.has_mic === null;
+  const only = Boolean(d.override) || onlyMode.has(key);
+  if (!busy) { a.everyone.checked = !only; a.only.checked = only; }
+  const chosen = new Set(busy ? pickedOverride(a) : (d.override || []));
+  const others = data.devices.filter((o) => o.media_player && o.media_player !== d.media_player);
+  const options = others.map((o) => [o.media_player, titleOf(o)]);
+  // Targets saved by an older panel that are not intercom devices stay visible.
+  for (const mp of d.override || []) {
+    if (!options.some(([m]) => m === mp)) options.push([mp, mp + " (not an intercom device)"]);
+  }
+  const sig = JSON.stringify([options, [...chosen].sort(), only]);
+  if (a.sig !== sig) {
+    a.sig = sig;
+    a.picks.replaceChildren(...options.map(([mp, label]) => {
+      const box = el("input", {type: "checkbox", value: mp});
+      box.checked = chosen.has(mp);
+      box.disabled = !only;
+      box.addEventListener("change", () => {
+        const list = pickedOverride(a);
+        if (!list.length) {
+          // [] would mean "the channel" — say so instead of saving silently.
+          onlyMode.set(key, true);
+          if (current(key) && current(key).override) patchDevice(key, {override: null}, a.status);
+          return;
+        }
+        onlyMode.delete(key);
+        patchDevice(key, {override: list}, a.status);
+      });
+      return el("label", {}, box, " " + label);
+    }));
+  }
+  if (!options.length) a.whoNote.textContent = "No other devices with a speaker yet.";
+  else if (only && !chosen.size) a.whoNote.textContent = "Nothing ticked — everyone else hears it until you tick a device.";
+  else a.whoNote.textContent = "";
+
+  // Remove
+  a.removeNote.textContent = d.device_id
+    ? "Clears its name and settings and stops it receiving. Home Assistant still " +
+      "lists it, so it stays here; delete it in Home Assistant to drop it for good."
+    : "Forgets its name and settings. If it sends audio again, it simply reappears.";
+}
+
+async function removeDevice(key, a) {
+  const d = current(key);
+  if (!d) return;
+  const what = d.device_id
+    ? "Remove " + titleOf(d) + "? Its settings are cleared and it stops receiving broadcasts."
+    : "Remove " + titleOf(d) + "? It reappears if it sends audio again.";
+  if (!window.confirm(what)) return;
+  a.remove.disabled = true;
+  pending.set(key, (pending.get(key) || 0) + 1);
+  setStatus(a.status, "busy", "Removing…");
+  try {
+    const resp = await fetch("./api/devices/" + encodeURIComponent(key), {method: "DELETE"});
+    if (!resp.ok) throw new Error(await errorText(resp));
+    setStatus(a.status, "ok", "Removed");
+    onlyMode.delete(key);
+  } catch (e) {
+    setStatus(a.status, "error", "Not removed — " + e.message);
+  } finally {
+    a.remove.disabled = false;
+    pending.set(key, pending.get(key) - 1);
+    if (!pending.get(key)) pending.delete(key);
+    refresh();
+  }
+}
+
+function renderAdvanced() {
+  if (!data) return;
+  const box = $("adv-devices");
+  const keys = data.devices.map(keyOf);
+  for (const k of [...advs.keys()]) if (!keys.includes(k)) advs.delete(k);
+  const nodes = data.devices.map((d) => {
+    const k = keyOf(d);
+    if (!advs.has(k)) advs.set(k, buildAdv(k));
+    const a = advs.get(k);
+    updateAdv(a, d);
+    return a.root;
+  });
+  if (!nodes.length) {
+    box.replaceChildren(el("div", {class: "muted small", text: "No devices yet."}));
+  } else if (nodes.length !== box.children.length || nodes.some((n, i) => box.children[i] !== n)) {
+    box.replaceChildren(...nodes);
+  }
+}
+
+// ---- announcement --------------------------------------------------------------
+
+function renderAnnouncePicks() {
+  const speakers = (data ? data.devices : []).filter((d) => d.media_player);
+  const sig = JSON.stringify(speakers.map((d) => [d.media_player, titleOf(d)]));
+  const box = $("ann-picks");
+  if (box._sig === sig) return;
+  box._sig = sig;
+  for (const mp of [...annPicked]) if (!speakers.some((d) => d.media_player === mp)) annPicked.delete(mp);
+  if (!speakers.length) {
+    box.replaceChildren(el("span", {class: "muted small", text: "No speakers yet."}));
+    return;
+  }
+  box.replaceChildren(...speakers.map((d) => {
+    const cb = el("input", {type: "checkbox", value: d.media_player});
+    cb.checked = annPicked.has(d.media_player);
+    cb.addEventListener("change", () => {
+      if (cb.checked) annPicked.add(d.media_player); else annPicked.delete(d.media_player);
+    });
+    return el("label", {}, cb, " " + titleOf(d));
+  }));
+}
+
+$("ann-send").addEventListener("click", async () => {
+  const status = $("ann-status");
+  const text = $("ann-text").value.trim();
+  if (!text) { setStatus(status, "error", "Type a message first"); return; }
+  const btn = $("ann-send");
+  btn.disabled = true;
+  setStatus(status, "busy", "Sending…");
   try {
     const resp = await fetch("./api/announce", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({text, targets: annTargets}),
+      body: JSON.stringify({text, targets: [...annPicked]}),
     });
-    if (!resp.ok) {
-      const b = await resp.json().catch(() => ({}));
-      throw new Error("HTTP " + resp.status + (b.error ? ": " + b.error : ""));
+    if (resp.status === 204) {
+      setStatus(status, "error", "No speakers to announce on");
+      return;
     }
-    $("ann-toast").textContent = "Announced";
-    $("ann-text").value = "";
-    setTimeout(() => { $("ann-toast").textContent = ""; }, 2000);
+    const body = await resp.json().catch(() => ({}));
+    if (!body.results) throw new Error(body.error ? "HTTP " + resp.status + ": " + body.error : "HTTP " + resp.status);
+    status.replaceChildren(el("span", {class: resp.ok ? "ok" : "error",
+      text: resp.ok ? "Announced: " : "Not delivered: "}), deliveryNode(body.results));
+    if (resp.ok) $("ann-text").value = "";
   } catch (e) {
-    $("ann-toast").innerHTML = '<span class="error">Failed: ' + e + '</span>';
+    setStatus(status, "error", "Failed — " + e.message);
+  } finally {
+    btn.disabled = false;
   }
 });
 
-function recWhen(epochSeconds) {
-  return new Date(epochSeconds * 1000).toLocaleString();
+// ---- recordings ------------------------------------------------------------------
+
+let recSig = null;
+
+function sourceTitle(source) {
+  const d = (data && data.devices || []).find((x) => x.name === source);
+  return d ? titleOf(d) : source;
 }
 
-function renderRecordings(data) {
+function renderRecordings(rec) {
+  const section = $("recordings");
+  section.hidden = !rec.keep && !rec.items.length;
+  if (section.hidden) return;
+  $("rec-hint").textContent = rec.keep
+    ? "The newest " + rec.keep + " raw mic uploads (no chimes, no cleanup). A device's “Mic test recording” lands here too."
+    : "Recording is off (keep_recordings: 0 in the add-on configuration). Recordings kept earlier stay until you delete them.";
+  const sig = JSON.stringify(rec.items.map((i) => i.name));
+  if (sig === recSig) return;    // don't interrupt a recording that is playing
+  recSig = sig;
   const list = $("rec-list");
-  list.innerHTML = "";
-
-  if (!data.keep) {
-    const off = document.createElement("div");
-    off.className = "hint";
-    off.textContent = "Recording is off — set keep_recordings in the add-on configuration."
-      + (data.items.length ? " Recordings kept earlier stay here until you delete them." : "");
-    list.appendChild(off);
-    if (!data.items.length) return;
-  }
-  if (!data.items.length) {
-    const none = document.createElement("div");
-    none.className = "empty";
-    none.textContent = "No recordings yet.";
-    list.appendChild(none);
+  if (!rec.items.length) {
+    list.replaceChildren(el("div", {class: "muted small", text: "No recordings yet."}));
     return;
   }
-
-  for (const item of data.items) {
-    const row = document.createElement("div");
-    row.className = "rec";
-
-    const head = document.createElement("div");
-    head.className = "rec-head";
-
-    const src = document.createElement("span");
-    src.className = "rec-src";
-    src.textContent = state.aliases[item.source] || item.source;
-    head.appendChild(src);
-
-    const meta = document.createElement("span");
-    meta.className = "rec-meta";
+  list.replaceChildren(...rec.items.map((item) => {
+    const url = "./api/recordings/" + encodeURIComponent(item.name);
     const secs = item.seconds == null ? "?" : item.seconds.toFixed(1);
-    meta.textContent = recWhen(item.modified) + " · " + secs + "s · "
-                     + Math.round(item.bytes / 1024) + " kB";
-    head.appendChild(meta);
-
-    const dl = document.createElement("a");
-    dl.href = "./api/recordings/" + encodeURIComponent(item.name);
-    dl.download = item.name;
-    dl.className = "linkish";
-    dl.textContent = "download";
-    head.appendChild(dl);
-
-    const del = document.createElement("button");
-    del.className = "linkish";
-    del.textContent = "delete";
+    const status = el("span", {class: "status"});
+    const del = el("button", {class: "link", text: "delete"});
     del.addEventListener("click", async () => {
       del.disabled = true;
       try {
-        const resp = await fetch("./api/recordings/" + encodeURIComponent(item.name),
-                                 {method: "DELETE"});
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const resp = await fetch(url, {method: "DELETE"});
+        if (!resp.ok) throw new Error(await errorText(resp));
+        recSig = null;
+        loadRecordings();
       } catch (e) {
         del.disabled = false;
-        const err = document.createElement("span");
-        err.className = "error";
-        err.textContent = " delete failed: " + e;
-        head.appendChild(err);
-        return;
+        setStatus(status, "error", "Not deleted — " + e.message);
       }
-      loadRecordings();
     });
-    head.appendChild(del);
-    row.appendChild(head);
-
-    const audio = document.createElement("audio");
-    audio.controls = true;
-    audio.preload = "none";
-    audio.src = "./api/recordings/" + encodeURIComponent(item.name);
-    row.appendChild(audio);
-
-    list.appendChild(row);
-  }
+    return el("div", {class: "rec"},
+      el("div", {class: "rec-head"},
+        el("strong", {text: sourceTitle(item.source)}),
+        el("span", {class: "muted small",
+          text: new Date(item.modified * 1000).toLocaleString() + " · " + secs + " s · " +
+                Math.round(item.bytes / 1024) + " kB"}),
+        el("a", {href: url, download: item.name, class: "small", text: "download"}),
+        del, status),
+      el("audio", {controls: true, preload: "none", src: url}));
+  }));
 }
 
 async function loadRecordings() {
   try {
     const resp = await fetch("./api/recordings");
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    if (!resp.ok) throw new Error(await errorText(resp));
     renderRecordings(await resp.json());
   } catch (e) {
-    $("rec-list").innerHTML = '<span class="error">Could not load recordings: ' + e + '</span>';
+    $("recordings").hidden = false;
+    recSig = null;
+    $("rec-list").replaceChildren(el("span", {class: "error", text: "Could not load recordings — " + e.message}));
   }
 }
 
-$("rec-refresh").addEventListener("click", loadRecordings);
+$("advanced").addEventListener("toggle", () => {
+  if ($("advanced").open) { renderAdvanced(); loadRecordings(); }
+});
 
-// After load(): recording rows need the aliases.
-load().then(loadRecordings);
+// ---- polling -----------------------------------------------------------------------
+
+let pollTimer = null;
+let inFlight = null;
+let again = false;
+
+// One request at a time; a refresh asked for meanwhile (e.g. after a save)
+// runs once more afterwards, so it never shows the state from before the save.
+function refresh() {
+  if (inFlight) { again = true; return inFlight; }
+  inFlight = (async () => {
+    do { again = false; await poll(); } while (again);
+  })().finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function poll() {
+  applyHaTheme();
+  try {
+    const resp = await fetch("./api/devices", {cache: "no-store"});
+    if (!resp.ok) throw new Error(await errorText(resp));
+    data = await resp.json();
+    renderDevices();
+    renderAnnouncePicks();
+    if ($("advanced").open) { renderAdvanced(); loadRecordings(); }
+  } catch (e) {
+    const msg = el("div", {class: "banner",
+      text: "Can't reach the add-on — " + e.message + ". Retrying…"});
+    $("banners").replaceChildren(msg);
+    if (!data) $("devices").replaceChildren();
+  }
+}
+
+function schedule() {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    if (!document.hidden) await refresh();
+    schedule();
+  }, POLL_MS);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) { refresh(); schedule(); }
+});
+
+// Recordings load once up front: they decide whether Advanced lists them.
+refresh().then(() => { loadRecordings(); schedule(); });
 </script>
 </body>
 </html>

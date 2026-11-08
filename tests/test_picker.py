@@ -295,6 +295,8 @@ def lan_app():
     app.router.add_post("/intercom/reply", srv.handle_intercom)
     app.router.add_get("/api/devices", srv.handle_devices_get)
     app.router.add_patch("/api/devices/{key}", srv.handle_device_patch)
+    app.router.add_delete("/api/devices/{key}", srv.handle_device_delete)
+    app.router.add_post("/api/devices/{key}/test", srv.handle_device_test)
     return app
 
 
@@ -1098,3 +1100,151 @@ async def test_patch_device_rejects_bad_values(
     for body in ({"override": ["light.x"]}, {"muted": "yes"}, {"alias": 3}, []):
         resp = await client.patch("/api/devices/a", json=body)
         assert resp.status == 400, body
+
+
+# ---- DELETE /api/devices/{key} and POST /api/devices/{key}/test ------------
+
+async def test_delete_unregistered_device_forgets_it_until_it_talks_again(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"garage": ["media_player.sonos"]}, "default": [],
+        "aliases": {"garage": "Garage"}, "muted": ["garage"],
+        "selves": {"garage": "media_player.garage"},
+    }))
+    client = await aiohttp_client(lan_app)
+    resp = await client.delete("/api/devices/garage")
+    assert resp.status == 200
+    assert await resp.json() == {"name": "garage", "device_id": None,
+                                 "registry": False, "listening": None}
+    saved = json.loads(players_file.read_text())
+    assert saved["routes"] == {} and saved["aliases"] == {}
+    assert saved["muted"] == [] and saved["selves"] == {}
+    body = await (await client.get("/api/devices")).json()
+    assert body["devices"] == []
+
+    # Gone, so a second delete is a 404 ...
+    assert (await client.delete("/api/devices/garage")).status == 404
+    # ... until it sends audio again: then it is enrolled like a new device.
+    await _post(client, "garage")
+    names = [d["name"] for d in (await (await client.get("/api/devices")).json())["devices"]]
+    assert names == ["garage"]
+
+
+async def test_delete_registry_device_clears_settings_and_stops_listening(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"atom-echo": ["media_player.voice_s3_player"]}, "default": [],
+        "aliases": {"atom-echo": "Hall"},
+    }))
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+    _played(fake_ha)
+    assert "atom-echo" in srv.activity
+
+    resp = await client.delete("/api/devices/d1")
+    assert resp.status == 200
+    assert await resp.json() == {"name": "atom-echo", "device_id": "d1",
+                                 "registry": True, "listening": False}
+    assert "atom-echo" not in srv.activity
+    saved = json.loads(players_file.read_text())
+    assert saved["routes"] == {} and saved["aliases"] == {}
+    assert saved["excluded"] == ["media_player.atom_echo_player"]
+
+    # Still listed (HA has it), no longer in the channel.
+    body = await (await client.get("/api/devices")).json()
+    atom = next(d for d in body["devices"] if d["device_id"] == "d1")
+    assert atom["listening"] is False and atom["alias"] is None
+    assert atom["last_broadcast"] is None
+    await _post(client, "voice-s3")
+    assert _played(fake_ha) == []
+
+    # Deleting again is harmless (excluded once); listen:true undoes it.
+    assert (await client.delete("/api/devices/d1")).status == 200
+    assert json.loads(players_file.read_text())["excluded"] == [
+        "media_player.atom_echo_player"]
+    assert (await client.patch("/api/devices/d1", json={"listen": True})).status == 204
+    await _post(client, "voice-s3")
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+
+async def test_delete_unknown_device_is_404(
+    aiohttp_client, lan_app, players_file, fake_ha,
+):
+    client = await aiohttp_client(lan_app)
+    assert (await client.delete("/api/devices/nobody")).status == 404
+    assert not players_file.exists()
+
+
+async def test_test_sound_plays_chimes_on_the_device_only(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    fake_ha.get_states.return_value = [
+        {"entity_id": "media_player.voice_s3_player", "state": "idle",
+         "attributes": {"supported_features": srv.MEDIA_ANNOUNCE}},
+    ]
+    client = await aiohttp_client(lan_app)
+    resp = await client.post("/api/devices/d2/test")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["media_player"] == "media_player.voice_s3_player"
+    assert body["result"] == {"ok": True, "outcome": "ok", "via": "announce",
+                              "status": 204}
+    assert body["delivered"] == 1
+    calls = fake_ha.play_media.call_args_list
+    assert [c.args[0] for c in calls] == ["media_player.voice_s3_player"]
+    assert calls[0].kwargs.get("announce") is True
+
+    (wav,) = published("test-")
+    with _wave.open(_io.BytesIO(wav)) as w:
+        frames = w.readframes(w.getnframes())
+    assert frames.startswith(srv.mixer.chime_in)
+    assert frames.endswith(srv.mixer.chime_out)
+    # A test is not a broadcast.
+    assert srv.activity == {}
+
+
+async def test_test_sound_by_name_and_failures(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+    _played(fake_ha)
+
+    assert (await client.post("/api/devices/atom-echo/test")).status == 200
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+    assert (await client.post("/api/devices/nobody/test")).status == 404
+
+    # Known device, but no speaker in HA.
+    await _post(client, "garage")
+    _played(fake_ha)
+    resp = await client.post("/api/devices/garage/test")
+    assert resp.status == 400
+    assert "speaker" in (await resp.json())["error"]
+
+    # Speaker unavailable: skipped, reported as not played.
+    fake_ha.get_states.return_value = [
+        {"entity_id": "media_player.atom_echo_player", "state": "unavailable"}]
+    resp = await client.post("/api/devices/d1/test")
+    assert resp.status == 502
+    assert (await resp.json())["result"] == {
+        "ok": False, "outcome": "skipped", "reason": "unavailable"}
+    assert _played(fake_ha) == []
+
+
+async def test_ingress_app_serves_page_and_device_routes(aiohttp_client, players_file, fake_ha):
+    client = await aiohttp_client(srv.make_ingress_app())
+    resp = await client.get("/")
+    assert resp.status == 200
+    html = await resp.text()
+    assert "<title>Intercom</title>" in html
+    # Errors are shown as text, never parsed as HTML.
+    assert "innerHTML" not in html
+    assert "prefers-color-scheme" in html
+    assert (await client.delete("/api/devices/nobody")).status == 404
+    assert (await client.post("/api/devices/nobody/test")).status == 404
