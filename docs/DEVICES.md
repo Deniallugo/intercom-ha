@@ -9,7 +9,7 @@ Three intercom devices plus a playback-only speaker. Repo layout: [README](../RE
 | Mic | internal PDM (SPM1423) | ES8311 codec, `mic_gain: 36DB` | INMP441 |
 | Output | 1× MAX98357A → 2× 4 cm drivers in series | 2× MAX98357A, dual mono | PCM5102A → ZK-502MT 2 × 50 W → two passive speakers |
 | Talk button | hold = talk, tap+hold = reply | same, tap = Assist | same, tap = Assist |
-| Talker feedback | status LED | tones | tones |
+| Talker feedback | status LED + end tones | tones | tones |
 | Wake word + Assist | — | ✓ `okay nabu` | ✓ `okay nabu` |
 | Music Assistant | — | ✓ | ✓ stereo |
 | Mic gain | ×8 (+18 dB) in `recorder.h` | codec PGA | +12 dB on every path |
@@ -64,8 +64,11 @@ Kitchen (status LED; colours changed from the old blue/yellow scheme):
 | yellow slow pulse | no Wi-Fi, or the add-on unreachable |
 | purple | mic test |
 
-The Kitchen has no tones: mic and speaker share the I²S clock pins, so it
-can't beep while recording, and playback costs DMA memory it is short of.
+The Kitchen also plays the end tones, delivered (blip-blip) and not delivered
+(bonk-bonk), once its mic has stopped. Nothing plays while it records (mic and
+speaker share the I²S clock pins), so there is no on-air tick, busy tone or
+limit beep: the LED shows those. A press cuts a tone short, and an incoming
+message takes the speaker over.
 
 Terrace, Terrace minimal, Voice S3 (tones on their own mixer input, so they
 play over music and over a message instead of cutting it; generated on the

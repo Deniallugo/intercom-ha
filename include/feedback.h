@@ -110,3 +110,96 @@ static void fb_pump(esphome::speaker::Speaker* spk) {
   std::vector<uint8_t>().swap(_fb_pcm);
   _fb_pos = 0;
 }
+
+// ── Direct playback (a speaker with no mixer in front: Atom Echo) ─────────────
+// Rendered in small pieces as the speaker takes them, so the only allocation is
+// the speaker's own buffer, the same one an incoming message makes. Callers
+// must not start it while the mic runs (the Atom's mic and speaker share their
+// I²S clock pins).
+
+static const _fb_note_t* _fbd_notes = nullptr;
+static size_t   _fbd_n = 0, _fbd_lead = 0, _fbd_idx = 0, _fbd_total = 0;
+static uint32_t _fbd_rate = 16000;
+static bool     _fbd_active = false;
+static int16_t  _fbd_buf[256];
+static size_t   _fbd_len = 0, _fbd_pos = 0;   // bytes in _fbd_buf / sent
+
+static int16_t _fbd_sample(size_t idx) {
+  const float two_pi = 6.2831853f;
+  int32_t acc = 0;
+  for (size_t k = 0; k < _fbd_n; k++) {
+    const _fb_note_t& nt = _fbd_notes[k];
+    const size_t i0 = _fbd_lead + (size_t) (nt.start * _fbd_rate);
+    const size_t len = (size_t) (nt.dur * _fbd_rate);
+    if (idx < i0 || idx >= i0 + len) continue;
+    const size_t i = idx - i0;
+    const size_t ramp = (size_t) (FB_RAMP_S * _fbd_rate);
+    const float t = (float) i / _fbd_rate;
+    float env = 1.0f;
+    if (i < ramp) env = (float) i / ramp;
+    else if (i + ramp > len) env = (float) (len - i) / ramp;
+    float s = sinf(two_pi * nt.f1 * t);
+    if (nt.buzz > 0) s += nt.buzz * (sinf(3 * two_pi * nt.f1 * t) / 3 +
+                                     sinf(5 * two_pi * nt.f1 * t) / 5);
+    if (nt.f2 > 0) s = 0.5f * (s + sinf(two_pi * nt.f2 * t));
+    acc += (int32_t) (s * env * FB_LEVEL * 32767.0f);
+  }
+  if (acc > 32767) acc = 32767; else if (acc < -32768) acc = -32768;
+  return (int16_t) acc;
+}
+
+// Start a sound on `spk`. False if the speaker is busy (a message is playing).
+static bool fb_direct_play(esphome::speaker::Speaker* spk, int which, uint32_t rate) {
+  if (_fbd_active || !spk->is_stopped()) return false;
+  switch (which) {
+    case FB_TICK:      _fbd_notes = _FB_TICK;  _fbd_n = 1; break;
+    case FB_DELIVERED: _fbd_notes = _FB_OK;    _fbd_n = 2; break;
+    case FB_BUSY:      _fbd_notes = _FB_BUSY;  _fbd_n = 3; break;
+    case FB_LIMIT:     _fbd_notes = _FB_LIMIT; _fbd_n = 3; break;
+    default:           _fbd_notes = _FB_ERR;   _fbd_n = 2; break;
+  }
+  float end = 0;
+  for (size_t i = 0; i < _fbd_n; i++)
+    end = fmaxf(end, _fbd_notes[i].start + _fbd_notes[i].dur);
+  _fbd_rate = rate;
+  _fbd_lead = (size_t) (FB_LEAD_S * rate);
+  _fbd_total = _fbd_lead + (size_t) (end * rate) + 1;
+  _fbd_idx = 0; _fbd_len = 0; _fbd_pos = 0;
+  _fbd_active = true;
+  spk->set_audio_stream_info(esphome::audio::AudioStreamInfo(16, 1, rate));
+  spk->start();
+  return true;
+}
+
+// The mic is about to start: stop the sound and free the I²S pins.
+static void fb_direct_cancel(esphome::speaker::Speaker* spk) {
+  if (!_fbd_active) return;
+  _fbd_active = false;
+  spk->stop();
+}
+
+// A message took the speaker: let it have it, without stopping it.
+static void fb_direct_drop() { _fbd_active = false; }
+
+// From an interval.
+static void fb_direct_pump(esphome::speaker::Speaker* spk) {
+  if (!_fbd_active) return;
+  for (;;) {
+    if (_fbd_pos >= _fbd_len) {
+      if (_fbd_idx >= _fbd_total) {
+        spk->finish();
+        _fbd_active = false;
+        return;
+      }
+      size_t n = 0;
+      while (n < sizeof(_fbd_buf) / 2 && _fbd_idx < _fbd_total)
+        _fbd_buf[n++] = _fbd_sample(_fbd_idx++);
+      _fbd_len = n * 2;
+      _fbd_pos = 0;
+    }
+    size_t w = spk->play(reinterpret_cast<uint8_t*>(_fbd_buf) + _fbd_pos,
+                         _fbd_len - _fbd_pos, 0);
+    if (w == 0) return;   // ring buffer full, or not started yet
+    _fbd_pos += w;
+  }
+}

@@ -11,11 +11,29 @@
 #   yellow slow pulse   no Wi-Fi, or the add-on unreachable
 #   purple              mic test (device file)
 #
-# No sounds: the Atom shares its I²S clock pins between mic and speaker, so it
-# can't beep while recording, and every playback allocates DMA memory it is
-# short of.
+# Sounds only at the end, after the mic has stopped: the delivered blip-blip and
+# the error bonk-bonk (include/feedback.h), straight to the speaker. The Atom
+# shares its I²S clock pins between mic and speaker, so nothing can play while
+# it records; a press cuts a tone short, and an incoming message takes over the
+# speaker. The tone is rendered in small pieces, so it allocates no more than
+# an incoming message does.
 #
-# Needs ${led_pin}.
+# Needs ${led_pin} and ${fb_speaker} (the speaker the main player plays on).
+
+substitutions:
+  fb_rate: "16000"            # the speaker's sample rate
+
+esphome:
+  includes:
+    - ../include/feedback.h
+
+interval:
+  - interval: 20ms
+    then:
+      - lambda: |-
+          if (id(incoming)) fb_direct_drop();
+          else if (!id(${mic_id}).is_stopped()) fb_direct_cancel(id(${fb_speaker}));
+          else fb_direct_pump(id(${fb_speaker}));
 
 light:
   - platform: esp32_rmt_led_strip
@@ -102,9 +120,17 @@ script:
           then:
             - script.execute: fb_idle
 
+  # Before the mic starts (intercom.yaml, on_press).
+  - id: fb_press
+    then:
+      - lambda: fb_direct_cancel(id(${fb_speaker}));
+
   - id: fb_delivered
     mode: restart
     then:
+      - lambda: |-
+          if (!id(ptt_rec) && !id(incoming) && id(${mic_id}).is_stopped())
+            fb_direct_play(id(${fb_speaker}), FB_DELIVERED, ${fb_rate});
       - light.turn_on:
           id: status_led
           red: 0%
@@ -115,9 +141,14 @@ script:
       - delay: 600ms
       - script.execute: fb_idle
 
+  # Silent when the hold watcher fails at the threshold: the mic is still
+  # stopping then, and the LED says it.
   - id: fb_failed
     mode: restart
     then:
+      - lambda: |-
+          if (!id(ptt_rec) && !id(incoming) && id(${mic_id}).is_stopped())
+            fb_direct_play(id(${fb_speaker}), FB_ERROR, ${fb_rate});
       - light.turn_on:
           id: status_led
           effect: Error

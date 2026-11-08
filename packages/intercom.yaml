@@ -24,6 +24,7 @@
 #   media player   on_announcement → script.execute: intercom_announce_start
 #                  on_idle, on_play → script.execute: intercom_announce_end
 #   a feedback package: feedback-led.yaml or feedback-sound.yaml (fb_* scripts)
+#                  feedback-led.yaml also needs fb_speaker
 
 substitutions:
   ptt_pullup: "true"
@@ -179,6 +180,7 @@ binary_sensor:
             - globals.set:
                 id: ptt_reply
                 value: 'false'
+      - script.execute: fb_press
       - lambda: |-
           id(ptt_rec) = false;
           id(ptt_dismiss) = id(incoming) || id(alarm_active);

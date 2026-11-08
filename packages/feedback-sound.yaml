@@ -50,6 +50,12 @@ number:
             - script.execute: fb_incoming_start
 
 script:
+  # Tones go through the mixer, so a press needn't stop them.
+  - id: fb_press
+    then:
+      - logger.log:
+          format: "feedback: press"
+          level: VERY_VERBOSE
   - id: fb_idle
     then:
       - logger.log:
