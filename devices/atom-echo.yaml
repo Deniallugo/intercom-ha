@@ -6,17 +6,25 @@ substitutions:
   # targets). Point at tools/mic-capture.py for stats; PTT is unaffected.
   mic_test_url: "http://homeassistant.local:9999/intercom"
 
+  # Push-to-talk (packages/intercom.yaml). Button GPIO39, active LOW, pull-up
+  # on the board. Tail: the PDM mic's pipeline is short.
+  ptt_pin: GPIO39
+  ptt_pullup: "false"
+  mic_id: atom_mic
+  player_id: atom_player
+  tail_ms: "100"
+  led_pin: GPIO27
+
 packages:
   secrets: !include secrets-atom.yaml
   base: !include ../packages/base.yaml
+  intercom: !include ../packages/intercom.yaml
+  feedback: !include ../packages/feedback-led.yaml
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   name_add_mac_suffix: true
-  includes:
-    - ../include/recorder.h
-    - ../include/uploader.h
   on_boot:
     - priority: 600.0
       then:
@@ -95,6 +103,13 @@ media_player:
     announcement_pipeline:
       speaker: atom_speaker
       format: WAV
+    # Incoming-message detection (LED, tap to silence, Do not disturb).
+    on_announcement:
+      - script.execute: intercom_announce_start
+    on_idle:
+      - script.execute: intercom_announce_end
+    on_play:
+      - script.execute: intercom_announce_end
 
 # ── Memory diagnostics + DMA watchdog ──────────────────────────────────────────
 # Internal DMA RAM fragments over time until the speaker can't allocate and
@@ -103,12 +118,14 @@ media_player:
 sensor:
   - platform: template
     name: "Free DMA heap"
+    entity_category: diagnostic
     unit_of_measurement: "B"
     update_interval: 10s
     lambda: 'return heap_caps_get_free_size(MALLOC_CAP_DMA);'
   # This, not total free, predicts the failure.
   - platform: template
     name: "Largest DMA block"
+    entity_category: diagnostic
     unit_of_measurement: "B"
     update_interval: 10s
     lambda: 'return heap_caps_get_largest_free_block(MALLOC_CAP_DMA);'
@@ -129,18 +146,6 @@ interval:
             lowhits = 0;
           }
 
-# ── Status LED (single SK6812 on GPIO27) ───────────────────────────────────────
-
-light:
-  - platform: esp32_rmt_led_strip
-    rgb_order: GRB
-    chipset: SK6812
-    pin: GPIO27
-    num_leds: 1
-    name: "Status LED"
-    id: status_led
-    restore_mode: ALWAYS_OFF
-
 # ── Mic diagnostics ────────────────────────────────────────────────────────────
 # Records 5 s to ${mic_test_url}, streaming (no PSRAM to hold the take).
 # Mic test and PTT share the recorder, so each refuses while the other runs.
@@ -155,7 +160,7 @@ button:
           condition:
             lambda: |-
               return uploader_is_uploading() || id(mic_test_running) ||
-                     id(ptt_recording);
+                     id(ptt_rec) || id(ptt_finish).is_running();
           then:
             - logger.log: "mic test ignored — recorder busy"
           else:
@@ -167,6 +172,8 @@ button:
                 red: 100%
                 green: 0%
                 blue: 100%
+                brightness: 100%
+                effect: None
             - lambda: |-
                 recorder_start();
                 id(atom_mic).start();
@@ -180,76 +187,36 @@ button:
                 condition:
                   lambda: 'return !uploader_is_uploading();'
                 # Longer than the uploader's worst case (8 s connect + 8 s per
-                # send/recv), so this never gives up while it is still running.
+                # send + 25 s for the answer).
                 timeout: 60s
-            - light.turn_off: status_led
             - logger.log: "mic test recording uploaded"
             - globals.set:
                 id: mic_test_running
                 value: 'false'
+            - script.execute: fb_idle
 
-globals:
-  - id: mic_test_running
-    type: bool
-    restore_value: false
-    initial_value: 'false'
-  # Set only by a press that started a recording, so a refused press's
-  # release doesn't stop someone else's.
-  - id: ptt_recording
-    type: bool
-    restore_value: false
-    initial_value: 'false'
+# ── Push-to-talk hooks (packages/intercom.yaml) ────────────────────────────────
+# No Assist and no alarms here.
 
-# ── Push-to-talk button (GPIO39, active LOW) ───────────────────────────────────
-
-binary_sensor:
-  - platform: gpio
-    pin:
-      number: GPIO39
-      inverted: true
-    name: "Button"
-    filters:
-      - delayed_on: 25ms      # debounce
-      - delayed_off: 25ms
-    on_press:
-      - if:
-          condition:
-            lambda: 'return uploader_is_uploading() || id(mic_test_running);'
-          then:
-            - logger.log: "button ignored — recorder busy"
-          else:
-            - globals.set:
-                id: ptt_recording
-                value: 'true'
-            - light.turn_on:
-                id: status_led
-                red: 0%
-                green: 0%
-                blue: 100%
-            - lambda: |-
-                recorder_start();
-                id(atom_mic).start();
-                uploader_start("${intercom_url}", App.get_name().c_str());
-    on_release:
-      # Cleared before the tail so a press inside it can't close it twice.
-      - if:
-          condition:
-            lambda: 'return id(ptt_recording);'
-          then:
-            - globals.set:
-                id: ptt_recording
-                value: 'false'
-            - delay: 0.1s
-            - lambda: |-
-                id(atom_mic).stop();
-                recorder_stop();
-            - light.turn_on:
-                id: status_led
-                red: 100%
-                green: 100%
-                blue: 0%
-            - wait_until:
-                condition:
-                  lambda: 'return !uploader_is_uploading();'
-                timeout: 10s
-            - light.turn_off: status_led
+script:
+  - id: ptt_hook_talk_start
+    then:
+      - logger.log:
+          format: "talk start"
+          level: VERBOSE
+  - id: ptt_hook_talk_end
+    then:
+      - logger.log:
+          format: "talk end"
+          level: VERBOSE
+  # A tap does nothing on the Atom: there is no Assist, and "repeat the last
+  # message" needs an add-on endpoint (docs/DEVICES.md → Talk button). A tap
+  # still silences an incoming message (handled in the package).
+  - id: ptt_hook_tap
+    then:
+      - logger.log: "tap — no action on this device"
+  - id: ptt_hook_dismiss
+    then:
+      - logger.log:
+          format: "dismiss"
+          level: VERBOSE

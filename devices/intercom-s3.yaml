@@ -2,22 +2,30 @@ substitutions:
   name: esphome-web-0f4600
   friendly_name: Intercom S3
   intercom_url: "http://homeassistant.local:9999/intercom"
+  # Push-to-talk (packages/intercom.yaml). Built-in button GPIO41, active LOW.
+  ptt_pin: GPIO41
+  mic_id: s3_mic
+  player_id: s3_player
+  tail_ms: "2000"
+  local_audio: "id(assist_active)"
+  feedback_src: s3_feedback_src
+  announce_src: s3_announcement_src
 
 packages:
   secrets: !include secrets-s3.yaml
   base: !include ../packages/base.yaml
+  intercom: !include ../packages/intercom.yaml
+  feedback: !include ../packages/feedback-sound.yaml
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   min_version: 2026.1.0
-  includes:
-    - ../include/recorder.h
-    - ../include/uploader.h
   on_boot:
     - priority: 600.0
       then:
-        - lambda: recorder_init();
+        # PSRAM: room for the hold threshold plus a slow connect.
+        - lambda: recorder_init_psram(10 * 32000);
     - priority: 200.0
       then:
         - lambda: |-
@@ -115,6 +123,8 @@ speaker:
     source_speakers:
       - id: s3_announcement_src
       - id: s3_media_src
+      # Talker feedback tones (packages/feedback-sound.yaml).
+      - id: s3_feedback_src
 
 # ── Media player ─────────────────────────────────────────────────────────────
 
@@ -135,67 +145,91 @@ media_player:
       format: FLAC
       sample_rate: 48000
       num_channels: 1
-
-# ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
-
-binary_sensor:
-  - platform: gpio
-    pin:
-      number: GPIO41
-      inverted: true
-      mode:
-        input: true
-        pullup: true
-    name: "Button"
-    on_press:
+    # The add-on plays broadcasts with `announce: true` and doesn't pause the
+    # music: duck it here, as on voice-s3 and speaker-s3. Also feeds the
+    # package's incoming-message detection.
+    on_announcement:
       - if:
           condition:
-            lambda: 'return uploader_is_uploading();'
+            not:
+              voice_assistant.is_running:
           then:
-            - logger.log: "button ignored — upload in progress"
-          else:
-            - globals.set:
-                id: ptt_recording
-                value: 'true'
-            - lambda: |-
-                recorder_start();
-                id(s3_mic).start();   // our own listener slot
-                uploader_start("${intercom_url}", App.get_name().c_str());
-            # Else it fires on the PTT speech.
-            - micro_wake_word.stop:
-    on_release:
-      # Only if this press started a recording: stopping the mic otherwise
-      # takes the wake word's slot and the device goes deaf.
+            - mixer_speaker.apply_ducking:
+                id: s3_media_src
+                decibel_reduction: 15
+                duration: 0.3s
+      - script.execute: intercom_announce_start
+    # Not while Assist runs: its on_end/on_error restore the level.
+    on_idle:
+      - script.execute: intercom_announce_end
       - if:
           condition:
-            lambda: 'return id(ptt_recording);'
+            not:
+              voice_assistant.is_running:
           then:
-            - globals.set:
-                id: ptt_recording
-                value: 'false'
-            - delay: 2s
-            - lambda: recorder_stop();
-            - wait_until:
-                condition:
-                  lambda: 'return !uploader_is_uploading();'
-                timeout: 10s
-            # Re-arm before releasing our slot so the mic never has zero
-            # listeners. Assist re-arms it itself in on_end.
-            - if:
-                condition:
-                  not:
-                    voice_assistant.is_running:
-                then:
-                  - micro_wake_word.start:
-            - lambda: id(s3_mic).stop();
-
-globals:
-  - id: ptt_recording
-    type: bool
-    restore_value: false
-    initial_value: 'false'
+            - mixer_speaker.apply_ducking:
+                id: s3_media_src
+                decibel_reduction: 0
+                duration: 0.5s
+    on_play:
+      - script.execute: intercom_announce_end
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - mixer_speaker.apply_ducking:
+                id: s3_media_src
+                decibel_reduction: 0
+                duration: 0.5s
 
 script:
+  # ── Push-to-talk hooks (packages/intercom.yaml) ──
+  # Else the wake word fires on the PTT speech.
+  - id: ptt_hook_talk_start
+    then:
+      - micro_wake_word.stop:
+      - voice_assistant.stop:
+  # Assist re-arms it itself in on_end.
+  - id: ptt_hook_talk_end
+    then:
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - micro_wake_word.start:
+  # Tap: talk to Assist; a tap while it listens cancels it.
+  - id: ptt_hook_tap
+    then:
+      - if:
+          condition:
+            voice_assistant.is_running:
+          then:
+            - voice_assistant.stop:
+          else:
+            # See on_wake_word_detected.
+            - if:
+                condition:
+                  lambda: 'return id(va)->get_api_connection() == nullptr;'
+                then:
+                  - logger.log: "tap ignored — Home Assistant not subscribed"
+                else:
+                  - globals.set:
+                      id: assist_active
+                      value: 'true'
+                  - micro_wake_word.stop:
+                  - mixer_speaker.apply_ducking:
+                      id: s3_media_src
+                      decibel_reduction: 20
+                      duration: 0.3s
+                  - voice_assistant.start:
+  - id: ptt_hook_dismiss
+    then:
+      - logger.log:
+          format: "dismiss"
+          level: VERBOSE
+
   # If HA never answers, Assist hangs with the wake word off: device deaf.
   - id: va_watchdog
     mode: restart
@@ -207,6 +241,9 @@ script:
           then:
             - logger.log: "Assist stalled — no response from HA; resetting"
             - voice_assistant.stop:
+            - globals.set:
+                id: assist_active
+                value: 'false'
             # on_end normally re-arms; step in only if it didn't.
             - delay: 3s
             - if:
@@ -214,7 +251,7 @@ script:
                   and:
                     - not:
                         micro_wake_word.is_running:
-                    - lambda: 'return !id(ptt_recording);'
+                    - lambda: 'return !id(ptt_rec);'
                 then:
                   - mixer_speaker.apply_ducking:
                       id: s3_media_src
@@ -238,7 +275,7 @@ voice_assistant:
     # Not during PTT: the release re-arms it.
     - if:
         condition:
-          lambda: 'return !id(ptt_recording);'
+          lambda: 'return !id(ptt_rec);'
         then:
           - micro_wake_word.start:
     # on_end fires before the reply plays: wait for it to start and finish.
@@ -254,16 +291,22 @@ voice_assistant:
         id: s3_media_src
         decibel_reduction: 0
         duration: 0.5s
+    - globals.set:
+        id: assist_active
+        value: 'false'
   # No answer coming — restore music and re-arm.
   on_error:
     - script.stop: va_watchdog
+    - globals.set:
+        id: assist_active
+        value: 'false'
     - mixer_speaker.apply_ducking:
         id: s3_media_src
         decibel_reduction: 0
         duration: 0.5s
     - if:
         condition:
-          lambda: 'return !id(ptt_recording);'
+          lambda: 'return !id(ptt_rec);'
         then:
           - micro_wake_word.start:
 
@@ -286,6 +329,10 @@ micro_wake_word:
         then:
           - logger.log: "wake word ignored — Home Assistant not subscribed"
         else:
+          # Its reply is not an incoming message.
+          - globals.set:
+              id: assist_active
+              value: 'true'
           # Chime is set HA-side; an on-device one fails here.
           - mixer_speaker.apply_ducking:
               id: s3_media_src

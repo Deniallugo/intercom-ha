@@ -8,7 +8,8 @@ Three intercom devices plus a playback-only speaker. Repo layout: [README](../RE
 | Board | M5Stack Atom Echo (ESP32, no PSRAM) | M5Stack VoiceS3R (ESP32-S3, 8 MB PSRAM) | Bare ESP32-S3 N16R8 devkit |
 | Mic | internal PDM (SPM1423) | ES8311 codec, `mic_gain: 36DB` | INMP441 |
 | Output | 1× MAX98357A → 2× 4 cm drivers in series | 2× MAX98357A, dual mono | PCM5102A → ZK-502MT 2 × 50 W → two passive speakers |
-| PTT | button, press = talk | button, press = talk | button: tap = Assist, hold ≥ 1.2 s = talk |
+| Talk button | hold = talk, tap+hold = reply | same, tap = Assist | same, tap = Assist |
+| Talker feedback | status LED | tones | tones |
 | Wake word + Assist | — | ✓ `okay nabu` | ✓ `okay nabu` |
 | Music Assistant | — | ✓ | ✓ stereo |
 | Mic gain | ×8 (+18 dB) in `recorder.h` | codec PGA | +12 dB on every path |
@@ -16,6 +17,109 @@ Three intercom devices plus a playback-only speaker. Repo layout: [README](../RE
 
 On Terrace and Voice S3, mic and playback are on separate I²S buses, so the wake
 word keeps listening during playback.
+
+---
+
+## Talk button — every intercom device
+
+One package, `packages/intercom.yaml`, drives the button on Kitchen, Terrace,
+Terrace minimal and Voice S3. The device file sets its pins, mic, tail and
+hooks (wake word, Assist, alarms); `packages/feedback-led.yaml` (Kitchen) or
+`packages/feedback-sound.yaml` (the S3s) turns the outcome into light or tones.
+
+### Gestures
+
+| Gesture | Does |
+|---|---|
+| hold ≥ 0.45 s | talk to the channel, until release (limit 30 s) |
+| tap, then press and hold | reply to whoever last spoke to this device (`X-Intercom-Reply`; the add-on falls back to the channel) |
+| tap | Assist on Terrace and Voice S3; nothing on Kitchen and Terrace minimal |
+| tap while a message, or an alarm, plays | silence it, at once |
+| hold while a message plays, or while the last message is still being sent | "busy" |
+
+Recording starts at the press and the upload connects meanwhile, so the first
+word isn't lost and nothing reaches the add-on for a tap (the idle connection
+is just closed). A single tap acts 0.3 s after its release: that is how long a
+second press has to turn it into a reply. A tap that silences something acts
+at once. A plain double tap does nothing.
+
+After release the device waits for the add-on's answer (it answers once
+playback has started; up to 25 s), then signals the outcome. A press during
+that wait is "busy".
+
+### Feedback
+
+Kitchen (status LED; colours changed from the old blue/yellow scheme):
+
+| LED | Meaning |
+|---|---|
+| off | normal |
+| red | on air |
+| dim red | sending, waiting for the add-on |
+| blue pulse | incoming message |
+| green flash | delivered |
+| red blinking | not delivered: add-on down, refused (502), or no answer |
+| white double flash | busy |
+| white flicker | 30 s limit reached |
+| yellow slow pulse | no Wi-Fi, or the add-on unreachable |
+| purple | mic test |
+
+The Kitchen has no tones: mic and speaker share the I²S clock pins, so it
+can't beep while recording, and playback costs DMA memory it is short of.
+
+Terrace, Terrace minimal, Voice S3 (tones on their own mixer input, so they
+play over music and over a message instead of cutting it; generated on the
+device, `include/feedback.h`):
+
+| Tone | Meaning |
+|---|---|
+| short high tick (2.6 kHz, 25 ms) | on air |
+| rising blip-blip (G6, C7) | delivered |
+| low descending buzz (B3, G3) | not delivered; also once at boot if the add-on is unreachable |
+| busy tone (480 + 620 Hz, × 3) | busy |
+| triple high beep | 30 s limit reached |
+
+The add-on's chime is a 120 ms 800↔1200 Hz sweep and the wake chime an A5→E6
+bell, so none of these can be taken for an incoming message. The mic hears
+the tick, so it is in the recording, ~0.45 s in.
+
+"Delivered" = HTTP 200 and at least one speaker played or queued it. A 200
+with nobody to reach (no other intercom device) counts as not delivered.
+
+### Entities
+
+| Entity | |
+|---|---|
+| **Talk button** (was *Button*) | the button state. Renaming changed its entity ID: `binary_sensor.<device>_button` → `binary_sensor.<device>_talk_button`. HA keeps the old one as unavailable; delete it, and update automations that used it |
+| **Talk** (event) | `talk` / `reply` when a hold goes on air, then `delivered` / `failed` |
+| **Do not disturb** | incoming messages are stopped as they start (the first ~0.1 s of the chime still plays) |
+| **Intercom volume** (S3s) | level of incoming messages only, 5–100 %. The mixer attenuates the announcement input while a message plays; Assist replies, alarms and music keep the player volume. Not on the Kitchen: no mixer there, and its player plays nothing but announcements, so its volume already is the intercom volume |
+| **Intercom URL** | the add-on address, stored on the device. Default: the `intercom_url` substitution. With a `lan_token`, append `?token=<t>`. Changing the substitution later doesn't override a stored value: press **Reset intercom URL** |
+| **Intercom add-on** (diagnostic) | add-on reachable: a TCP connect every 60 s, and every upload |
+| Free DMA heap, Largest DMA block (Kitchen) | now diagnostic |
+
+An incoming message is any announcement on the device's player that it didn't
+start itself (Assist chime and reply, alarm). Music uses the media pipeline,
+so it never counts. Text announcements from the add-on count as messages.
+
+### Add-on changes that would help (not implemented)
+
+- **Do not disturb on the add-on side:** skip a target whose device has
+  `switch.<device>_do_not_disturb` on, with `{"outcome": "skipped", "reason": "dnd"}`.
+  Then not even the start of the chime plays, and the sender learns it.
+- **`POST /intercom/replay`** (`X-Device-Name`): play again the last message
+  that reached this device. A Kitchen tap could call it; today a Kitchen tap
+  does nothing.
+- **mDNS:** advertise `_intercom._tcp` (port 9999, TXT `path=/intercom`). A
+  device with an empty Intercom URL would find it with `mdns_query_ptr()` in
+  the uploader task. The token isn't advertised; it still goes into the URL.
+
+### Kitchen memory
+
+The 32 KB ring buffer (1 s) and the uploader task are allocated at boot. The
+0.45 s held before the hold is confirmed (14 KB) lives in that ring buffer, so
+a press allocates nothing new and the DMA watchdog sees no change; DNS +
+connect overlap the hold, so the remaining 0.55 s is slack for a slow connect.
 
 ---
 
@@ -250,9 +354,10 @@ Floating SCK = silent or noisy, floating XMT = soft-muted. Output is line level.
   `wifi: output_power: 8.5dB` cuts them: −44.2 dBFS / 39 clicks/s at 20 dBm →
   −57.7 dBFS / 1.3 clicks/s (−59.9 / none with no transmit). If the device drops
   off Wi-Fi, raise it first.
-- PTT records from the press into a 30 s PSRAM buffer; the upload starts when
-  the hold is confirmed (1.2 s), drains the buffer, then streams until release
-  + 500 ms. A tap sends nothing. The mic test records 5 s, then uploads.
+- PTT records from the press into a 30 s PSRAM buffer; the upload connects at
+  the press, starts sending when the hold is confirmed (0.45 s), drains the
+  buffer, then streams until release + 500 ms. A tap sends nothing. The mic
+  test records 5 s, then uploads.
 - If clicks remain, filter the mic's VDD: 100 Ω series from 3V3, 10 µF + 100 nF
   to GND at the mic; keep its wires away from the antenna.
 
@@ -330,6 +435,8 @@ G18 to GND, internal pull-up, 25 ms debounce. Pins to avoid:
   0.5 s), −15 dB during the reply, full after.
 - The wake chime must use `announcement: true`; raw `speaker.play` fails with
   "Incompatible audio streams". Regenerate with `tools/make-chime.py`.
+- Tap = Assist (wake chime first). The tap acts 0.3 s after release, the
+  double-tap window.
 - The mic is reference-counted: PTT takes its own listener slot and re-arms the
   wake word before releasing it, so the I²S driver never tears down mid-recording.
 

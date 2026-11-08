@@ -1,5 +1,6 @@
 # Voice S3 — ESP32-S3 + PCM5102A + ZK-502MT amp + INMP441 mic + one button.
-# Music Assistant player and Assist satellite. Tap = Assist, hold = intercom.
+# Music Assistant player and Assist satellite. Tap = Assist, hold = intercom
+# (gestures: packages/intercom.yaml).
 # Mic and DAC are on separate I²S peripherals, so the mic listens through playback.
 # Wiring, and why not to plug USB in with 24 V on: docs/DEVICES.md → Voice S3.
 
@@ -10,24 +11,37 @@ substitutions:
   # Mic test target. Default: the add-on (saved in its panel, also played on the
   # targets). Point at tools/mic-capture.py for stats; PTT is unaffected.
   mic_test_url: "http://homeassistant.local:9999/intercom"
+  # Push-to-talk (packages/intercom.yaml). G18 → button → GND.
+  # Not GPIO38/39: next to the PSRAM bus they read 20-30 false edges/s with only
+  # the internal pull-up. Free RTC pads work: 1, 2, 4, 8, 9, 13-18, 21.
+  # GPIO33-37 belong to PSRAM.
+  ptt_pin: GPIO18
+  mic_id: inmp441_mic
+  player_id: voice_player
+  # People let go while finishing the last word; recording from the press
+  # doesn't help with that end.
+  tail_ms: "500"
+  local_audio: "id(assist_active) || id(timer_alarm).is_running()"
+  feedback_src: feedback_src
+  announce_src: announcement_src
 
 packages:
   secrets: !include secrets-voice.yaml
   base: !include ../packages/base.yaml
+  intercom: !include ../packages/intercom.yaml
+  feedback: !include ../packages/feedback-sound.yaml
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   min_version: 2026.1.0
-  includes:
-    - ../include/recorder.h
-    - ../include/uploader.h
   on_boot:
     - priority: 600.0
       then:
         - lambda: |-
             // Gain is in the data callback's shift, not recorder_set_gain().
-            // PSRAM: PTT buffers 1.2 s before its upload starts, the mic test 5 s.
+            // PSRAM: PTT buffers until the hold is confirmed and the upload
+            // connected; the mic test buffers 5 s.
             recorder_init_psram(30 * 32000);
             // Measured drift and rumble below ~150 Hz louder than the speech.
             recorder_set_highpass(180);
@@ -142,6 +156,8 @@ speaker:
       - id: announcement_src
       - id: media_src
         timeout: never
+      # Talker feedback tones (packages/feedback-sound.yaml).
+      - id: feedback_src
 
 # ── Media player ─────────────────────────────────────────────────────────────
 
@@ -170,9 +186,11 @@ media_player:
           id: media_src
           decibel_reduction: 15
           duration: 0.3s
+      - script.execute: intercom_announce_start
     # Not while Assist runs: the wake chime ends mid-listen, and Assist's
     # on_end/on_error restores the level itself.
     on_idle:
+      - script.execute: intercom_announce_end
       - if:
           condition:
             not:
@@ -183,6 +201,7 @@ media_player:
                 decibel_reduction: 0
                 duration: 0.5s
     on_play:
+      - script.execute: intercom_announce_end
       - if:
           condition:
             not:
@@ -211,7 +230,7 @@ button:
           condition:
             lambda: |-
               return uploader_is_uploading() || id(mic_test_running) ||
-                     id(ptt_armed) || id(intercom_recording);
+                     id(ptt_rec) || id(ptt_finish).is_running();
           then:
             - logger.log: "mic test ignored — recorder busy"
           else:
@@ -231,7 +250,7 @@ button:
                 condition:
                   lambda: 'return !uploader_is_uploading();'
                 # Longer than the uploader's worst case (8 s connect + 8 s per
-                # send/recv), so this never gives up while it is still running.
+                # send + 25 s for the answer), so it never gives up early.
                 timeout: 60s
             - logger.log: "mic test uploaded"
             - micro_wake_word.start:       # re-arm before releasing our slot
@@ -274,6 +293,10 @@ micro_wake_word:
                 - globals.set:
                     id: alarm_suspended
                     value: 'true'
+          # Its chime and reply are not incoming messages.
+          - globals.set:
+              id: assist_active
+              value: 'true'
           - media_player.speaker.play_on_device_media_file:
               id: voice_player
               media_file: chime_sound
@@ -329,11 +352,14 @@ voice_assistant:
         id: media_src
         decibel_reduction: 0
         duration: 0.5s
+    - globals.set:
+        id: assist_active
+        value: 'false'
     # Re-arm after the reply (mww start-up stutters the decode). Not during PTT
     # or the mic test: they re-arm it themselves.
     - if:
         condition:
-          lambda: 'return !id(intercom_recording) && !id(mic_test_running);'
+          lambda: 'return !id(ptt_rec) && !id(mic_test_running);'
         then:
           - micro_wake_word.start:
     # Not cancelled, so the alarm comes back.
@@ -347,13 +373,16 @@ voice_assistant:
           - script.execute: timer_alarm
   on_error:
     - script.stop: va_watchdog
+    - globals.set:
+        id: assist_active
+        value: 'false'
     - mixer_speaker.apply_ducking:
         id: media_src
         decibel_reduction: 0
         duration: 0.5s
     - if:
         condition:
-          lambda: 'return !id(intercom_recording) && !id(mic_test_running);'
+          lambda: 'return !id(ptt_rec) && !id(mic_test_running);'
         then:
           - micro_wake_word.start:
     - if:
@@ -373,30 +402,13 @@ voice_assistant:
     - globals.set:
         id: alarm_suspended
         value: 'false'
+    - globals.set:
+        id: alarm_active
+        value: 'false'
     - script.stop: timer_alarm
 
-# ── Button: tap = Assist, hold = intercom ────────────────────────────────────
-# Tap < 1.2 s, hold ≥ 1.2 s. GPIO18 → button → GND.
-# Not GPIO38/39: next to the PSRAM bus they read 20-30 false edges/s with only
-# the internal pull-up. Free RTC pads work: 1, 2, 4, 8, 9, 13-18, 21.
-# GPIO33-37 belong to PSRAM.
+# ── Push-to-talk hooks (packages/intercom.yaml) ─────────────────────────────
 globals:
-  - id: intercom_recording
-    type: bool
-    restore_value: false
-    initial_value: 'false'
-
-  # This press started a recording (false if the recorder was busy).
-  - id: ptt_armed
-    type: bool
-    restore_value: false
-    initial_value: 'false'
-
-  - id: mic_test_running
-    type: bool
-    restore_value: false
-    initial_value: 'false'
-
   # The wake word paused a ringing alarm; on_end resumes it unless cancelled.
   - id: alarm_suspended
     type: bool
@@ -415,6 +427,9 @@ script:
           then:
             - logger.log: "Assist stalled — no response from HA; resetting"
             - voice_assistant.stop:
+            - globals.set:
+                id: assist_active
+                value: 'false'
             # on_end normally re-arms; step in only if it didn't.
             - delay: 3s
             - if:
@@ -422,7 +437,7 @@ script:
                   and:
                     - not:
                         micro_wake_word.is_running:
-                    - lambda: 'return !id(intercom_recording) && !id(mic_test_running);'
+                    - lambda: 'return !id(ptt_rec) && !id(mic_test_running);'
                 then:
                   - mixer_speaker.apply_ducking:
                       id: media_src
@@ -430,30 +445,59 @@ script:
                       duration: 0.5s
                   - micro_wake_word.start:
 
-  # Still running at release → tap; finished → hold.
-  - id: hold_watch
-    mode: restart
+  # Hold confirmed. Else the wake word fires on the PTT speech.
+  - id: ptt_hook_talk_start
     then:
-      - delay: 1200ms
+      - micro_wake_word.stop:
+      - voice_assistant.stop:
+  - id: ptt_hook_talk_end
+    then:
+      - micro_wake_word.start:
+
+  # Tap: talk to Assist; a tap while it listens cancels it.
+  - id: ptt_hook_tap
+    then:
       - if:
           condition:
-            lambda: 'return !id(ptt_armed);'
+            voice_assistant.is_running:
           then:
-            - logger.log: "intercom busy — hold ignored"
-          else:
-            # Else the wake word fires on the PTT speech.
-            - micro_wake_word.stop:
             - voice_assistant.stop:
-            # Drains the buffered 1.2 s, then streams: no length limit.
-            - lambda: |-
-                id(intercom_recording) = true;
-                uploader_start("${intercom_url}", App.get_name().c_str());
-            - logger.log: "intercom: recording"
+          else:
+            # See on_wake_word_detected.
+            - if:
+                condition:
+                  lambda: 'return id(va)->get_api_connection() == nullptr;'
+                then:
+                  - logger.log: "tap ignored — Home Assistant not subscribed"
+                else:
+                  - globals.set:
+                      id: assist_active
+                      value: 'true'
+                  - micro_wake_word.stop:
+                  - media_player.speaker.play_on_device_media_file:
+                      id: voice_player
+                      media_file: chime_sound
+                      announcement: true
+                  - voice_assistant.start:
+
+  # A tap silences a ringing (or paused) alarm and does nothing else.
+  - id: ptt_hook_dismiss
+    then:
+      - globals.set:
+          id: alarm_suspended
+          value: 'false'
+      - globals.set:
+          id: alarm_active
+          value: 'false'
+      - script.stop: timer_alarm
 
   # Rings ~12 s or until a tap.
   - id: timer_alarm
     mode: restart
     then:
+      - globals.set:
+          id: alarm_active
+          value: 'true'
       - repeat:
           count: 8
           then:
@@ -462,102 +506,10 @@ script:
                 media_file: chime_sound
                 announcement: true
             - delay: 1500ms
-
-binary_sensor:
-  - platform: gpio
-    id: ptt_button
-    name: "Button"
-    pin:
-      number: GPIO18
-      mode: INPUT_PULLUP
-      inverted: true
-    filters:
-      - delayed_on: 25ms      # debounce
-      - delayed_off: 25ms
-    on_press:
-      # Record from the press (people talk as they press); a tap discards it.
       - if:
           condition:
-            lambda: |-
-              return !uploader_is_uploading() && !id(intercom_recording) &&
-                     !id(mic_test_running);
+            lambda: 'return !id(alarm_suspended);'
           then:
-            - lambda: |-
-                id(inmp441_mic).start();   // our own listener slot
-                recorder_start();
-                id(ptt_armed) = true;
-      - script.execute: hold_watch
-    on_release:
-      - if:
-          condition:
-            script.is_running: hold_watch
-          # ── tap: talk to Assist (second tap cancels) ──
-          then:
-            - script.stop: hold_watch
-            - if:
-                condition:
-                  lambda: 'return id(ptt_armed);'
-                then:
-                  - lambda: |-
-                      recorder_cancel();
-                      id(ptt_armed) = false;
-                      id(inmp441_mic).stop();
-            - if:
-                condition:
-                  lambda: 'return id(intercom_recording);'
-                then:
-                  - logger.log: "tap ignored — broadcast still finishing"
-                # A tap silences a ringing (or paused) alarm and does nothing else.
-                else:
-                  - if:
-                      condition:
-                        or:
-                          - script.is_running: timer_alarm
-                          - lambda: 'return id(alarm_suspended);'
-                      then:
-                        - globals.set:
-                            id: alarm_suspended
-                            value: 'false'
-                        - script.stop: timer_alarm
-                      else:
-                        - if:
-                            condition:
-                              voice_assistant.is_running:
-                            then:
-                              - voice_assistant.stop:
-                            else:
-                              # See on_wake_word_detected.
-                              - if:
-                                  condition:
-                                    lambda: 'return id(va)->get_api_connection() == nullptr;'
-                                  then:
-                                    - logger.log: "tap ignored — Home Assistant not subscribed"
-                                  else:
-                                    - micro_wake_word.stop:
-                                    - media_player.speaker.play_on_device_media_file:
-                                        id: voice_player
-                                        media_file: chime_sound
-                                        announcement: true
-                                    - voice_assistant.start:
-          # ── hold released: close out the broadcast ──
-          else:
-            - if:
-                condition:
-                  lambda: 'return id(intercom_recording);'
-                then:
-                  # Before the tail, or a tap inside it cancels the broadcast.
-                  - globals.set:
-                      id: ptt_armed
-                      value: 'false'
-                  - delay: 500ms    # tail, so the last word isn't clipped
-                  - lambda: |-
-                      recorder_stop();
-                      id(intercom_recording) = false;
-                  - wait_until:
-                      condition:
-                        lambda: 'return !uploader_is_uploading();'
-                      timeout: 10s
-                  # Re-arm before releasing our slot so the mic never has zero
-                  # listeners (that tears down its I²S driver).
-                  - micro_wake_word.start:
-                  - lambda: id(inmp441_mic).stop();
+            - globals.set:
+                id: alarm_active
+                value: 'false'
