@@ -36,12 +36,26 @@ jobs:
         run: |
           sed -i "s/^version:.*/version: \"${{ steps.version.outputs.version }}\"/" intercom-addon/config.yaml
 
+      # The bump is committed on top of the current main (in a separate
+      # worktree, so the build below still uses the tagged tree). That keeps
+      # it working when main has moved past the tag, and makes re-runs a
+      # no-op once the bump has already landed.
       - name: Commit updated config.yaml
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add intercom-addon/config.yaml
-          git diff --staged --quiet && echo "version already up to date, skipping commit" || (git commit -m "chore: bump version to ${{ steps.version.outputs.version }} [skip ci]" && git push origin HEAD:main)
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git worktree add --detach "$RUNNER_TEMP/bump" origin/main
+          cd "$RUNNER_TEMP/bump"
+          sed -i "s/^version:.*/version: \"$VERSION\"/" intercom-addon/config.yaml
+          if git diff --quiet; then
+            echo "main already at $VERSION, skipping commit"
+          else
+            git commit -am "chore: bump version to $VERSION [skip ci]"
+            git push origin HEAD:main
+          fi
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -51,7 +65,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        uses: home-assistant/builder@2024.03.5
+        # 2024.03.5 bootstraps cosign v2.2.3, which can no longer be
+        # validated. 2026.02.1 is the newest tag that still has a published
+        # builder image (later tags of this deprecated action pull images
+        # that don't exist).
+        uses: home-assistant/builder@2026.02.1
         with:
           args: |
             --all \
