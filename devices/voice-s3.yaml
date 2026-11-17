@@ -16,6 +16,8 @@ substitutions:
   # the internal pull-up. Free RTC pads work: 1, 2, 4, 8, 9, 13-18, 21.
   # GPIO33-37 belong to PSRAM.
   ptt_pin: GPIO18
+  # Music drop while talking (deeper than Assist's 15 dB: mic next to speakers).
+  ptt_duck_db: "30"
   mic_id: inmp441_mic
   player_id: voice_player
   # People let go while finishing the last word; recording from the press
@@ -170,7 +172,10 @@ media_player:
     buffer_size: 1000000     # 1 MB, in PSRAM
     media_pipeline:
       speaker: media_src
-      format: FLAC
+      # MP3, not FLAC: 48 kHz stereo FLAC (~1 Mbit/s) pushes RTT to 200-2000 ms
+      # while streaming and the music stutters (2026-11-09). Also set the
+      # player's Output codec to MP3 in Music Assistant, or MA keeps sending FLAC.
+      format: MP3
       sample_rate: 48000
       num_channels: 2
     announcement_pipeline:
@@ -193,8 +198,10 @@ media_player:
       - script.execute: intercom_announce_end
       - if:
           condition:
-            not:
-              voice_assistant.is_running:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - lambda: 'return !id(ptt_talking);'
           then:
             - mixer_speaker.apply_ducking:
                 id: media_src
@@ -204,8 +211,10 @@ media_player:
       - script.execute: intercom_announce_end
       - if:
           condition:
-            not:
-              voice_assistant.is_running:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - lambda: 'return !id(ptt_talking);'
           then:
             - mixer_speaker.apply_ducking:
                 id: media_src
@@ -348,10 +357,15 @@ voice_assistant:
         condition:
           lambda: 'return id(voice_player)->state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
         timeout: 30s
-    - mixer_speaker.apply_ducking:
-        id: media_src
-        decibel_reduction: 0
-        duration: 0.5s
+    # Not while talking: a hold that stops Assist lands here mid-broadcast.
+    - if:
+        condition:
+          lambda: 'return !id(ptt_talking);'
+        then:
+          - mixer_speaker.apply_ducking:
+              id: media_src
+              decibel_reduction: 0
+              duration: 0.5s
     - globals.set:
         id: assist_active
         value: 'false'
@@ -376,10 +390,14 @@ voice_assistant:
     - globals.set:
         id: assist_active
         value: 'false'
-    - mixer_speaker.apply_ducking:
-        id: media_src
-        decibel_reduction: 0
-        duration: 0.5s
+    - if:
+        condition:
+          lambda: 'return !id(ptt_talking);'   # same as on_end
+        then:
+          - mixer_speaker.apply_ducking:
+              id: media_src
+              decibel_reduction: 0
+              duration: 0.5s
     - if:
         condition:
           lambda: 'return !id(ptt_rec) && !id(mic_test_running);'
@@ -450,8 +468,17 @@ script:
     then:
       - micro_wake_word.stop:
       - voice_assistant.stop:
+      # Music down while talking: the mic sits next to the speakers.
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: ${ptt_duck_db}
+          duration: 0.15s
   - id: ptt_hook_talk_end
     then:
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: 0
+          duration: 0.5s
       - micro_wake_word.start:
 
   # Tap: talk to Assist; a tap while it listens cancels it.

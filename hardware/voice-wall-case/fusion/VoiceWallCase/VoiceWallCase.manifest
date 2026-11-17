@@ -1,0 +1,12 @@
+{
+	"autodeskProduct":	"Fusion",
+	"type":	"script",
+	"author":	"",
+	"description":	{
+		"":	"Voice S3 wall unit — two stacked boxes (ZK-502MT amp, Voice S3) on a wall plate, with every electronic part as a movable component. Builds the assembly or any single part from vwc/params.py and vwc/placement.py; `sync` writes dragged parts back."
+	},
+	"version":	"",
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true,
+	"iconFilename":	"ScriptIcon.svg"
+}

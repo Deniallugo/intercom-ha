@@ -1,0 +1,11 @@
+# Voice S3 Wall — second Voice S3 build (wall case, hardware/voice-wall-case/).
+# Same hardware and firmware as voice-s3.yaml, except the button is on GPIO1.
+# The device name differs, so both show up in HA as separate devices.
+
+substitutions:
+  name: voice-s3-wall
+  friendly_name: Voice S3 Wall
+  ptt_pin: GPIO1
+
+packages:
+  voice_s3: !include voice-s3.yaml
