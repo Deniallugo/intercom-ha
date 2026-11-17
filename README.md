@@ -240,6 +240,12 @@ or `?token=<token>`.
 Upload headers: `X-Device-Name` (ESPHome node name), `X-Session-ID`,
 `X-Sample-Rate` (optional, default `16000`), `X-Intercom-Reply: 1` (optional).
 
+Browser talkers — a push-to-talk button on a wall-tablet dashboard — post
+from Home Assistant's origin, so the LAN port answers CORS preflights and
+labels its answers for any request that carries an `Origin`. The headers
+above then work from a page's `fetch()`; `lan_token`, when set, still
+guards the upload. Firmware sends no `Origin` and sees no change.
+
 How a broadcast is played:
 
 - Speakers that support announcements (`MEDIA_ANNOUNCE`: ESPHome speaker media

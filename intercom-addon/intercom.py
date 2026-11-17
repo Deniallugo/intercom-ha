@@ -962,6 +962,45 @@ async def lan_auth(request: web.Request, handler):
     return await handler(request)
 
 
+# Browser talkers (a wall-tablet dashboard) post from Home Assistant's origin,
+# port 8123, so every upload is cross-origin and its X-Device-Name /
+# X-Sample-Rate headers need a preflight. Firmware sends no Origin and is
+# untouched. The lan_token, when set, still guards the POST itself.
+_CORS_ALLOW_HEADERS = ("Authorization, Content-Type, X-Device-Name, "
+                       "X-Session-ID, X-Sample-Rate, X-Intercom-Reply")
+
+
+def _cors_headers(request: web.Request) -> dict:
+    return {
+        "Access-Control-Allow-Origin": request.headers.get("Origin", "*"),
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": _CORS_ALLOW_HEADERS,
+        "Access-Control-Max-Age": "600",
+        "Vary": "Origin",
+    }
+
+
+@web.middleware
+async def lan_cors(request: web.Request, handler):
+    """Answer CORS preflights and label answers for browser talkers.
+    Outside lan_auth, so a preflight (which carries no token) gets through
+    and a 401 still reaches the page readably."""
+    if "Origin" not in request.headers or request.path.startswith(_LAN_PUBLIC_PREFIX):
+        return await handler(request)
+    if request.method == "OPTIONS":
+        headers = _cors_headers(request)
+        if request.headers.get("Access-Control-Request-Private-Network"):
+            headers["Access-Control-Allow-Private-Network"] = "true"
+        return web.Response(status=204, headers=headers)
+    try:
+        resp = await handler(request)
+    except web.HTTPException as e:
+        e.headers.update(_cors_headers(request))
+        raise
+    resp.headers.update(_cors_headers(request))
+    return resp
+
+
 # The loop holds tasks weakly; keep them alive until done.
 _background_tasks: set = set()
 
@@ -1009,7 +1048,7 @@ def remove_stale_www_media() -> int:
 
 def make_lan_app(token: Optional[str] = None) -> web.Application:
     app = web.Application(client_max_size=MAX_UPLOAD_BYTES,
-                          middlewares=[lan_auth])
+                          middlewares=[lan_cors, lan_auth])
     app[LAN_TOKEN_KEY] = lan_token() if token is None else token
     app.router.add_post("/intercom", handle_intercom)
     app.router.add_post("/intercom/reply", handle_intercom)
