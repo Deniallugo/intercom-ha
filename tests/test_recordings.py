@@ -39,6 +39,18 @@ def test_save_disabled_when_keep_is_zero(rec_dir):
     assert not rec_dir.exists()
 
 
+def test_keep_zero_leaves_recordings_kept_earlier(rec_dir):
+    """The default went 10 -> 0: an update must not silently wipe what a user
+    kept under the old default. keep=0 stores nothing new and deletes nothing;
+    the panel still lists (and deletes) the old ones."""
+    for sid in ("one", "two"):
+        recordings.save(_wav(0.1), source="dev", session_id=sid, keep=5)
+    assert len(list(rec_dir.glob("*.wav"))) == 2
+    assert recordings.save(_wav(), source="dev", session_id="three", keep=0) is None
+    assert len(list(rec_dir.glob("*.wav"))) == 2
+    assert len(recordings.listing()) == 2
+
+
 def test_save_sanitises_source_and_session(rec_dir):
     path = recordings.save(
         _wav(), source="../../etc/pwn", session_id="../..", keep=5
@@ -141,7 +153,7 @@ def lan_app():
 def options_file(monkeypatch, tmp_path):
     """Real options.json so keep_recordings() exercises its parsing."""
     p = tmp_path / "options.json"
-    p.write_text(json.dumps({"ha_url": "http://ha.test:8123", "keep_recordings": 3}))
+    p.write_text(json.dumps({"keep_recordings": 3}))
     monkeypatch.setattr(srv, "OPTIONS_FILE", str(p))
     return p
 
@@ -165,6 +177,7 @@ def players_file(monkeypatch, tmp_path):
 @pytest.fixture
 def fake_ha(monkeypatch):
     monkeypatch.setattr(srv.ha, "play_media", AsyncMock(return_value=204))
+    monkeypatch.setattr(srv.ha, "get_states", AsyncMock(return_value=[]))
     monkeypatch.setattr(srv.ha, "get_state",
                         AsyncMock(return_value={"state": "idle", "attributes": {}}))
     monkeypatch.setattr(srv.ha, "pause", AsyncMock(return_value=200))
@@ -174,14 +187,27 @@ def fake_ha(monkeypatch):
 
 def test_keep_recordings_defaults_when_option_missing(monkeypatch, tmp_path):
     p = tmp_path / "options.json"
-    p.write_text(json.dumps({"ha_url": "x"}))
+    # Options removed in 4.3 may linger; they are ignored.
+    p.write_text(json.dumps({"ha_url": "x", "port": 9999, "bits_per_sample": 16}))
     monkeypatch.setattr(srv, "OPTIONS_FILE", str(p))
-    assert srv.keep_recordings() == srv.DEFAULT_KEEP_RECORDINGS
+    assert srv.keep_recordings() == srv.DEFAULT_KEEP_RECORDINGS == 0
 
 
 def test_keep_recordings_survives_a_missing_file(monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "OPTIONS_FILE", str(tmp_path / "nope.json"))
     assert srv.keep_recordings() == srv.DEFAULT_KEEP_RECORDINGS
+
+
+def test_denoise_enabled_survives_a_missing_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(srv, "OPTIONS_FILE", str(tmp_path / "nope.json"))
+    assert srv.denoise_enabled() is srv.DEFAULT_DENOISE
+
+
+def test_denoise_enabled_survives_bad_json(monkeypatch, tmp_path):
+    p = tmp_path / "options.json"
+    p.write_text("{not json")
+    monkeypatch.setattr(srv, "OPTIONS_FILE", str(p))
+    assert srv.denoise_enabled() is srv.DEFAULT_DENOISE
 
 
 def test_keep_recordings_clamps_negative(monkeypatch, tmp_path):
@@ -233,7 +259,7 @@ async def test_intercom_upload_is_retained_without_chimes(
     pcm = b"\x01\x00" * 1600  # 0.1 s
     resp = await client.post("/intercom", data=pcm,
                              headers={"X-Session-ID": "sid1", "X-Device-Name": "voice-s3"})
-    assert resp.status == 204
+    assert resp.status == 200
 
     items = recordings.listing()
     assert len(items) == 1 and items[0]["source"] == "voice-s3"
@@ -256,7 +282,7 @@ async def test_intercom_still_broadcasts_when_retention_fails(
     client = await aiohttp_client(lan_app)
     resp = await client.post("/intercom", data=b"\x00" * 64,
                              headers={"X-Session-ID": "sid2", "X-Device-Name": "voice-s3"})
-    assert resp.status == 204
+    assert resp.status == 200
     assert fake_ha.play_media.await_count == 1
 
 
@@ -264,7 +290,7 @@ async def test_retention_disabled_keeps_nothing(
     monkeypatch, aiohttp_client, lan_app, rec_dir, options_file, www_dir,
     players_file, fake_ha,
 ):
-    options_file.write_text(json.dumps({"ha_url": "x", "keep_recordings": 0}))
+    options_file.write_text(json.dumps({"keep_recordings": 0}))
     client = await aiohttp_client(lan_app)
     await client.post("/intercom", data=b"\x00" * 64,
                       headers={"X-Session-ID": "sid3", "X-Device-Name": "voice-s3"})

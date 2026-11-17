@@ -1,3 +1,6 @@
+# Test deps for the add-on suite. Install into a venv (see README → Development):
+#   python3 -m venv .venv && .venv/bin/pip install -r tests/requirements.txt
+#   .venv/bin/python -m pytest tests -q
 pytest
 pytest-asyncio==0.23.*
 pytest-aiohttp

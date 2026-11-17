@@ -1,33 +1,31 @@
 # Intercom HA
 
-A whole-home **push-to-talk intercom + voice satellite** built on
+A whole-home push-to-talk intercom and voice satellite on
 [Home Assistant](https://www.home-assistant.io/) and [ESPHome](https://esphome.io/).
+Hold a device's button to talk; your voice plays on the other devices' speakers.
+The same path carries TTS announcements; the devices are also Assist satellites
+and music players.
 
-Press a button on any device to record, and your voice is broadcast through the
-speakers of every other device. The same path also carries Home Assistant TTS
-announcements, wake-word voice assist, and music streaming — all into custom
-external speakers driven by MAX98357A amps.
-
-The project has two halves:
-
-- **Firmware** (`devices/`, `include/`, `packages/`) — ESPHome configs for the
-  ESP32 satellites.
-- **Add-on** (`intercom-addon/`) — a Home Assistant add-on (Python/aiohttp) that
-  receives audio from the devices, mixes in chimes, ducks any playing media, and
-  broadcasts to the target media players. It also renders text announcements via
-  Piper TTS.
+- **Firmware** (`devices/`, `include/`, `packages/`) — ESPHome configs.
+- **Add-on** (`intercom-addon/`) — receives uploads, adds chimes, ducks media,
+  plays the result on the target media players; renders text announcements.
 
 ## Devices
 
 | Device | MCU | Role |
 |---|---|---|
-| **Kitchen** — M5Stack Atom Echo + 1× MAX98357A | ESP32 (no PSRAM) | Button-PTT intercom, TTS announcements, DMA watchdog auto-reboot |
+| **Kitchen** — M5Stack Atom Echo + 1× MAX98357A | ESP32 (no PSRAM) | Button-PTT intercom with a status LED, TTS announcements, DMA watchdog auto-reboot |
 | **Terrace** — M5Stack VoiceS3R + 2× MAX98357A (dual mono) | ESP32-S3 (8 MB PSRAM) | PTT intercom, wake word (`okay nabu`) + HA Assist, Spotify via Music Assistant, TTS announcements |
 | **Voice S3** — bare ESP32-S3 + PCM5102A + ZK-502MT amp + INMP441 + button | ESP32-S3 N16R8 (8 MB PSRAM) | One box on 24 V: stereo Music Assistant player with a built-in 2 × 50 W amp driving two passive speakers, wake word + HA Assist, tap-to-talk / hold-to-intercom. Mic and DAC on separate I²S peripherals, so it keeps listening while playing |
 
-See **[docs/DEVICES.md](docs/DEVICES.md)** for the full hardware reference:
-wiring diagrams, GPIO maps, the audio pipeline, and the key technical decisions
-(two-I²S-bus design, dual-mono amps, codec mic gain, DMA fragmentation watchdog).
+Every intercom device's button works the same (`packages/intercom.yaml`): hold
+to talk, tap then hold to reply to the last speaker, tap for Assist where there
+is one, tap to silence an incoming message. The talker hears (or, on the
+Kitchen, sees) whether the message was delivered. The add-on address is a text
+entity on the device, so a new host or token needs no reflash. Details:
+[docs/DEVICES.md → Talk button](docs/DEVICES.md#talk-button--every-intercom-device).
+
+Wiring, GPIO maps and hardware notes: **[docs/DEVICES.md](docs/DEVICES.md)**.
 
 ## How it works
 
@@ -42,9 +40,8 @@ wiring diagrams, GPIO maps, the audio pipeline, and the key technical decisions
                                      • broadcasts to target players
 ```
 
-The same add-on serves an **Announce** panel (HA ingress) where you type text
-that's rendered with Piper TTS and played on the players you pick — the identical
-broadcast path the intercom uses.
+The add-on's ingress panel also sends text announcements (Piper TTS) down the
+same path.
 
 ## Repository layout
 
@@ -55,8 +52,7 @@ intercom/
 │   ├── intercom-s3.yaml       # Terrace VoiceS3R
 │   ├── intercom-s3-minimal.yaml
 │   ├── speaker-s3.yaml        # Bare S3 + PCM5102A, playback only
-│   ├── voice-s3.yaml          # Bare S3 + PCM5102A + ZK-502MT amp + INMP441 + button
-│   └── listen_and_answer.yaml
+│   └── voice-s3.yaml          # Bare S3 + PCM5102A + ZK-502MT amp + INMP441 + button
 ├── include/              # Shared C++ — recorder.h (PCM ring + gain), uploader.h (chunked POST)
 ├── packages/base.yaml    # Shared logger/api/ota/wifi/captive_portal
 ├── intercom-addon/       # HA add-on (aiohttp): relay, chimes, ducking, talkback, announce, recordings
@@ -90,8 +86,9 @@ This repo is a Home Assistant **add-on repository**. In Home Assistant:
 1. **Settings → Add-ons → Add-on Store → ⋮ → Repositories**, add:
    `https://github.com/Deniallugo/intercom-ha`
 2. Install **Intercom Relay**, then **Start** it.
-3. Open the add-on's **Intercom** side-panel (ingress) to pick announcement
-   targets and send text announcements.
+3. Open the add-on's **Intercom** side-panel (ingress): it lists the intercom
+   devices with their speaker status and last broadcast, sends text
+   announcements, and keeps per-device settings under **Advanced**.
 
 Pre-built images are published to GHCR for `aarch64` and `amd64` on each version
 tag (see `.github/workflows/build.yml`).
@@ -100,111 +97,178 @@ tag (see `.github/workflows/build.yml`).
 
 | Option | Default | Description |
 |---|---|---|
-| `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL |
-| `port` | `9999` | TCP port for ESPHome audio uploads |
-| `sample_rate` | `16000` | Audio sample rate (Hz) |
-| `bits_per_sample` | `16` | Sample width |
-| `channels` | `1` | Channel count |
 | `tts_engine` | `tts.piper` | HA TTS engine for text announcements |
-| `keep_recordings` | `10` | Mic recordings retained for playback in the panel (`0` disables) |
+| `keep_recordings` | `0` | Mic recordings retained for playback in the panel. `0` records nothing (recordings kept earlier stay until deleted in the panel) |
 | `denoise` | `true` | Clean up broadcast audio: high-pass, band subtraction, expander, level to −16 dBFS. Off — no noise reduction, but speech is still levelled to −16 dBFS |
+| `lan_token` | *(unset)* | Shared secret for the LAN port (see [Security](#security)). Unset = no authentication, as flashed devices expect |
+
+Not options any more (values left in an older configuration are ignored):
+
+- **Port** — the container always listens on 9999; change the host port in the
+  add-on's **Network** section. The add-on reads the mapping from the
+  Supervisor, so media URLs follow it.
+- **Audio format** — uploads are 16-bit mono PCM; the rate comes with each
+  upload in `X-Sample-Rate` (8000–48000, standard rates), `16000` if the header
+  is missing (all current firmware).
+- **HA URL** — the add-on asks the Supervisor for the host's IP (and HA's
+  `internal_url` as a fallback).
+
+### Security
+
+- **Who may broadcast.** Port 9999 is open to the LAN. Set `lan_token` and
+  every LAN endpoint except `/media/` requires `Authorization: Bearer <token>`
+  (or `?token=<token>` in the URL); anything else gets `401`. Flashed devices
+  send no token, so set it only together with the firmware change below.
+- **Firmware change for `lan_token`** (not made yet): the shortest is the URL —
+  `include/uploader.h` sends the URL path verbatim (max 63 characters), so
+  `intercom_url: "http://homeassistant.local:9999/intercom?token=<token>"`
+  (and the same for `mic_test_url`) works without touching C++. Cleaner: add an
+  `Authorization: Bearer %s` line to the request header in `uploader.h`, fed
+  from a `!secret intercom_token` substitution.
+- **Where broadcasts live.** Media is served by the add-on itself at
+  `http://<host IP>:<port>/media/<name>` — a random 192-bit name per broadcast,
+  valid for its length + 60 s (plus up to 30 s of queueing), never written to
+  `/config/www`. No token is needed there: ESPHome speakers get the URL through
+  HA's ffmpeg proxy (HA fetches it, then the speaker fetches from HA), Cast and
+  other players fetch it bare. Only if the Network section unpublishes the
+  port does the add-on fall back to `/config/www` (public at `/local/`, also
+  through Nabu Casa), for the audio's length + 10 s.
+- **Announcements** without `targets` go to the intercom devices only — never
+  to every `media_player` in HA (TVs, phones, Cast groups).
+- **Recordings** are off by default (`keep_recordings: 0`).
+
+### Who hears whom
+
+One channel, no setup: a PTT upload plays on every intercom device except the
+one talking. Intercom devices are the ESPHome devices with a `media_player`,
+read from HA's device/entity registry (WebSocket API, cached 5 min; an unknown
+`X-Device-Name` forces a refresh, at most every 30 s). Speaker-only devices
+(speaker-s3) just listen.
+
+A device's `X-Device-Name` (its ESPHome node name) is tied to its HA device by
+the ESPHome config entry's `device_name` (read from
+`/config/.storage/core.config_entries`), else by the device name
+(`atom-echo` ~ "Atom Echo"), else by a manual `selves` entry.
+
+Per device, in `/data/players.json` (set in the panel's **Advanced** section,
+or via `PATCH /api/devices/{name}`):
+an explicit target list (`override`), `muted` (its PTT goes nowhere), or
+`listen: false` (never receives the channel). If the registry is unreachable,
+the channel falls back to the `default` players, still minus the talker.
+
+Replies: a plain PTT always goes to the channel. `POST /intercom/reply` (or
+`X-Intercom-Reply: 1`) goes only to whoever last spoke to this device in the
+past 30 s, or to the channel if nobody did.
+
+### The panel
+
+- **Devices** — one card per intercom device: name (click to rename), speaker
+  online/offline, whether it talks or only listens, its last broadcast and who
+  got it, and **Test sound** (plays the chimes on that device's speaker).
+  Refreshes every few seconds; every change is saved as you make it.
+- **Announcement** — TTS on every device, or on the ticked ones.
+- **Advanced** — per device: whether its button broadcasts (mute), whether it
+  receives the channel, who hears it (everyone else, or only chosen intercom
+  devices), **Remove**; and the mic recordings, when there are any.
+
+**Remove** forgets what the add-on keeps for a device (name, recipients, mute,
+manual speaker, last broadcast). A device that Home Assistant lists stays in
+the panel, so for it Remove also stops it receiving the channel (`listen:
+false`; tick *Receives the channel* to undo, or delete it in HA). Any device
+that sends audio again is enrolled again, like a new one.
+
+The panel follows Home Assistant's theme when it can read it from the parent
+frame (ingress is served from HA's own origin), else the browser's light/dark
+preference.
+
+Ingress-only endpoints used by the panel: `GET /api/devices`,
+`PATCH`/`DELETE /api/devices/{key}`, `POST /api/devices/{key}/test`,
+`POST /api/announce`, `GET`/`DELETE /api/recordings[/{name}]` (`key` is a
+device name or an HA device id).
 
 ### Broadcast cleanup
 
-**On by default.** Every broadcast has its speech brought to **−16 dBFS**,
-with a lookahead peak limiter holding −3 dBFS. Measured, raw uploads carry
-speech at −21 to −33 dBFS against a chime near −9; on the Atom Echo's small
-speaker that made a broadcast audible only if the talker had been right on the
-mic. The cleanup is what lets that gain happen without the hiss coming up with
-it — measured on voice-s3 in its case, at the same −16 dBFS of speech:
+`denoise.py` processes each upload before broadcast (the stored recording stays raw),
+as it arrives (`denoise.Stream`; same output, bit for bit, as processing the
+whole message at the end):
+
+1. high-pass at 80 Hz — removes room rumble (35 % of a capture's RMS was below 80 Hz);
+2. 8-band spectral subtraction — the only stage that reduces hiss under speech;
+3. downward expander — quiets the gaps between words;
+4. level — speech to −16 dBFS, lookahead limiter at −3 dBFS peaks.
+
+`denoise: false` skips 1–3 and keeps 4 (`denoise.level()`). Raw uploads arrive at
+−21 to −33 dBFS, too quiet next to music and the chime. The level stage must
+stay last, after the noise is down. Measured on voice-s3:
 
 | | speech | floor between words |
 |---|---|---|
 | raw upload | −31.0 dBFS | −57.8 dBFS |
-| `denoise: false` (level only) | −16.0 | −42.9 |
-| `denoise: true` | −16.2 | **−60.2** |
+| `denoise: false` | −16.0 | −42.9 |
+| `denoise: true` | −16.2 | −60.2 |
 
-With `denoise: false` a broadcast still gets the level (`denoise.level()`), but
-no noise reduction, so a mic that has gone wrong is audible as one. The retained
-recording is the raw upload either way.
-
-The INMP441 has no gain control, and device-side digital gain buys level but not
-clarity: SNR was 13-15 dB at unity, at +18 dB and at +36 dB alike, because gain
-lifts the noise floor with the signal. So the device takes a fixed +12 dB — the
-measured clipping-free ceiling — while the level and the noise work happen in
-the add-on, where there is CPU to spare and float headroom.
-
-`denoise.py` runs four stages over each upload before it is broadcast:
-
-1. **high-pass** at 80 Hz — the single biggest win. Measured on a real capture,
-   **35% of the total RMS sits below 80 Hz**: room rumble carrying no speech at
-   all. The filter is −3 dB at the corner and flat above 200 Hz, so the voice is
-   untouched.
-2. **multiband spectral subtraction** — 8 bands, each attenuated by the noise
-   estimated for that band. This is the stage that matters, because it is the
-   only one that reduces noise *while speech is present*. An expander alone was
-   inaudible: measurement showed 67% of frames carry speech, and no gate can
-   touch the hiss underneath them.
-3. **downward expander** — cleans the remaining gaps. Its threshold is the
-   *geometric mean* of the measured floor and the measured speech level (their
-   midpoint in dB); a fixed multiple of the floor landed above the speech on
-   real captures and attenuated everything equally, achieving nothing.
-4. **set level** — brings speech to `TARGET_SPEECH_RMS` (−16 dBFS), with a
-   lookahead limiter holding −3 dBFS peaks.
-
-Stage 4 has to use an absolute target because the broadcast shares a media
-player with music. Measured: a raw upload is −26 to −29 dBFS RMS and the cleanup
-takes it to −37, while music masters sit near −12 dBFS and the chime at −9.5. At
-one volume setting that makes the chime audible and the speech inaudible.
-
-Raising the level is only legitimate **because it runs last**, on already-quiet
-noise. An earlier version normalised before the band subtraction existed and
-sounded like "louder, including the noise" — correctly, since the noise
-reduction then was 0.2 dB. Now, on real captures, speech ends up 11–15 dB above
-the untouched original while the floor between words stays 1–4 dB *below* it.
-On synthetic white noise it can land ~2 dB above — real mic noise is
-rumble-heavy, which the band subtraction handles far better — so the tests
-bound that at +3 dB. Don't reorder these.
-
-The band split is complementary — each band is a one-pole low-pass of what is
-left, subtracted from the residual — so with all gains at 1 the bands sum back
-to the input to within 2e-13. A conventional filter bank would leave crossover
-ripple that colours the voice even when nothing is being attenuated.
-
-Measured against a high-passed reference across eight real captures: **audible
-hiss (1-8 kHz median) 7-12 dB down, voice level within ±0.5 dB, and the gaps
-between words 11-14 dB quieter** without going dead. ~0.22 s of CPU per 5 s
-upload. Set `denoise: false` to take it out of the broadcast path.
-
-Both `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` are taste calls, swept and
-documented in the module: raise them if the gaps sound abrupt, lower them if
-there is still too much hiss.
-
-The retained recordings stay **raw** whatever this is set to — that copy exists to expose mic
-faults, and cleaning it would hide them. To hear what the cleanup does to a
-capture, run `tools/denoise-preview.py <wav>`; it writes a `-clean` sibling and
-prints the before/after statistics.
+Tuning: `BAND_GAIN_FLOOR` and `MAX_ATTENUATION` in `denoise.py` (raise if gaps
+sound abrupt, lower if hiss remains). Preview a capture with
+`tools/denoise-preview.py <wav>`. Device-side mic gain: [docs/DEVICES.md](docs/DEVICES.md) → INMP441 mic.
 
 ### Mic recordings
 
-Every upload to `/intercom` — a PTT broadcast or a device's **Mic test
-recording** button — is also kept as a chime-free WAV of the raw mic audio in
-the add-on's `/data/recordings`, newest `keep_recordings` retained. The
-**Intercom** side-panel lists them with an inline player, a download link and a
-delete button, so a mic can be judged without repointing `mic_test_url` at
-`tools/mic-capture.py` and reflashing.
+With `keep_recordings` above 0, every upload to `/intercom` is also saved as a
+raw, chime-free WAV in `/data/recordings` (the newest `keep_recordings`). The
+default `0` saves nothing; recordings kept under an earlier setting are not
+deleted behind your back — they stay listed in the side-panel (player,
+download, delete) until you delete them there.
 
-Set `keep_recordings: 0` if you'd rather nothing spoken over the intercom is
-retained on disk.
+The **Mic test recording** button (voice-s3, atom-echo) records 5 s and uploads
+to the `mic_test_url` substitution — the add-on by default, so the test is saved
+here (with `keep_recordings` > 0) **and played on the device's target speakers**. For level/SNR statistics,
+point `mic_test_url` at `tools/mic-capture.py`; PTT is unaffected.
 
 ### HTTP API
 
-The add-on listens on `port` (default `9999`):
+The add-on listens on port `9999` (host port set in the Network section).
+With `lan_token` set, all but `/media/` need `Authorization: Bearer <token>`
+or `?token=<token>`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/intercom` | Receive a PCM audio upload from a device and broadcast it |
-| `POST` | `/announce` | Render text via TTS and play on targets (omit `targets` → all players) |
+| `POST` | `/intercom` | Receive a PCM audio upload from a device and broadcast it to the channel |
+| `POST` | `/intercom/reply` | Same, but only to whoever last spoke to this device (30 s window) |
+| `POST` | `/announce` | Render `text` via TTS and play it on `targets`; omitted or empty → the intercom devices (never every player in HA). Same JSON answer as `/intercom` (`204` if there is nobody to play to) |
+| `GET` | `/media/<name>` | A broadcast's audio, for the players; random name, expires (no token) |
+
+Upload headers: `X-Device-Name` (ESPHome node name), `X-Session-ID`,
+`X-Sample-Rate` (optional, default `16000`), `X-Intercom-Reply: 1` (optional).
+
+How a broadcast is played:
+
+- Speakers that support announcements (`MEDIA_ANNOUNCE`: ESPHome speaker media
+  players, Sonos, …) get `play_media` with `announce: true` and keep their own
+  music: ESPHome plays it on the `announcement_pipeline` (via HA's ffmpeg
+  proxy), Sonos as an audio clip over the queue. Other players fall back to
+  pause → play → resume. The pause comes when the upload starts, not when it
+  ends: such a speaker goes quiet while the button is held, and resumes after
+  the broadcast (at once if the upload breaks off or is empty). A speaker
+  still busy with an earlier broadcast is paused in its own turn, as before.
+- The upload is read as it streams in. Routing, the pause above and most of
+  the cleanup (high-pass, band split, frame levels) run while the button is
+  held; after the last byte only the whole-message part of the cleanup is
+  left (noise percentiles, gains, expander, level), about a third of it.
+- A speaker still playing a broadcast is not cut off: the next one waits its
+  turn (at most 30 s, else it is dropped as `busy`). Unavailable speakers are
+  skipped.
+- `/intercom` answers with JSON (`200`; `502` when there were targets and none
+  was reached):
+
+  ```json
+  {"source": "atom-echo", "mode": "channel", "targets": ["media_player.a", "media_player.b"],
+   "results": {"media_player.a": {"ok": true, "outcome": "ok", "via": "announce", "status": 200},
+               "media_player.b": {"ok": null, "outcome": "queued", "wait": 3.2}},
+   "delivered": 1, "queued": 1, "failed": 0, "skipped": 0}
+  ```
+
+  `outcome` is `ok`, `error`, `skipped`, `busy` or `queued`; a queued result is
+  updated in `/api/devices` → `last_broadcast` once it plays.
 
 Trigger an announcement from a Home Assistant automation with a `rest_command`:
 
@@ -213,6 +277,9 @@ rest_command:
   intercom_announce:
     url: "http://homeassistant.local:9999/announce"
     method: POST
+    # with lan_token set:
+    # headers:
+    #   Authorization: !secret intercom_bearer   # "Bearer <token>"
     content_type: "application/json"
     payload: >
       {"text": "{{ text }}", "targets": {{ targets | tojson }}}
@@ -231,14 +298,16 @@ See [docs/DEVICES.md → Announcements](docs/DEVICES.md) for details.
 
 ## Development
 
-The add-on logic is plain Python with a pytest suite:
+Add-on tests (use a venv — macOS `python3` has no pytest):
 
 ```bash
-pip install -r tests/requirements.txt
-pytest
+python3 -m venv .venv
+.venv/bin/pip install -r tests/requirements.txt
+.venv/bin/python -m pytest tests -q
 ```
+
+Voice-case design checks: `cd hardware/voice-case/fusion/VoiceCase && python3 -m vc.checks`.
 
 ## License
 
-No license file is present; treat as all rights reserved unless the maintainer
-states otherwise.
+No license file; all rights reserved.

@@ -5,7 +5,7 @@
 substitutions:
   name: voice-s3-wall
   friendly_name: Voice S3 Wall
-  button_pin: GPIO1
+  ptt_pin: GPIO1
 
 packages:
   voice_s3: !include voice-s3.yaml

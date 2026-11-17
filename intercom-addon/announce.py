@@ -7,10 +7,47 @@ from chimes import ChimeMixer
 
 log = logging.getLogger(__name__)
 
-# When we can't measure an announcement's length (the engine returned a format
-# we can't decode), report this generous floor instead of 0 so the caller's
-# duck-restore and file-cleanup grace windows don't truncate it mid-playback.
+# Assumed length of undecodable TTS, so restore/cleanup don't cut it short.
 FALLBACK_DURATION_SECONDS = 30.0
+
+# MPEG audio frame header tables (layer III only; TTS MP3 is always layer III).
+_MP3_BITRATES = {  # kbit/s by version: MPEG-1, MPEG-2/2.5
+    1: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320],
+    2: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+}
+_MP3_RATES = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
+
+
+def mp3_duration(data: bytes):
+    """Seconds of MPEG layer III audio in ``data`` (frames summed, so VBR
+    works), or None if no frames are found."""
+    i = 0
+    if data[:3] == b"ID3" and len(data) >= 10:
+        size = 0
+        for b in data[6:10]:
+            size = (size << 7) | (b & 0x7F)
+        i = 10 + size
+    total, frames, n = 0.0, 0, len(data)
+    while i + 4 <= n:
+        h = int.from_bytes(data[i:i + 4], "big")
+        ver, layer = (h >> 19) & 3, (h >> 17) & 3
+        br_i, sr_i, pad = (h >> 12) & 0xF, (h >> 10) & 3, (h >> 9) & 1
+        if (h >> 21) & 0x7FF != 0x7FF or ver == 1 or layer != 1 \
+                or br_i in (0, 15) or sr_i == 3:
+            if frames:
+                break      # trailing tag/garbage after the audio
+            i += 1         # still looking for the first frame
+            continue
+        rate = _MP3_RATES[ver][sr_i]
+        bitrate = _MP3_BITRATES[1 if ver == 3 else 2][br_i] * 1000
+        samples = 1152 if ver == 3 else 576
+        size = (samples // 8) * bitrate // rate + pad
+        if size < 4:
+            break
+        total += samples / rate
+        frames += 1
+        i += size
+    return total if frames else None
 
 
 def parse_tts_wav(audio: bytes):
@@ -63,24 +100,21 @@ def _resample_mono16(samples: array.array, src_rate: int, dst_rate: int) -> arra
 
 
 def build_announcement_wav(audio: bytes, mixer: ChimeMixer):
-    """Return (bytes, ext, duration_seconds).
+    """Return (bytes, ext, duration_seconds), chimed and at ``mixer``'s rate.
 
-    If the TTS audio is a 16-bit PCM WAV, resample it to ``mixer``'s format and
-    build a chime+speech+chime WAV at that rate. The whole intercom chain (and
-    the device I2S speakers, whose DMA buffers are sized for it) is built around
-    the addon's configured rate, so announcements MUST be delivered at it — a
-    native-rate TTS WAV (e.g. Piper's 22.05 kHz) makes the no-PSRAM Atom Echo's
-    speaker fail to allocate its DMA buffers and spin in a retry loop.
-    Non-16-bit / unparseable TTS output degrades to chime-less playback.
+    Must be resampled: a 22.05 kHz Piper WAV makes the Atom Echo's speaker fail
+    its DMA allocation. Non-16-bit / unparseable TTS plays without chimes.
     """
     parsed = parse_tts_wav(audio)
     if parsed is None:
-        log.warning("TTS audio not a parseable WAV; playing without chime")
-        return audio, "mp3", FALLBACK_DURATION_SECONDS
+        duration = mp3_duration(audio)
+        log.warning("TTS audio not a parseable WAV; playing without chime "
+                    "(%s)", f"MP3 {duration:.1f}s" if duration
+                    else f"unknown length, assuming {FALLBACK_DURATION_SECONDS:.0f}s")
+        return audio, "mp3", duration or FALLBACK_DURATION_SECONDS
     pcm, rate, width, channels = parsed
     if width != 2:
-        # Can't resample/mix (16-bit only), but we still know the true length
-        # from the PCM, so report it accurately.
+        # Can't mix non-16-bit, but the length is still known.
         duration = len(pcm) / (rate * width * channels)
         log.warning("TTS WAV is %d-bit, not 16-bit; playing without chime", width * 8)
         return audio, "wav", duration
@@ -90,8 +124,7 @@ def build_announcement_wav(audio: bytes, mixer: ChimeMixer):
     samples = _downmix_to_mono(samples, channels)
     samples = _resample_mono16(samples, rate, mixer.sample_rate)
     if mixer.channels > 1:
-        # ChimeMixer pre-renders its chimes at mixer.channels, so the speech must
-        # match. Duplicate the mono signal across channels.
+        # Chimes are rendered at mixer.channels; match them.
         interleaved = array.array("h", bytes(2 * len(samples) * mixer.channels))
         for i, s in enumerate(samples):
             for c in range(mixer.channels):

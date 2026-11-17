@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
-"""Generate the wake-word chime played on-device.
+"""Generate the on-device wake-word chime (sounds/chime.wav).
 
-    python3 tools/make-chime.py            # writes sounds/chime.wav
-
-Two ascending sine tones with soft attacks, 48 kHz / 16-bit / stereo so it
-matches the announcement pipeline exactly and needs no resampling on the device.
-
-The shape is deliberate. The file opens with 60 ms of silence and each tone
-fades in over 12 ms, because the first fraction of a second of any sound this
-device plays is spent starting the I2S driver and un-muting the DAC. Anything
-audible at t=0 is lost — which is exactly the bug this chime works around, so
-the chime must not have the same flaw itself.
-
-Keep it quiet (0.22 full scale). It is feedback, not an announcement, and it is
-played while the microphone is about to start listening.
+48 kHz / 16-bit stereo to match the announcement pipeline. Opens with 60 ms of
+silence and 12 ms attacks because the start of any sound is lost while the I2S
+driver spins up. Quiet (0.22 FS): it is feedback, not an announcement.
 """
 import math
 import struct
@@ -21,7 +11,7 @@ import wave
 from pathlib import Path
 
 RATE = 48000
-LEAD_SILENCE = 0.060  # s — expendable head, see above
+LEAD_SILENCE = 0.060  # s — lost to I2S start-up
 ATTACK = 0.012  # s — no clicks, and nothing lost if the very start is clipped
 AMPLITUDE = 0.22
 OUT = Path(__file__).resolve().parent.parent / "sounds" / "chime.wav"

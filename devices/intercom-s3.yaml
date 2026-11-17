@@ -1,29 +1,53 @@
+# Terrace — M5Stack VoiceS3R: ES8311 codec (mic) + 2× MAX98357A + one button.
+# Built to match voice-s3.yaml: Music Assistant player and Assist satellite,
+# wake chime on the device, timers with an alarm, mic test. Tap = Assist,
+# hold = intercom (gestures: packages/intercom.yaml).
+# Mic and amps are on separate I²S buses, so the mic listens through playback.
+# Wiring: docs/DEVICES.md → Terrace. The internal speaker is unused;
+# intercom-s3-minimal.yaml is the build for it.
+
 substitutions:
-  name: esphome-web-0f4600  
+  name: esphome-web-0f4600
   friendly_name: Intercom S3
+  intercom_url: "http://homeassistant.local:9999/intercom"
+  # Mic test target. Default: the add-on (saved in its panel, also played on the
+  # targets). Point at tools/mic-capture.py for stats; PTT is unaffected.
+  mic_test_url: "http://homeassistant.local:9999/intercom"
+  # Push-to-talk (packages/intercom.yaml). Built-in button GPIO41, active LOW.
+  ptt_pin: GPIO41
+  mic_id: s3_mic
+  player_id: s3_player
+  # People let go while finishing the last word; recording from the press
+  # doesn't help with that end. Same as voice-s3.
+  tail_ms: "500"
+  local_audio: "id(assist_active) || id(timer_alarm).is_running()"
+  feedback_src: feedback_src
+  announce_src: announcement_src
 
 packages:
   secrets: !include secrets-s3.yaml
   base: !include ../packages/base.yaml
+  intercom: !include ../packages/intercom.yaml
+  feedback: !include ../packages/feedback-sound.yaml
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   min_version: 2026.1.0
-  includes:
-    - ../include/recorder.h
-    - ../include/uploader.h
   on_boot:
     - priority: 600.0
       then:
-        - lambda: recorder_init();
+        # PSRAM: PTT buffers until the hold is confirmed and the upload
+        # connected; the mic test buffers 5 s.
+        - lambda: recorder_init_psram(30 * 32000);
+    # Gain is the codec's PGA (mic_gain below); the data is 16-bit already.
     - priority: 200.0
       then:
         - lambda: |-
             id(s3_mic).add_data_callback([](const std::vector<uint8_t>& data) {
               recorder_on_data(data.data(), data.size());
             });
-    # mww doesn't auto-start in ESPHome 2026.x — without this it never listens.
+    # mww doesn't auto-start in ESPHome 2026.x. Starting it starts the mic.
     - priority: 100.0
       then:
         - micro_wake_word.start
@@ -34,28 +58,19 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    # Cache layout — avoids boot loops (per M5Stack reference).
+    # Boot-loops without this cache layout (M5Stack reference config).
     sdkconfig_options:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
 
-# 8 MB octal PSRAM on the S3-PICO module.
 psram:
   mode: octal
   speed: 80MHz
 
-# No UART pins broken out — log over USB CDC.
+# No UART pins broken out.
 logger:
   hardware_uart: USB_CDC
-  level: VERBOSE
-  logs:
-    # Quiet noisy components so wake-word logs stay readable.
-    component: DEBUG
-    sensor: DEBUG
-    scheduler: DEBUG
-    api.service: DEBUG
-    api.connection: DEBUG
 
 # ── I²C for ES8311 codec ─────────────────────────────────────────────────────
 
@@ -69,6 +84,7 @@ i2c:
       ignore_strapping_warning: true
     scan: false
 
+# Needed for the mic: it programs the codec's ADC and mic_gain at boot.
 audio_dac:
   - platform: es8311
     id: es8311_dac
@@ -76,23 +92,12 @@ audio_dac:
     sample_rate: 48000
     mic_gain: 36DB              # wake word needs this; lower if intercom clips
 
-# ── NS4150 internal Class-D amp enable ───────────────────────────────────────
-# GPIO18 enables the internal NS4150 amp — off = no internal speaker sound.
-
-switch:
-  - platform: gpio
-    pin: GPIO18
-    id: internal_amp_enable
-    name: "Internal Amp"
-    restore_mode: ALWAYS_ON
-
 # ── I²S buses ────────────────────────────────────────────────────────────────
-# The ES8311 is one full-duplex codec on one I²S bus, so mic (RX) and speaker
-# (TX) share a single instance and can't be live at once — the wake word is
-# stopped before playback, restarted after (see on_announcement / on_idle).
+# Keep separate: one full-duplex bus ties mic and amps to one clock and brings
+# back "Parent bus is busy".
 
 i2s_audio:
-  # Bus 1 — internal ES8311 codec, hard-wired, not on the headers.
+  # Bus 1 — internal ES8311 codec (mic only).
   - id: i2s_bus
     i2s_lrclk_pin:
       number: GPIO3
@@ -100,38 +105,27 @@ i2s_audio:
     i2s_bclk_pin: GPIO17
     i2s_mclk_pin: GPIO11
 
-  # Bus 2 — free pins G5/G6/G7. Broadcast bus: both MAX98357A amps listen in
-  # parallel. No MCLK broken out (the MAX doesn't need it).
+  # Bus 2 — G5/G6/G7, both MAX98357A amps in parallel. No MCLK needed.
   - id: i2s_bus_ext
     i2s_lrclk_pin: GPIO6
     i2s_bclk_pin: GPIO5
+
+# ── Microphone ───────────────────────────────────────────────────────────────
 
 microphone:
   - platform: i2s_audio
     id: s3_mic
     i2s_audio_id: i2s_bus
-    i2s_din_pin: GPIO4            # Mic data from codec ADC (ASDOUT silkscreen)
+    i2s_din_pin: GPIO4            # ASDOUT
     adc_type: external
     bits_per_sample: 16bit
     sample_rate: 16000
     correct_dc_offset: true
 
-speaker:
-  # Internal ES8311 → NS4150 → 1 W speaker. Fallback; mute via "Internal Amp".
-  - platform: i2s_audio
-    id: s3_speaker
-    i2s_audio_id: i2s_bus
-    i2s_dout_pin: GPIO48          # Speaker data to codec DAC (DSDIN silkscreen)
-    dac_type: external
-    bits_per_sample: 16bit
-    sample_rate: 48000
-    channel: left                  # VoiceS3R has only one internal speaker
-    audio_dac: es8311_dac
+# ── Speaker chain ────────────────────────────────────────────────────────────
 
-  # 2× MAX98357A, both playing the same mono mix (dual mono). Each is a
-  # self-contained DAC+amp on G5/G6/G7. ESPHome sees ONE speaker — the amps are
-  # passive parallel listeners, so the 2nd board is wiring-only (no YAML change).
-  # Optional 3.5 mm line-out via a PCM5100 on the same bus — see docs/DEVICES.md.
+speaker:
+  # 2× MAX98357A wired in parallel on one bus: one speaker here, dual mono.
   - platform: i2s_audio
     id: s3_speaker_ext
     i2s_audio_id: i2s_bus_ext
@@ -140,17 +134,25 @@ speaker:
     bits_per_sample: 16bit
     sample_rate: 48000
     channel: mono
+    # Stay up: a restart after a stream hiccup hits "Parent bus is busy" and
+    # backs off 1 s, turning a glitch into a gap.
+    timeout: never
+    buffer_duration: 1000ms
 
-  # Two virtual sources so TTS announcements and music can share one speaker
-  # (ESPHome rejects the same speaker on both pipelines).
+  # The two media_player pipelines can't share one speaker.
   - platform: mixer
-    id: s3_mixer
+    id: speaker_mixer
     output_speaker: s3_speaker_ext
     source_speakers:
-      - id: s3_announcement_src
-      - id: s3_media_src
+      # No `timeout: never` here: then the second announcement (TTS after the
+      # chime) plays silently.
+      - id: announcement_src
+      - id: media_src
+        timeout: never
+      # Talker feedback tones (packages/feedback-sound.yaml).
+      - id: feedback_src
 
-# ── Media player (HA-controllable playback) ──────────────────────────────────
+# ── Media player ─────────────────────────────────────────────────────────────
 
 media_player:
   - platform: speaker
@@ -158,111 +160,99 @@ media_player:
     name: "${friendly_name} Player"
     volume_min: 0.2
     volume_max: 0.9
-    buffer_size: 1000000 # 1 MB PSRAM buffer for music streaming
-    # Music (Spotify / Music Assistant).
+    buffer_size: 1000000     # 1 MB, in PSRAM
     media_pipeline:
-      speaker: s3_media_src
+      speaker: media_src
       format: FLAC
       sample_rate: 48000
       num_channels: 1
-    # Short interruptions: TTS, intercom, wake-word sounds.
     announcement_pipeline:
-      speaker: s3_announcement_src
+      speaker: announcement_src
+      # Keep FLAC: WAV is ~5x the bytes and stalls this pipeline.
       format: FLAC
       sample_rate: 48000
       num_channels: 1
-    # Mic and speaker share one I²S instance. Stop the wake word and wait for the
-    # mic to release the bus before playback, else "Parent bus is busy". Resume after.
+    # The add-on plays broadcasts with `announce: true` and no longer pauses
+    # the music: duck it here while an announcement plays.
     on_announcement:
-      - if:
-          condition:
-            microphone.is_capturing:
-          then:
-            - micro_wake_word.stop:
-            - wait_until:
-                condition:
-                  not:
-                    microphone.is_capturing:
-                timeout: 3s
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: 15
+          duration: 0.3s
+      - script.execute: intercom_announce_start
+    # Not while Assist runs: the wake chime ends mid-listen, and Assist's
+    # on_end/on_error restores the level itself.
     on_idle:
+      - script.execute: intercom_announce_end
       - if:
           condition:
             not:
-              micro_wake_word.is_running:
+              voice_assistant.is_running:
           then:
-            - micro_wake_word.start:
+            - mixer_speaker.apply_ducking:
+                id: media_src
+                decibel_reduction: 0
+                duration: 0.5s
+    on_play:
+      - script.execute: intercom_announce_end
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_src
+                decibel_reduction: 0
+                duration: 0.5s
+    # Play with `announcement: true`; speaker.play bypasses the mixer and fails
+    # ("Incompatible audio streams").
+    files:
+      - id: chime_sound
+        file: ../sounds/chime.wav
 
-# ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
-
-binary_sensor:
-  - platform: gpio
-    pin:
-      number: GPIO41
-      inverted: true
-      mode:
-        input: true
-        pullup: true
-    name: "Button"
+# ── Mic diagnostics ──────────────────────────────────────────────────────────
+# Records 5 s, then uploads to ${mic_test_url}, so Wi-Fi is quiet while the mic
+# listens. Shares the recorder with PTT; each refuses while the other runs.
+button:
+  - platform: template
+    id: record_test
+    name: "Mic test recording"
+    entity_category: diagnostic
     on_press:
       - if:
           condition:
-            lambda: 'return uploader_is_uploading();'
+            lambda: |-
+              return uploader_is_uploading() || id(mic_test_running) ||
+                     id(ptt_rec) || id(ptt_finish).is_running();
           then:
-            - logger.log: "button ignored — upload in progress"
+            - logger.log: "mic test ignored — recorder busy"
           else:
+            - globals.set:
+                id: mic_test_running
+                value: 'true'
+            - micro_wake_word.stop:
             - lambda: |-
+                id(s3_mic).start();   // take our own listener slot
                 recorder_start();
-                id(s3_mic).start();
-                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
-    on_release:
-      - delay: 2s
-      - lambda: |-
-          id(s3_mic).stop();
-          recorder_stop();
-      - wait_until:
-          condition:
-            lambda: 'return !uploader_is_uploading();'
-          timeout: 10s
+            - logger.log: "mic test: recording, upload held back"
+            - delay: 5s
+            - lambda: |-
+                recorder_stop();
+                uploader_start("${mic_test_url}", App.get_name().c_str());
+            - wait_until:
+                condition:
+                  lambda: 'return !uploader_is_uploading();'
+                # Longer than the uploader's worst case (8 s connect + 8 s per
+                # send + 25 s for the answer), so it never gives up early.
+                timeout: 60s
+            - logger.log: "mic test uploaded"
+            - micro_wake_word.start:       # re-arm before releasing our slot
+            - lambda: id(s3_mic).stop();
+            - globals.set:
+                id: mic_test_running
+                value: 'false'
 
-# ── HA Voice Assistant satellite ─────────────────────────────────────────────
-
-voice_assistant:
-  id: va
-  microphone: s3_mic
-  media_player: s3_player
-  noise_suppression_level: 2
-  auto_gain: 31dBFS
-  volume_multiplier: 2.0       # back from 4.0 — 4× clipped TTS at +12 dB GAIN
-  on_end:
-    # Re-arm the wake word — VA stopped it, and on_idle won't restart it while
-    # music keeps playing (so the next "okay nabu" was ignored).
-    - micro_wake_word.start:
-    # Keep music ducked until the answer finishes playing. on_end fires before the
-    # TTS plays, so wait for the announcement to start, then end, then restore.
-    # Timeouts cover the no-answer case (first times out, second passes through).
-    - wait_until:
-        condition:
-          lambda: 'return id(s3_player)->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
-        timeout: 1500ms
-    - wait_until:
-        condition:
-          lambda: 'return id(s3_player)->state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
-        timeout: 30s
-    - mixer_speaker.apply_ducking:
-        id: s3_media_src
-        decibel_reduction: 0
-        duration: 0.5s
-  # No answer coming — restore music and re-arm.
-  on_error:
-    - mixer_speaker.apply_ducking:
-        id: s3_media_src
-        decibel_reduction: 0
-        duration: 0.5s
-    - micro_wake_word.start:
-
-# ── Wake-word dispatch ───────────────────────────────────────────────────────
-# "okay nabu" → HA Assist. Later: a 2nd model for intercom — see
-# docs/superpowers/specs/2026-05-18-kitchen-amp-and-terrace-s3-design.md.
+# ── Wake word ────────────────────────────────────────────────────────────────
 
 micro_wake_word:
   id: mww
@@ -272,12 +262,238 @@ micro_wake_word:
       id: okay_nabu
       probability_cutoff: 0.7      # default 0.97 too strict at our gain
   on_wake_word_detected:
-    # Duck music ~20 dB with a short ramp; restored when the answer finishes.
-    # Chime is configured HA-side — an on-device chime fails ("Incompatible audio
-    # streams"): external-speaker audio must go through the media_player pipeline.
+    # Without a subscribed HA client, start() fails without firing on_error,
+    # so nothing re-arms the wake word: deaf until reboot. (api.connected is
+    # also true for `esphome logs`.)
+    - if:
+        condition:
+          lambda: 'return id(va)->get_api_connection() == nullptr;'
+        then:
+          - logger.log: "wake word ignored — Home Assistant not subscribed"
+        else:
+          # Pause a ringing alarm while listening (the mic hears it); on_end
+          # resumes it unless the timer was cancelled.
+          - if:
+              condition:
+                script.is_running: timer_alarm
+              then:
+                - script.stop: timer_alarm
+                - globals.set:
+                    id: alarm_suspended
+                    value: 'true'
+          # Its chime and reply are not incoming messages.
+          - globals.set:
+              id: assist_active
+              value: 'true'
+          - media_player.speaker.play_on_device_media_file:
+              id: s3_player
+              media_file: chime_sound
+              announcement: true
+          - voice_assistant.start:
+              wake_word: !lambda return wake_word;
+
+# ── HA Voice Assistant satellite ─────────────────────────────────────────────
+
+voice_assistant:
+  id: va
+  microphone: s3_mic
+  media_player: s3_player
+  noise_suppression_level: 2
+  auto_gain: 31dBFS
+  volume_multiplier: 2.0       # 4.0 clips at mic_gain 36DB
+  on_start:
+    - script.execute: va_watchdog
     - mixer_speaker.apply_ducking:
-        id: s3_media_src
-        decibel_reduction: 20
+        id: media_src
+        decibel_reduction: 15
         duration: 0.3s
-    - voice_assistant.start:
-        wake_word: !lambda return wake_word;
+
+  # Un-duck while HA thinks: a silent line lets a powered speaker with standby
+  # sleep and eat the reply's start.
+  on_stt_vad_end:
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 0
+        duration: 0.3s
+
+  on_tts_start:
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 15
+        duration: 0.2s
+  on_end:
+    - script.stop: va_watchdog
+    # on_end fires before the reply plays: wait for it to start and finish.
+    - wait_until:
+        condition:
+          lambda: 'return id(s3_player)->state == media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+        timeout: 1500ms
+    - wait_until:
+        condition:
+          lambda: 'return id(s3_player)->state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
+        timeout: 30s
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 0
+        duration: 0.5s
+    - globals.set:
+        id: assist_active
+        value: 'false'
+    # Re-arm after the reply (mww start-up stutters the decode). Not during PTT
+    # or the mic test: they re-arm it themselves.
+    - if:
+        condition:
+          lambda: 'return !id(ptt_rec) && !id(mic_test_running);'
+        then:
+          - micro_wake_word.start:
+    # Not cancelled, so the alarm comes back.
+    - if:
+        condition:
+          lambda: 'return id(alarm_suspended);'
+        then:
+          - globals.set:
+              id: alarm_suspended
+              value: 'false'
+          - script.execute: timer_alarm
+  on_error:
+    - script.stop: va_watchdog
+    - globals.set:
+        id: assist_active
+        value: 'false'
+    - mixer_speaker.apply_ducking:
+        id: media_src
+        decibel_reduction: 0
+        duration: 0.5s
+    - if:
+        condition:
+          lambda: 'return !id(ptt_rec) && !id(mic_test_running);'
+        then:
+          - micro_wake_word.start:
+    - if:
+        condition:
+          lambda: 'return id(alarm_suspended);'
+        then:
+          - globals.set:
+              id: alarm_suspended
+              value: 'false'
+          - script.execute: timer_alarm
+
+  # Timers run in HA. Any on_timer_* trigger is what advertises timer support.
+  on_timer_finished:
+    - script.execute: timer_alarm
+
+  on_timer_cancelled:
+    - globals.set:
+        id: alarm_suspended
+        value: 'false'
+    - globals.set:
+        id: alarm_active
+        value: 'false'
+    - script.stop: timer_alarm
+
+# ── Push-to-talk hooks (packages/intercom.yaml) ─────────────────────────────
+globals:
+  # The wake word paused a ringing alarm; on_end resumes it unless cancelled.
+  - id: alarm_suspended
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+script:
+  # If HA never answers, Assist hangs with the wake word off: device deaf.
+  - id: va_watchdog
+    mode: restart
+    then:
+      - delay: 30s
+      - if:
+          condition:
+            voice_assistant.is_running:
+          then:
+            - logger.log: "Assist stalled — no response from HA; resetting"
+            - voice_assistant.stop:
+            - globals.set:
+                id: assist_active
+                value: 'false'
+            # on_end normally re-arms; step in only if it didn't.
+            - delay: 3s
+            - if:
+                condition:
+                  and:
+                    - not:
+                        micro_wake_word.is_running:
+                    - lambda: 'return !id(ptt_rec) && !id(mic_test_running);'
+                then:
+                  - mixer_speaker.apply_ducking:
+                      id: media_src
+                      decibel_reduction: 0
+                      duration: 0.5s
+                  - micro_wake_word.start:
+
+  # Hold confirmed. Else the wake word fires on the PTT speech.
+  - id: ptt_hook_talk_start
+    then:
+      - micro_wake_word.stop:
+      - voice_assistant.stop:
+  - id: ptt_hook_talk_end
+    then:
+      - micro_wake_word.start:
+
+  # Tap: talk to Assist; a tap while it listens cancels it.
+  - id: ptt_hook_tap
+    then:
+      - if:
+          condition:
+            voice_assistant.is_running:
+          then:
+            - voice_assistant.stop:
+          else:
+            # See on_wake_word_detected.
+            - if:
+                condition:
+                  lambda: 'return id(va)->get_api_connection() == nullptr;'
+                then:
+                  - logger.log: "tap ignored — Home Assistant not subscribed"
+                else:
+                  - globals.set:
+                      id: assist_active
+                      value: 'true'
+                  - micro_wake_word.stop:
+                  - media_player.speaker.play_on_device_media_file:
+                      id: s3_player
+                      media_file: chime_sound
+                      announcement: true
+                  - voice_assistant.start:
+
+  # A tap silences a ringing (or paused) alarm and does nothing else.
+  - id: ptt_hook_dismiss
+    then:
+      - globals.set:
+          id: alarm_suspended
+          value: 'false'
+      - globals.set:
+          id: alarm_active
+          value: 'false'
+      - script.stop: timer_alarm
+
+  # Rings ~12 s or until a tap.
+  - id: timer_alarm
+    mode: restart
+    then:
+      - globals.set:
+          id: alarm_active
+          value: 'true'
+      - repeat:
+          count: 8
+          then:
+            - media_player.speaker.play_on_device_media_file:
+                id: s3_player
+                media_file: chime_sound
+                announcement: true
+            - delay: 1500ms
+      - if:
+          condition:
+            lambda: 'return !id(alarm_suspended);'
+          then:
+            - globals.set:
+                id: alarm_active
+                value: 'false'

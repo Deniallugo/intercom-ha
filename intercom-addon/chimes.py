@@ -60,13 +60,13 @@ class ChimeMixer:
 
     def build_wav(self, pcm: bytes) -> bytes:
         """Return a full WAV byte string: header + chime_in + pcm + chime_out."""
-        body = self.chime_in + pcm + self.chime_out
-        return wav_header(
-            len(body),
-            sample_rate=self.sample_rate,
-            channels=self.channels,
-            sample_width=self.sample_width,
-        ) + body
+        pcm = self._whole_frames(pcm)   # else chime_out plays misaligned
+        size = len(self.chime_in) + len(pcm) + len(self.chime_out)
+        # One join, one copy of the (up to MBs of) audio.
+        return b"".join((
+            wav_header(size, sample_rate=self.sample_rate,
+                       channels=self.channels, sample_width=self.sample_width),
+            self.chime_in, pcm, self.chime_out))
 
     def build_plain_wav(self, pcm: bytes) -> bytes:
         """Return the payload as a WAV with no chimes around it — what you want
@@ -78,8 +78,14 @@ class ChimeMixer:
             sample_width=self.sample_width,
         ) + pcm
 
+    def _whole_frames(self, pcm: bytes) -> bytes:
+        frame = self.sample_width * self.channels
+        extra = len(pcm) % frame
+        return pcm[: len(pcm) - extra] if extra else pcm
+
     def pcm_duration_seconds(self, pcm: bytes) -> float:
         return len(pcm) / (self.sample_rate * self.sample_width * self.channels)
 
     def total_duration_seconds(self, pcm: bytes) -> float:
-        return self.pcm_duration_seconds(self.chime_in + pcm + self.chime_out)
+        size = len(self.chime_in) + len(pcm) + len(self.chime_out)
+        return size / (self.sample_rate * self.sample_width * self.channels)

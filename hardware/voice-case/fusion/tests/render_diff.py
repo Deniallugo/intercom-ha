@@ -1,25 +1,11 @@
-"""Render the Fusion port offline and diff it against the OpenSCAD original.
+"""Render the Fusion port offline and diff it against the OpenSCAD STLs.
 
     python3 render_diff.py [--png] [part ...]
 
-Fusion has no headless mode, so a change to `vc/*.py` can normally only be checked by
-opening Fusion and clicking Run — which means every mistake costs a round trip, and a
-mistake that merely MIRRORS something (the button cap came out inside out once) costs
-several, because it builds cleanly and looks almost right.
-
-So this runs the port's own geometry code against `scad_emit`, an adsk stand-in that turns
-each feature into the equivalent OpenSCAD (extrude -> linear_extrude, revolve ->
-rotate_extrude, loft -> hull, combine -> union/difference/intersection), renders that, and
-compares volume and bounding box against `../../stl/<part>.stl`.
-
-It also renders each part under DELIBERATELY WRONG sketch-plane conventions. A construction
-plane's u/v axes are Fusion's business, not ours — `Part._frame` probes them rather than
-assuming — and this is the check that the probe is actually doing its job: the geometry must
-come out identical whichever way the planes are laid out. That is the test the inside-out
-button cap would have failed.
-
-Volumes differ from the OpenSCAD by a fraction of a percent because this port uses true
-arcs where the SCAD used `$fn = 64`, so the tolerance below is 1%, not zero.
+Runs the port's build code against `scad_emit` (an adsk stand-in that emits OpenSCAD),
+renders it, and compares volume (1 % tolerance: true arcs vs `$fn = 64`) and bounding box
+against `../../stl/<part>.stl`. Each part is also rendered under deliberately wrong
+sketch-plane conventions and must come out identical — that guards `Part._frame`.
 """
 
 import os
@@ -47,8 +33,7 @@ MODULES = {'shell': shell, 'base': base_plate, 'button': button_cap,
            'holder': button_holder, 'clamp': mic_clamp}
 PARTS = ('shell', 'base', 'button', 'holder', 'clamp', 'fit', 'fit-front', 'coupon',
          'all')
-# `coupon` and `all` are multi-component, and the OpenSCAD lays them out in one object, so
-# they are rendered for looking at rather than diffed.
+# `coupon` and `all` are multi-component: rendered for viewing, not diffed.
 DIFFED = ('shell', 'base', 'button', 'holder', 'clamp', 'fit', 'fit-front')
 
 X, Y, Z = scad_emit.X, scad_emit.Y, scad_emit.Z
@@ -149,12 +134,8 @@ def bbox(tris):
 
 
 def check_reference_parameters():
-    """The ref_* parameters must survive a SECOND run of the script.
-
-    Fusion's `userParameters.add` fails on a duplicate rather than replacing it, so a
-    re-run into the same design has to update in place — and re-running after editing
-    params.py is the entire workflow.
-    """
+    """The ref_* parameters must survive a second run: Fusion's `add` fails on duplicates,
+    so re-runs must update in place."""
     design = Design()
     added, updated, failed = parameters.write(design)
     again_added, again_updated, again_failed = parameters.write(design)

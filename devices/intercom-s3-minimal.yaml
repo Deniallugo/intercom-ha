@@ -1,22 +1,30 @@
 substitutions:
-  name: esphome-web-0f4600  
+  name: esphome-web-0f4600
   friendly_name: Intercom S3
+  intercom_url: "http://homeassistant.local:9999/intercom"
+  # Push-to-talk (packages/intercom.yaml). Built-in button GPIO41, active LOW.
+  ptt_pin: GPIO41
+  mic_id: s3_mic
+  player_id: s3_player
+  tail_ms: "2000"
+  feedback_src: s3_feedback_src
+  announce_src: s3_announcement_src
 
 packages:
   secrets: !include secrets-s3.yaml
   base: !include ../packages/base.yaml
+  intercom: !include ../packages/intercom.yaml
+  feedback: !include ../packages/feedback-sound.yaml
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   min_version: 2026.1.0
-  includes:
-    - ../include/recorder.h
-    - ../include/uploader.h
   on_boot:
     - priority: 600.0
       then:
-        - lambda: recorder_init();
+        # PSRAM: room for the hold threshold plus a slow connect.
+        - lambda: recorder_init_psram(10 * 32000);
     - priority: 200.0
       then:
         - lambda: |-
@@ -30,20 +38,17 @@ esp32:
   cpu_frequency: 240MHz
   framework:
     type: esp-idf
-    # Cache layout — required to avoid boot loops on the EchoS3R / VoiceS3R
-    # per M5Stack's reference YAML.
+    # Boot-loops without this cache layout (M5Stack reference config).
     sdkconfig_options:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
 
-# 8 MB octal PSRAM on the S3-PICO module.
 psram:
   mode: octal
   speed: 80MHz
 
-# Override base.yaml's empty logger — VoiceS3R has no UART pins broken out,
-# so logs go through USB CDC.
+# No UART pins broken out.
 logger:
   hardware_uart: USB_CDC
   level: DEBUG
@@ -65,11 +70,9 @@ audio_dac:
     id: es8311_dac
     bits_per_sample: 16bit
     sample_rate: 48000
-    mic_gain: 18DB              # was default 42DB — far too sensitive
+    mic_gain: 18DB              # default 42DB is far too sensitive
 
-# ── NS4150 internal Class-D amp enable ───────────────────────────────────────
-# GPIO18 controls the NS4150 amp on the VoiceS3R. Without this, the codec's
-# analog output reaches the amp but the amp is off → no sound from the speaker.
+# ── NS4150 amp enable — off means no sound from the internal speaker ─────────
 
 switch:
   - platform: gpio
@@ -106,10 +109,18 @@ speaker:
     dac_type: external
     bits_per_sample: 16bit
     sample_rate: 48000
-    channel: left                  # VoiceS3R has only one internal speaker
+    channel: left
     audio_dac: es8311_dac
 
-# ── Media player (HA-controllable playback) ──────────────────────────────────
+  # Talker feedback tones play over a message instead of replacing it.
+  - platform: mixer
+    id: s3_mixer
+    output_speaker: s3_speaker
+    source_speakers:
+      - id: s3_announcement_src
+      - id: s3_feedback_src
+
+# ── Media player ─────────────────────────────────────────────────────────────
 
 media_player:
   - platform: speaker
@@ -118,39 +129,37 @@ media_player:
     volume_min: 0.5
     volume_max: 0.9
     announcement_pipeline:
-      speaker: s3_speaker
+      speaker: s3_announcement_src
       format: FLAC
       sample_rate: 48000
       num_channels: 1
+    # Incoming-message detection (tap to silence, Do not disturb, volume).
+    on_announcement:
+      - script.execute: intercom_announce_start
+    on_idle:
+      - script.execute: intercom_announce_end
+    on_play:
+      - script.execute: intercom_announce_end
 
-# ── Push-to-talk button (built-in on GPIO41, active LOW) ─────────────────────
+# ── Push-to-talk hooks (packages/intercom.yaml) ──────────────────────────────
+# No Assist and no alarms: a tap only silences an incoming message.
 
-binary_sensor:
-  - platform: gpio
-    pin:
-      number: GPIO41
-      inverted: true
-      mode:
-        input: true
-        pullup: true
-    name: "Button"
-    on_press:
-      - if:
-          condition:
-            lambda: 'return uploader_is_uploading();'
-          then:
-            - logger.log: "button ignored — upload in progress"
-          else:
-            - lambda: |-
-                recorder_start();
-                id(s3_mic).start();
-                uploader_start("http://homeassistant.local:9999/intercom", App.get_name().c_str());
-    on_release:
-      - delay: 2s
-      - lambda: |-
-          id(s3_mic).stop();
-          recorder_stop();
-      - wait_until:
-          condition:
-            lambda: 'return !uploader_is_uploading();'
-          timeout: 10s
+script:
+  - id: ptt_hook_talk_start
+    then:
+      - logger.log:
+          format: "talk start"
+          level: VERBOSE
+  - id: ptt_hook_talk_end
+    then:
+      - logger.log:
+          format: "talk end"
+          level: VERBOSE
+  - id: ptt_hook_tap
+    then:
+      - logger.log: "tap — no action on this device"
+  - id: ptt_hook_dismiss
+    then:
+      - logger.log:
+          format: "dismiss"
+          level: VERBOSE

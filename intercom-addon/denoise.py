@@ -1,292 +1,294 @@
-"""Clean up the raw mic PCM before it is broadcast.
+"""Clean up raw mic PCM before it is broadcast.
 
-Why here and not on the device: this is the one place in the chain with CPU to
-spare, float headroom, and no reflash cycle. The measured lesson from the gain
-experiments (docs/DEVICES.md -> the INMP441 section) is that a bigger multiplier
-on the device raises the noise floor with the signal — SNR was 13-15 dB at
-unity, at +18 dB and at +36 dB alike — and past a point it clips, destroying
-information nothing downstream can recover. So the device now takes only a small
-fixed boost that cannot clip, and the *level* is made up here, after the hiss
-between words has been pushed down.
+Stages, in order: high-pass, multiband noise subtraction, downward expander,
+level to TARGET_SPEECH_RMS behind a peak limiter. level() is the high-pass and
+level stages alone (the `denoise: false` path). Stream runs either one as the
+upload arrives, leaving only the whole-message steps for the end.
 
-Three stages, in this order:
-
-  1. high-pass   — kills the INMP441's DC bias and sub-audio wander. Cheap, and
-                   it must run first: DC offset otherwise inflates every RMS
-                   measurement the later stages depend on.
-  2. expander    — attenuates frames that sit near the noise floor, so silence
-                   between words goes quiet instead of hissing. A *downward
-                   expander*, not a hard gate: gain moves continuously with
-                   level, which is what stops speech onsets from being chopped.
-  3. normalise   — one scale factor to bring speech to a fixed level, with
-                   a lookahead peak limiter holding TARGET_PEAK. Computed in
-                   float over the whole buffer, so unlike device-side gain it
-                   can never clip. Also available alone as level(), which is
-                   what a broadcast gets when the cleanup is turned off.
-
-Length, sample rate and format are preserved exactly, so callers can keep using
-the same duration arithmetic.
-
-What this does NOT touch: the copy kept by recordings.py. That is deliberately
-the raw mic audio — the thing that tells you whether the microphone works — and
-processing it would hide the very faults it exists to expose.
+Input is 16-bit mono PCM. Output is whole samples only: an odd trailing byte is
+dropped, since chimes are appended after it. The raw copy in recordings.py is never processed.
 """
 import array
+import itertools
 import logging
 import math
-import struct
+import operator
 
 log = logging.getLogger(__name__)
 
 # ── High-pass ────────────────────────────────────────────────────────────────
-# 80 Hz. Below the lowest speech fundamental (~85 Hz for a low male voice), so
-# it removes bias and rumble without thinning the voice.
+# Below the lowest male fundamental (~85 Hz): removes DC and rumble, not voice.
 HIGHPASS_HZ = 80.0
 
 # ── Spectral subtraction (multiband) ────────────────────────────────────────
-# The expander below only acts in the gaps between words. Measurement on a real
-# capture showed that is 33% of the timeline — the other 67% carries speech, and
-# an expander cannot touch the noise underneath it. With this mic's 10-13 dB
-# in-band SNR, that made the whole thing inaudible: 1-8 kHz hiss moved -0.2 dB.
-#
-# This stage does what an expander cannot: it attenuates every frame by the
-# noise it estimates for that band, so hiss under speech comes down too.
-#
-# Measured, 1-8 kHz median (audible hiss) vs 300-3000 Hz p90 (voice):
-#
-#   bands  over   hiss     voice    net
-#       8   1.0   -3.7 dB  -1.8 dB  +1.9 dB
-#       8   1.5   -5.4 dB  -2.7 dB  +2.7 dB
-#       8   2.0   -7.4 dB  -3.6 dB  +3.8 dB
-#      24   2.0   -6.8 dB  -3.3 dB  +3.5 dB
-#
-# More bands buy nothing and cost time linearly (0.18s at 8, 0.52s at 24), so
-# 8 it is. The voice loss is given back by _set_level, leaving hiss ~4 dB
-# down. That is a real, audible improvement and also close to the ceiling: the
-# microphone only delivers 10-13 dB of SNR, so there is not much more to win
-# without artefacts.
+# The only stage that lowers hiss *under* speech (67% of frames carry speech, so
+# an expander alone moved audible hiss by 0.2 dB). 24 bands measured no better
+# than 8 and cost 3x the CPU.
 BAND_COUNT = 8
 BAND_LO_HZ = 80.0
 BAND_HI_HZ = 8000.0
 
-# How many times the estimated noise to subtract. Above ~2.0 the voice starts
-# audibly thinning for very little extra hiss reduction.
+# Above ~2.0 the voice thins for little extra hiss reduction.
 OVERSUBTRACT = 2.0
 
-# Never attenuate a band below this (-12 dB). A hard zero is what produces
-# "musical noise" — isolated bands winking in and out. This and MAX_ATTENUATION
-# multiply, so together they set how dead the silence between words sounds; the
-# sweep is documented on MAX_ATTENUATION.
+# -12 dB floor per band; a hard zero produces "musical noise".
 BAND_GAIN_FLOOR = 0.25
 
-# Shorter frame than the expander: subtraction tracks the spectrum, not syllables.
 BAND_FRAME_MS = 16.0
 
-# Per-band gain smoothing across frames. Also fights musical noise.
+# Per-band gain smoothing across frames; also fights musical noise.
 BAND_SMOOTH = 0.6
 
-# Percentile of per-band frame energy taken as that band's noise estimate.
+# Per-band noise estimate: this percentile of frame energy.
 BAND_NOISE_PERCENTILE = 0.15
 
 
 # ── Expander ─────────────────────────────────────────────────────────────────
-# Frame length for level measurement. 20 ms is long enough for a stable RMS at
-# 16 kHz (320 samples) and short enough to track syllables.
+# Long enough for a stable RMS, short enough to track syllables.
 FRAME_MS = 20.0
 
-# The noise floor is taken as a low percentile of frame energy rather than the
-# minimum, so one freak-quiet frame cannot define it. 10% of frames sit below.
+# Percentile, not minimum, so one freak-quiet frame cannot set the floor.
 FLOOR_PERCENTILE = 0.10
 
-# The expander threshold has to sit BETWEEN the noise floor and the speech, and
-# a fixed multiple of the floor does not: at 6x floor, measurement showed only
-# 6-12% of frames above the threshold on real captures, i.e. speech was being
-# attenuated along with the noise — and then normalisation scaled it all back up,
-# so the result was uniform gain with the hiss fully intact.
-#
-#   file      floor(p10)  speech(p90)   6x floor   verdict
-#   mic-03            82          538        494   just below speech
-#   mic-06           107          593        643   ABOVE speech
-#   mic-07           396         2185       2375   ABOVE speech
-#
-# So the threshold is derived from both: the geometric mean of the floor and the
-# speech level, which is their midpoint in dB and therefore adapts to whatever
-# SNR the capture actually has. The clamps keep it sane when a capture is all
-# speech (no floor to measure) or all silence (no speech).
+# Threshold = geometric mean of floor and speech (their midpoint in dB). A fixed
+# multiple of the floor landed above the speech on real captures. Clamped for
+# all-speech or all-silence captures.
 SPEECH_PERCENTILE = 0.90
 THRESH_MIN_ABOVE_FLOOR = 1.5
 THRESH_MAX_ABOVE_FLOOR = 8.0
 
-# Expansion ratio below the threshold: 3.0 means 1 dB down in becomes 3 dB down
-# out. 2.0 was too gentle to survive the make-up gain — the noise came back up
-# with the speech, which is audibly just "louder", the complaint this exists to
-# fix. 3.0 pushes the floor far enough below that normalising cannot undo it.
+# 1 dB under the threshold in -> 3 dB out. At 2.0 the make-up gain brought the
+# noise back up.
 RATIO = 3.0
 
-# Gating all the way to digital silence sounds like the line dropped. This
-# multiplies with BAND_GAIN_FLOOR, and at -26 dB the pair drove the gaps to
-# -38 dB — measurably clean, audibly broken. Swept for a gap that is clearly
-# quieter but still a live room (hiss = 1-8 kHz median, gap = quietest 250 ms):
-#
-#   band floor / this   hiss             voice          gap
-#         0.15 / 0.05   -8 to -19 dB     +-0.6 dB       -18 to -38 dB  dead
-#         0.20 / 0.25   -8 to -18 dB     +-0.4 dB       -16 to -22 dB
-#         0.25 / 0.50   -7 to -12 dB     +-0.5 dB       -11 to -14 dB  <- chosen
-#     subtraction only  -4 to -7 dB      +-0.4 dB        -6 to -13 dB
-#
-# Dropping the expander entirely (last row) is the most natural but gives up
-# half the hiss reduction; -26 dB is measurably best and sounds wrong. This is
-# the compromise, and it is a taste call — move it if the gaps sound too abrupt
-# (up) or still too noisy (down).
+# Deepest expander cut (-6 dB). Together with BAND_GAIN_FLOOR this sets how
+# quiet the gaps get: 11-14 dB here; deeper sounded like the line dropped.
+# A taste call — raise if gaps sound abrupt, lower if still hissy.
 MAX_ATTENUATION = 0.50
 
-# One-pole smoothing on the gain. Attack must be fast or the first consonant of
-# a word is swallowed; release slow or the tail pumps.
-#
-# Release was 80 ms, and measurement showed the gain never arrived: 0% of frames
-# reached the attenuation the expander asked for, because an 80 ms time constant
-# cannot settle inside the gap between two words. 40 ms settles within a typical
-# pause and still sounds like a room going quiet rather than a gate slamming.
+# Fast attack keeps first consonants; release must settle within a pause
+# between words (80 ms never did).
 ATTACK_MS = 5.0
 RELEASE_MS = 40.0
 
 # ── Normalise ────────────────────────────────────────────────────────────────
-# Speech is brought to this RMS (-16 dBFS), measured as the p90 frame level —
-# by process() after the cleanup, and by level() when the cleanup is off.
-#
-# It has to be an absolute target, because the broadcast shares a media player
-# with music and follows a chime: measured, raw uploads carry speech at -21 to
-# -33 dBFS, while music masters sit near -12 dBFS and the chime (chimes.py, half
-# scale) near -9. On voice-s3's 2 x 50 W amplifier that gap is merely uneven; on
-# the Atom Echo's small speaker it made speech audible only if the talker had
-# been right on the mic.
-#
-# Raising level raises the noise with it unless something pays for it first,
-# and the cleanup is what pays: measured on real captures at this target, speech
-# ends up 11-15 dB louder than it arrived while the floor between words stays
-# 1-4 dB BELOW the raw original (voice-s3 in its case: -60.2 dBFS against -57.8
-# raw, and against -42.9 with level() alone at the same loudness). On synthetic
-# white noise the floor can end up ~2 dB above the original — real mic noise is
-# rumble-heavy, which the band subtraction handles far better than flat hiss —
-# so the tests bound that at +3 dB rather than demanding it stay below.
-#
-# Speech has a 16-17 dB crest factor, so a plain scale factor bounded by the
-# -3 dBFS ceiling cannot get it above about -20 dBFS; the peak limiter in
-# _set_level is what buys the rest, pulling down the odd plosive instead of the
-# whole broadcast.
+# -16 dBFS speech (p90 frame RMS). Absolute, because broadcasts share a player
+# with music (~-12 dBFS) and follow a chime (~-9); raw uploads arrive at -21 to
+# -33 dBFS. Safe only because it runs after the noise is down: speech +11-15 dB,
+# gaps still 1-4 dB below raw. The limiter in _set_level buys the last few dB
+# that speech's crest factor would otherwise block.
 TARGET_SPEECH_RMS = 5200.0
 
-# Trim on top of the target, in dB, if broadcasts want to be generally louder
-# or quieter. Bounded by the peak ceiling and MAX_MAKEUP regardless.
+# Trim on top of the target, in dB. A knob; 0 = off.
 MAKEUP_DB = 0.0
 
-# -3 dBFS ceiling. Leaves headroom for the chimes concatenated around this
-# payload, and no scale factor is allowed to push the peak past it.
+# -3 dBFS peak ceiling.
 TARGET_PEAK = 0.70 * 32767
 
-# Refuse to normalise a buffer whose peak is below this (~-44 dBFS): there is no
-# speech in it, and scaling would just present amplified hiss at full volume.
+# ~-44 dBFS: below this there is no speech, only hiss not worth amplifying.
 MIN_PEAK_TO_NORMALISE = 200
 
-# Cap on make-up gain (+18 dB). Without it, a near-silent capture gets whatever
-# enormous factor the arithmetic asks for.
+# Make-up gain cap (+18 dB).
 MAX_MAKEUP = 8.0
 
 
-def process(pcm: bytes, *, sample_rate: int, enabled: bool = True) -> bytes:
-    """Return `pcm` high-passed, expanded and normalised.
-
-    Falls back to returning the input unchanged — never raising — for anything
-    it cannot handle (odd length, empty, disabled, silent). A broadcast must
-    still go out if the cleanup cannot run.
-    """
-    if not enabled or len(pcm) < 4:
-        return pcm
-
-    n = len(pcm) // 2
-    try:
-        samples = array.array("h")
-        samples.frombytes(pcm[: n * 2])
-    except (ValueError, struct.error) as e:
-        log.warning("denoise: cannot unpack PCM (%s) — passing through", e)
-        return pcm
-
-    work = _highpass(samples, sample_rate)
-
-    # `floor`/`speech` set the expander threshold. Level is no longer derived
-    # from them — _set_level aims at an absolute target instead, because the
-    # broadcast has to hold its own against music on the same media player.
-    floor, speech, thresh = _measure(work, sample_rate)
-
-    # Multiband subtraction first: it is the only stage that reduces noise while
-    # speech is present, and the expander that follows then cleans the gaps.
-    bands = _split_bands(work, sample_rate)
-    for band in bands:
-        _subtract_noise(band, sample_rate)
-    for i in range(len(work)):
-        total = 0.0
-        for band in bands:
-            total += band[i]
-        work[i] = total
-
-    if thresh > 0:
-        _expand(work, sample_rate, thresh)
-    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS)
-
-    log.info("denoise: floor %.0f  speech %.0f  thresh %.0f  level x%.2f",
-             floor, speech, thresh, scale)
-    # work holds float64; to_pcm rounds and clamps it back to int16.
-    return to_pcm(work)
+def process(pcm: bytes, *, sample_rate: int) -> bytes:
+    """Full cleanup. Never raises: returns `pcm` unchanged if it cannot run."""
+    stream = Stream(sample_rate=sample_rate)
+    stream.feed(pcm)
+    return stream.finish()
 
 
 def level(pcm: bytes, *, sample_rate: int) -> bytes:
-    """High-pass and normalise only — the cleanup's level stage on its own.
+    """High-pass and level only (`denoise: false`). Hiss rises with the speech."""
+    stream = Stream(sample_rate=sample_rate, full=False)
+    stream.feed(pcm)
+    return stream.finish()
 
-    What a broadcast gets with `denoise: false`: no band subtraction, no
-    expander, nothing that changes the character of the sound, but the speech
-    still lands at TARGET_SPEECH_RMS like a cleaned broadcast would — the hiss
-    rises with it, since nothing has lowered it first. Same pass-through
-    guarantees as process().
+
+class Stream:
+    """process() (or level(), full=False) fed piecewise, as an upload arrives.
+
+    Everything causal runs in feed(): high-pass, the band split, per-frame RMS
+    of the signal and of every band. finish() is left with what needs the
+    whole message: the noise percentiles, band gains, expander and level.
+    Output is identical, bit for bit, however the input is cut into pieces.
     """
-    if len(pcm) < 4:
-        return pcm
-    n = len(pcm) // 2
-    try:
+
+    def __init__(self, *, sample_rate: int, full: bool = True):
+        self.rate = sample_rate
+        self.full = full
+        self._size = 0          # bytes fed, odd ones included
+        self._head = b""        # first bytes: short inputs pass through
+        self._odd = b""         # a sample split between two feeds
+        rc = 1.0 / (2.0 * math.pi * HIGHPASS_HZ)
+        self._hp_a = rc / (rc + 1.0 / sample_rate)
+        self._hp_state = None   # (prev_x, prev_y) once the first sample is in
+        if not full:
+            self._work = array.array("d")
+            return
+        # Expander measurement: whole FRAME_MS frames of the high-passed signal.
+        self._frame = max(1, int(sample_rate * FRAME_MS / 1000.0))
+        self._acc, self._fill, self._rms = 0.0, 0, []
+        # Band split: one-pole low-passes of the residual (see _split_bands).
+        dt = 1.0 / sample_rate
+        corners = [BAND_LO_HZ * (BAND_HI_HZ / BAND_LO_HZ) ** (i / (BAND_COUNT - 1))
+                   for i in range(BAND_COUNT - 1)]
+        self._alphas = [dt / (1.0 / (2.0 * math.pi * fc) + dt) for fc in corners]
+        self._ys = [0.0] * len(self._alphas)
+        self._bands = [array.array("d") for _ in range(BAND_COUNT)]
+        # Per-band BAND_FRAME_MS RMS; a trailing partial frame counts.
+        self._bframe = max(1, int(sample_rate * BAND_FRAME_MS / 1000.0))
+        self._bacc = [0.0] * BAND_COUNT
+        self._bfill = 0
+        self._brms = [[] for _ in range(BAND_COUNT)]
+
+    def feed(self, pcm: bytes) -> None:
+        if not pcm:
+            return
+        if len(self._head) < 4:
+            self._head += pcm[: 4 - len(self._head)]
+        self._size += len(pcm)
+        data = self._odd + pcm if self._odd else pcm
+        whole = len(data) - len(data) % 2
+        self._odd = data[whole:]
+        if not whole:
+            return
         samples = array.array("h")
-        samples.frombytes(pcm[: n * 2])
-    except (ValueError, struct.error) as e:
-        log.warning("level: cannot unpack PCM (%s) — passing through", e)
-        return pcm
-    work = _highpass(samples, sample_rate)
-    scale = _set_level(work, sample_rate, TARGET_SPEECH_RMS)
-    log.info("level: x%.2f", scale)
-    return to_pcm(work)
+        samples.frombytes(data[:whole])
+        work = self._highpass(samples)
+        if not self.full:
+            self._work.extend(work)
+            return
+        self._acc, self._fill = _frames(
+            work, self._frame, self._acc, self._fill, self._rms, keep_partial=False)
+        self._split(work)
+
+    def finish(self) -> bytes:
+        """The cleaned PCM. Inputs under 4 bytes come back unchanged."""
+        if self._size < 4:
+            return self._head
+        if not self.full:
+            work = self._work
+            scale = _set_level(work, self.rate, TARGET_SPEECH_RMS, tag="level")
+            log.info("level: x%.2f", scale)
+            return to_pcm(work)
+
+        self._rms.sort()
+        floor, speech, thresh = _levels(self._rms)
+        work = self._mix()
+        if thresh > 0:
+            _expand(work, self.rate, thresh)
+        scale = _set_level(work, self.rate, TARGET_SPEECH_RMS, tag="denoise")
+
+        log.info("denoise: floor %.0f  speech %.0f  thresh %.0f  level x%.2f",
+                 floor, speech, thresh, scale)
+        return to_pcm(work)
+
+    def _highpass(self, samples) -> list:
+        if self._hp_state is None:
+            self._hp_state = (float(samples[0]), 0.0)
+        out, prev_x, prev_y = _highpass_run(samples, self._hp_a, *self._hp_state)
+        self._hp_state = (prev_x, prev_y)
+        return out
+
+    def _split(self, work: list) -> None:
+        """Split into BAND_COUNT bands that sum back to the input exactly.
+
+        Each band is a low-pass of the residual, so there is no crossover ripple.
+        """
+        residual = work
+        bands = []
+        for k, alpha in enumerate(self._alphas):
+            y = self._ys[k]
+            band = []
+            append = band.append
+            for v in residual:
+                y += alpha * (v - y)
+                append(y)
+            self._ys[k] = y
+            residual = list(map(operator.sub, residual, band))
+            bands.append(band)
+        bands.append(residual)
+
+        fill = self._bfill
+        for k, band in enumerate(bands):
+            self._bands[k].extend(band)
+            self._bacc[k], new_fill = _frames(
+                band, self._bframe, self._bacc[k], fill, self._brms[k],
+                keep_partial=True)
+        self._bfill = new_fill
+
+    def _mix(self) -> list:
+        """Sum of the bands, each scaled by its noise-subtraction gain."""
+        frame = self._bframe
+        n = len(self._bands[0])
+        work = [0.0] * n
+        for k, band in enumerate(self._bands):
+            rms = self._brms[k]
+            if self._bfill:
+                rms.append(math.sqrt(self._bacc[k] / self._bfill))
+            gains = _band_gains(rms)
+            per_sample = itertools.chain.from_iterable(
+                itertools.repeat(g, frame) for g in gains)
+            work = list(map(operator.add, work,
+                            map(operator.mul, band, per_sample)))
+        return work
 
 
-def _highpass(samples: "array.array", sample_rate: int) -> "array.array":
-    """One-pole high-pass at HIGHPASS_HZ, returned as float-capable ints.
+def _frames(values, frame: int, acc: float, fill: int, out: list,
+            *, keep_partial: bool) -> tuple:
+    """Fold `values` into consecutive `frame`-sample RMS levels, appended to
+    `out`; (acc, fill) carry an unfinished frame between calls."""
+    i, n = 0, len(values)
+    while i < n:
+        take = min(frame - fill, n - i)
+        for v in values[i:i + take]:
+            acc += v * v
+        i += take
+        fill += take
+        if fill == frame:
+            out.append(math.sqrt(acc / frame))
+            acc, fill = 0.0, 0
+    return acc, fill
 
-    y[n] = a * (y[n-1] + x[n] - x[n-1]) — the standard DC blocker. Kept in a
-    Python list of floats while the later stages work on it, so repeated scaling
-    does not requantise at every step.
-    """
-    rc = 1.0 / (2.0 * math.pi * HIGHPASS_HZ)
-    dt = 1.0 / sample_rate
-    a = rc / (rc + dt)
 
-    out = array.array("d", bytes(8 * len(samples)))
-    prev_x = float(samples[0])
-    prev_y = 0.0
+def _band_gains(rms: list) -> list:
+    """Smoothed per-frame gain that subtracts a band's own noise estimate."""
+    if not rms:
+        return []
+    noise = sorted(rms)[min(len(rms) - 1, int(len(rms) * BAND_NOISE_PERCENTILE))]
+    gain = 1.0
+    gains = []
+    for level in rms:
+        raw = ((level - OVERSUBTRACT * noise) / level) if level > 1e-9 else BAND_GAIN_FLOOR
+        target = max(BAND_GAIN_FLOOR, raw)
+        gain = BAND_SMOOTH * gain + (1.0 - BAND_SMOOTH) * target
+        gains.append(gain)
+    return gains
+
+
+def _highpass_run(samples, a: float, prev_x: float, prev_y: float) -> tuple:
+    """One-pole high-pass over `samples`: (out list, prev_x, prev_y)."""
+    out = [0.0] * len(samples)
     for i, raw in enumerate(samples):
         x = float(raw)
         y = a * (prev_y + x - prev_x)
         out[i] = y
         prev_x, prev_y = x, y
-    return out
+    return out, prev_x, prev_y
+
+
+def _highpass(samples: "array.array", sample_rate: int) -> "array.array":
+    """One-pole high-pass, as array('d') so later stages do not requantise."""
+    rc = 1.0 / (2.0 * math.pi * HIGHPASS_HZ)
+    a = rc / (rc + 1.0 / sample_rate)
+    out, _, _ = _highpass_run(samples, a, float(samples[0]), 0.0)
+    return array.array("d", out)
 
 
 def _frame_rms(work, sample_rate: int) -> list:
-    """Sorted per-frame RMS levels, the basis for every level decision here."""
+    """Sorted per-frame RMS levels."""
     frame = max(1, int(sample_rate * FRAME_MS / 1000.0))
     out = []
     for start in range(0, len(work) - frame + 1, frame):
@@ -298,16 +300,8 @@ def _frame_rms(work, sample_rate: int) -> list:
     return out
 
 
-def _measure(work: "array.array", sample_rate: int) -> tuple:
-    """(noise floor, speech level, expander threshold) as RMS amplitudes.
-
-    Percentiles rather than min/max so one freak-quiet or freak-loud frame
-    cannot define either end. The threshold is their geometric mean — the
-    midpoint in dB — so it tracks the capture's actual SNR instead of assuming
-    one. Clamped in case a capture is all speech or all silence and the two
-    measurements collapse together.
-    """
-    rms = _frame_rms(work, sample_rate)
+def _levels(rms: list) -> tuple:
+    """(noise floor, speech level, expander threshold) from sorted frame RMS."""
     if not rms:
         return 0.0, 0.0, 0.0
     floor = rms[min(len(rms) - 1, int(len(rms) * FLOOR_PERCENTILE))]
@@ -318,64 +312,6 @@ def _measure(work: "array.array", sample_rate: int) -> tuple:
     thresh = max(floor * THRESH_MIN_ABOVE_FLOOR,
                  min(floor * THRESH_MAX_ABOVE_FLOOR, thresh))
     return floor, speech, thresh
-
-
-def _split_bands(work, rate: int) -> list:
-    """Split into BAND_COUNT bands that sum back to the input EXACTLY.
-
-    Each band is a one-pole low-pass of what is left, subtracted from the
-    residual — so with all gains at 1 the sum reconstructs the input to within
-    float error (measured 2e-13). A conventional filter bank would leave
-    crossover ripple, which colours the voice even when nothing is being
-    attenuated.
-    """
-    corners = [BAND_LO_HZ * (BAND_HI_HZ / BAND_LO_HZ) ** (i / (BAND_COUNT - 1))
-               for i in range(BAND_COUNT - 1)]
-    residual = list(work)
-    bands = []
-    dt = 1.0 / rate
-    for fc in corners:
-        alpha = dt / (1.0 / (2.0 * math.pi * fc) + dt)
-        y = 0.0
-        band = [0.0] * len(residual)
-        for i, v in enumerate(residual):
-            y += alpha * (v - y)
-            band[i] = y
-        for i in range(len(residual)):
-            residual[i] -= band[i]
-        bands.append(band)
-    bands.append(residual)
-    return bands
-
-
-def _subtract_noise(band, rate: int) -> None:
-    """Attenuate `band` in place by its own estimated noise, frame by frame.
-
-    gain = (level - OVERSUBTRACT * noise) / level, floored and smoothed. Unlike
-    the expander, this bites while speech is present: a band whose level is near
-    its noise estimate is attenuated even when other bands carry the voice.
-    """
-    frame = max(1, int(rate * BAND_FRAME_MS / 1000.0))
-    rms = []
-    for start in range(0, len(band), frame):
-        end = min(start + frame, len(band))
-        acc = 0.0
-        for i in range(start, end):
-            acc += band[i] * band[i]
-        rms.append(math.sqrt(acc / (end - start)))
-    if not rms:
-        return
-    noise = sorted(rms)[min(len(rms) - 1, int(len(rms) * BAND_NOISE_PERCENTILE))]
-
-    gain = 1.0
-    for k, start in enumerate(range(0, len(band), frame)):
-        end = min(start + frame, len(band))
-        level = rms[k]
-        raw = ((level - OVERSUBTRACT * noise) / level) if level > 1e-9 else BAND_GAIN_FLOOR
-        target = max(BAND_GAIN_FLOOR, raw)
-        gain = BAND_SMOOTH * gain + (1.0 - BAND_SMOOTH) * target
-        for i in range(start, end):
-            band[i] *= gain
 
 
 def _expand(work: "array.array", sample_rate: int, thresh: float) -> None:
@@ -401,26 +337,18 @@ def _expand(work: "array.array", sample_rate: int, thresh: float) -> None:
             # Downward expansion: (level/thresh) ** (ratio - 1).
             target = max(MAX_ATTENUATION, (level / thresh) ** (RATIO - 1.0))
 
-        # Rising gain (a word starting) uses the fast attack; falling gain
-        # (settling back into silence) uses the slow release. Swapping these
-        # swallows onsets and chops tails.
         coeff = attack if target > gain else release
         for i in range(start, end):
             gain += (target - gain) * coeff
             work[i] *= gain
 
 
-def _set_level(work: "array.array", sample_rate: int, target: float) -> float:
-    """Bring speech to `target` RMS. Returns the factor applied.
+def _set_level(work: "array.array", sample_rate: int, target: float,
+               *, tag: str = "denoise") -> float:
+    """Bring speech to `target` RMS; returns the factor applied.
 
-    Runs LAST, after the noise has been suppressed — see TARGET_SPEECH_RMS for
-    why that order is the whole justification for touching level at all.
-
-    Bounds that have each mattered: the peak may not exceed TARGET_PEAK (the
-    chimes still have to fit, and nothing may clip) — held by _limit rather than
-    by shrinking the factor, so one plosive cannot keep the whole broadcast
-    quiet; the factor is capped at MAX_MAKEUP; and a buffer with no speech in it
-    is left alone so a dead mic is never presented as full-scale hiss.
+    Must run last, after noise reduction. Peaks are limited (not the factor
+    shrunk), so one plosive cannot keep the whole broadcast quiet.
     """
     peak = 0.0
     for v in work:
@@ -428,8 +356,8 @@ def _set_level(work: "array.array", sample_rate: int, target: float) -> float:
         if av > peak:
             peak = av
     if peak < MIN_PEAK_TO_NORMALISE:
-        log.info("denoise: peak %.0f below %d — leaving level alone (no speech)",
-                 peak, MIN_PEAK_TO_NORMALISE)
+        log.info("%s: peak %.0f below %d — leaving level alone (no speech)",
+                 tag, peak, MIN_PEAK_TO_NORMALISE)
         return 1.0
 
     rms = _frame_rms(work, sample_rate)
@@ -446,22 +374,13 @@ def _set_level(work: "array.array", sample_rate: int, target: float) -> float:
     return scale
 
 
-# Peak limiter timing. The lookahead lets the gain be fully down by the time a
-# peak arrives (no overshoot, so TARGET_PEAK is a hard ceiling), and the release
-# is slow enough not to flutter on a voiced syllable's individual cycles.
+# Lookahead makes the ceiling hard; release slow enough not to flutter.
 LIMIT_LOOKAHEAD_MS = 2.0
 LIMIT_RELEASE_MS = 80.0
 
 
 def _limit(work: "array.array", sample_rate: int, ceiling: float) -> None:
-    """Hold |work| <= ceiling with a lookahead peak limiter, in place.
-
-    Per sample, the gain needed to keep that sample under the ceiling; the
-    minimum of that over +-lookahead, so the gain is already down before a peak
-    and still down just after it; then an upward-only release, so recovery is
-    smooth. Every output gain is <= the window minimum, so nothing can exceed
-    the ceiling.
-    """
+    """Hold |work| <= ceiling in place: min gain over +-lookahead, smooth release."""
     n = len(work)
     look = max(1, int(sample_rate * LIMIT_LOOKAHEAD_MS / 1000.0))
     rel = 1.0 - math.exp(-1.0 / (sample_rate * LIMIT_RELEASE_MS / 1000.0))

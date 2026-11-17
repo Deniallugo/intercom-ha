@@ -15,7 +15,12 @@ def players_file(monkeypatch, tmp_path):
     return f
 
 
-EMPTY = {"routes": {}, "default": [], "aliases": {}, "selves": {}}
+EMPTY = {"version": 2, "routes": {}, "muted": [], "excluded": [],
+         "default": [], "aliases": {}, "selves": {}}
+
+
+def full(**kw):
+    return {**EMPTY, **kw}
 
 
 def test_load_missing_returns_empty(players_file):
@@ -28,12 +33,12 @@ def test_load_malformed_returns_empty(players_file):
 
 
 def test_save_then_load_roundtrip(players_file):
-    original = {
-        "routes": {"a": ["media_player.x"]},
-        "default": ["media_player.y"],
-        "aliases": {},
-        "selves": {},
-    }
+    original = full(
+        routes={"a": ["media_player.x"]},
+        default=["media_player.y"],
+        muted=["b"],
+        excluded=["media_player.tv"],
+    )
     p.save_players(original)
     assert p.load_players() == original
 
@@ -74,15 +79,64 @@ def test_load_returns_empty_aliases_and_selves_by_default(players_file):
 
 
 def test_aliases_and_selves_roundtrip(players_file):
-    original = {
-        "routes": {"a": []},
-        "default": [],
-        "aliases": {"a": "Kitchen"},
-        "selves": {"a": "media_player.atom_echo_kitchen_player"},
-    }
+    original = full(
+        routes={"a": []},
+        aliases={"a": "Kitchen"},
+        selves={"a": "media_player.atom_echo_kitchen_player"},
+    )
     p.save_players(original)
     loaded = p.load_players()
     assert loaded == original
+
+
+V1 = {
+    "routes": {"kitchen": ["media_player.bedroom"], "hall": []},
+    "default": ["media_player.bedroom"],
+    "aliases": {"hall": "Hall"},
+    "selves": {"hall": "media_player.hall_player"},
+}
+
+
+def test_migrate_v1_keeps_routes_aliases_selves(players_file):
+    players_file.write_text(json.dumps(V1))
+    assert p.migrate_file() is True
+    saved = json.loads(players_file.read_text())
+    assert saved == full(**V1)
+    # Non-empty route = override; empty = the channel (no longer "nowhere").
+    assert saved["routes"]["kitchen"] == ["media_player.bedroom"]
+    assert saved["routes"]["hall"] == []
+    assert saved["muted"] == []
+
+
+def test_migrate_is_idempotent(players_file):
+    players_file.write_text(json.dumps(V1))
+    p.migrate_file()
+    first = players_file.read_text()
+    assert p.migrate_file() is False
+    assert players_file.read_text() == first
+
+
+def test_migrate_missing_file_is_noop(players_file):
+    assert p.migrate_file() is False
+    assert not players_file.exists()
+
+
+def test_load_drops_malformed_route_values(players_file):
+    players_file.write_text(json.dumps({
+        "routes": {"a": "media_player.x", "b": ["media_player.y", 3], "": []},
+        "default": [], "muted": "nope", "excluded": None,
+    }))
+    data = p.load_players()
+    assert data["routes"] == {"b": ["media_player.y"]}
+    assert data["muted"] == [] and data["excluded"] == []
+
+
+def test_validate_muted_and_excluded():
+    base = {"routes": {}, "default": []}
+    assert p.validate({**base, "muted": ["a"], "excluded": ["media_player.x"]}) is None
+    assert p.validate({**base, "muted": "a"}) is not None
+    assert p.validate({**base, "muted": [""]}) is not None
+    assert p.validate({**base, "excluded": ["light.x"]}) is not None
 
 
 def test_validate_accepts_aliases_and_selves():

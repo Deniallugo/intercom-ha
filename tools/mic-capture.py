@@ -1,29 +1,14 @@
 #!/usr/bin/env python3
-"""Catch a chunked PCM upload from a device and write it to a WAV file.
+"""Stand-in for the add-on's /intercom endpoint: save a device upload as a WAV
+and print statistics that tell real audio from wiring faults.
 
-A bench tool for debugging a microphone: stands in for the /intercom endpoint of
-intercom-addon (it speaks enough of it for include/uploader.h), writes the raw
-PCM to a WAV you can listen to, and prints the statistics that distinguish real
-audio from wiring faults.
+    python3 tools/mic-capture.py        # listens on 0.0.0.0:9999
 
-Usage:
-    python3 tools/mic-capture.py                    # listens on 0.0.0.0:9999
+Set the device's `mic_test_url` to http://<this-machine>:9999/intercom, flash,
+press "Mic test recording". WAVs land next to this script, never overwritten.
 
-Then point the device at this machine and trigger a recording:
-    1. in devices/<device>.yaml set
-           intercom_url: "http://<this-machine-ip>:9999/intercom"
-    2. flash, then press the device's "Mic test recording" button in Home
-       Assistant (or hold the PTT button)
-    3. WAVs land next to this script as mic-<device>-01.wav, -02, ... (never
-       overwriting an earlier capture)
-
-Reading the output — the decisive number is zero-crossings per second, which
-this prints indirectly via the verdict:
-    * speech produces hundreds to thousands of sign changes per second
-    * under ~50/s is not sound at all, no matter how large the level looks
-    * "isolated spikes" counts single samples that jump away from both their
-      neighbours; when most of them land on a power of two (512, 1024, 16384)
-      they are flipped bits in the I2S word, not sound
+Key number: zero crossings/s. Speech gives hundreds to thousands; under ~50 is
+not sound. Isolated spikes mostly on powers of two are I2S bit errors.
 """
 import math
 import socket
@@ -83,19 +68,8 @@ def read_chunked(conn, rest):
 def bit_error_stats(samples):
     """(isolated single-sample spikes, how many of them are a power of two).
 
-    A flipped bit in the I2S word moves ONE sample by exactly 2^k and leaves its
-    neighbours untouched, so it stands out against the local baseline at a
-    power-of-two magnitude. Real audio's local deviations are smoothly
-    distributed and do not pile up on 512 / 1024 / 16384, so the second number
-    is what separates a wiring fault from loud speech.
-
-    Measured here: healthy captures give 0.00-0.07% spikes with few on a power
-    of two; a failing mic gave 3.5-12.6% with 81-91% of them on one.
-
-    This replaces a fixed "neighbour delta > 16000" test that was wrong in both
-    directions — it called any loud capture glitchy, since a real speech
-    transient clears 16000 easily, and it missed bit errors riding on a large
-    baseline, where the flipped bit is big but the absolute delta is not.
+    A flipped I2S bit moves one sample by exactly 2^k. Healthy captures: 0-0.07%
+    spikes; a failing mic: 3.5-12.6%, 81-91% of them on a power of two.
     """
     n = len(samples)
     if n < 3:
@@ -174,8 +148,7 @@ def main():
             pcm = read_chunked(conn, rest)
             conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
                          b"Connection: close\r\n\r\nok")
-            # Name by device and never overwrite: earlier captures are the
-            # baseline a new one is compared against.
+            # Never overwrite: earlier captures are the baseline.
             tag = "".join(c if c.isalnum() or c == "-" else "_" for c in device) or "unknown"
             count = 1
             while (path := OUTDIR / f"mic-{tag}-{count:02d}.wav").exists():

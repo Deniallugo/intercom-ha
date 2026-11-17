@@ -46,9 +46,7 @@ async def test_restore_resumes_playing(fake_ha):
 
 
 async def test_restore_repauses_paused_target(fake_ha):
-    """A target paused before the broadcast auto-resumes when we inject a
-    one-shot media_url, so restore must re-pause it to leave it as we found it.
-    No pause at snapshot time — it's already paused."""
+    """A paused target is re-paused on restore (the broadcast un-paused it)."""
     fake_ha.get_state.return_value = {
         "state": "paused",
         "attributes": {"volume_level": 0.5},

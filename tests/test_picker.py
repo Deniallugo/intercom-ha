@@ -31,14 +31,38 @@ def fake_ha(monkeypatch):
     monkeypatch.setattr(srv.ha, "pause", AsyncMock(return_value=200))
     monkeypatch.setattr(srv.ha, "play", AsyncMock(return_value=200))
     monkeypatch.setattr(srv.ha, "tts_get_audio", AsyncMock(return_value=b""))
+    monkeypatch.setattr(srv.ha, "get_registry", AsyncMock(return_value=registry()))
     return srv.ha
+
+
+def registry(*devices, names=None):
+    """Fake HAClient.get_registry() result. Each device is
+    (device_id, ha_name, media_player[, config_entry_id])."""
+    devs, ents = [], []
+    for d in devices:
+        dev_id, name, mp = d[:3]
+        entry = d[3] if len(d) > 3 else f"entry-{dev_id}"
+        devs.append({"id": dev_id, "name": name, "name_by_user": None,
+                     "config_entries": [entry], "connections": [["mac", dev_id]],
+                     "identifiers": [], "disabled_by": None})
+        ents.append({"entity_id": mp, "device_id": dev_id,
+                     "platform": "esphome", "disabled_by": None})
+    return {"devices": devs, "entities": ents,
+            "esphome_names": names or {}, "fetched_at": 1.0}
+
+
+@pytest.fixture(autouse=True)
+def _reset_activity(monkeypatch):
+    srv.activity.clear()
+    monkeypatch.setattr(srv, "_last_forced_refresh", float("-inf"))
+    yield
+    srv.activity.clear()
 
 
 def _drop_ducker_state():
     srv.ducker._snapshots.clear()
     srv.ducker._deadlines.clear()
-    # Tasks were created in the previous test's event loop, which is now
-    # gone — just drop the references; the loop closure already cancelled them.
+    # Previous test's loop is gone and already cancelled these.
     srv.ducker._tasks.clear()
 
 
@@ -219,7 +243,24 @@ async def test_post_players_persists_aliases_and_selves(
     }
     resp = await client.post("/api/players", json=payload)
     assert resp.status == 204
-    assert json.loads(players_file.read_text()) == payload
+    saved = json.loads(players_file.read_text())
+    assert {k: saved[k] for k in payload} == payload
+
+
+async def test_post_players_keeps_muted_and_excluded(
+    aiohttp_client, ingress_app, players_file,
+):
+    """The legacy picker does not know muted/excluded; saving must not drop them."""
+    players_file.write_text(json.dumps({
+        "version": 2, "routes": {}, "default": [],
+        "muted": ["a"], "excluded": ["media_player.tv"],
+    }))
+    client = await aiohttp_client(ingress_app)
+    resp = await client.post("/api/players", json={"routes": {"a": []}, "default": []})
+    assert resp.status == 204
+    saved = json.loads(players_file.read_text())
+    assert saved["muted"] == ["a"]
+    assert saved["excluded"] == ["media_player.tv"]
 
 
 async def test_post_players_rejects_invalid_selves(
@@ -251,6 +292,11 @@ async def test_post_players_rejects_empty_alias_value(
 def lan_app():
     app = web.Application()
     app.router.add_post("/intercom", srv.handle_intercom)
+    app.router.add_post("/intercom/reply", srv.handle_intercom)
+    app.router.add_get("/api/devices", srv.handle_devices_get)
+    app.router.add_patch("/api/devices/{key}", srv.handle_device_patch)
+    app.router.add_delete("/api/devices/{key}", srv.handle_device_delete)
+    app.router.add_post("/api/devices/{key}/test", srv.handle_device_test)
     return app
 
 
@@ -262,9 +308,18 @@ def www_dir(monkeypatch, tmp_path):
     return d
 
 
+MEDIA_BASE = "http://192.0.2.10:9999"   # = conftest.media_server
+
+
+def published(prefix: str) -> list[bytes]:
+    """Bodies of live served media whose label starts with `prefix`."""
+    return [(srv.media_store.directory() / name).read_bytes()
+            for name, label in srv.media_store.items() if label.startswith(prefix)]
+
+
 @pytest.fixture
 def fake_options(monkeypatch):
-    monkeypatch.setattr(srv, "load_options", lambda: {"ha_url": "http://ha.test:8123"})
+    monkeypatch.setattr(srv, "load_options", lambda: {})
 
 
 async def test_intercom_known_source_uses_route(
@@ -280,7 +335,7 @@ async def test_intercom_known_source_uses_route(
         "/intercom", data=b"\x00" * 64,
         headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
     )
-    assert resp.status == 204
+    assert resp.status == 200
     called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
     assert called_entities == ["media_player.kitchen"]
 
@@ -320,21 +375,180 @@ async def test_intercom_missing_device_header_uses_unknown(
     assert called_entities == ["media_player.kitchen"]
 
 
-async def test_intercom_known_source_with_empty_route_plays_nowhere(
+async def test_intercom_empty_route_means_channel_not_nowhere(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    """A v1 file's empty route used to silence the device after its first
+    press; now it is the channel."""
+    players_file.write_text(json.dumps({
+        "routes": {"atom-echo": []},
+        "default": [],
+    }))
+    fake_ha.get_registry.return_value = registry(
+        ("d1", "Atom Echo", "media_player.atom_echo_player"),
+        ("d2", "Voice S3", "media_player.voice_s3_player"),
+    )
+    client = await aiohttp_client(lan_app)
+    resp = await client.post(
+        "/intercom", data=b"\x00" * 64,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "atom-echo"},
+    )
+    assert resp.status == 200
+    assert [c.args[0] for c in fake_ha.play_media.call_args_list] == [
+        "media_player.voice_s3_player"]
+
+
+def _post(client, device, *, path="/intercom", headers=None):
+    return client.post(
+        path, data=b"\x00" * 64,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": device,
+                 **(headers or {})},
+    )
+
+
+def _played(fake_ha):
+    out = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    fake_ha.play_media.reset_mock()
+    # Routing tests press back to back; free the speakers so the next press
+    # plays now instead of queueing behind this one.
+    srv.airtime.reset()
+    return out
+
+
+TWO_DEVICES = (
+    ("d1", "Atom Echo", "media_player.atom_echo_player"),
+    ("d2", "Voice S3", "media_player.voice_s3_player"),
+)
+
+
+async def test_clean_install_two_devices_hear_each_other_every_press(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    """No players.json, no UI: A→B and B→A, on the 1st and the Nth press."""
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    for _ in range(4):
+        assert (await _post(client, "atom-echo")).status == 200
+        assert _played(fake_ha) == ["media_player.voice_s3_player"]
+        assert (await _post(client, "voice-s3")).status == 200
+        assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+
+async def test_channel_excludes_talker_and_includes_listen_only_speaker(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(
+        *TWO_DEVICES, ("d3", "Speaker S3", "media_player.speaker_s3_player"))
+    client = await aiohttp_client(lan_app)
+    await _post(client, "voice-s3")
+    assert sorted(_played(fake_ha)) == [
+        "media_player.atom_echo_player", "media_player.speaker_s3_player"]
+
+
+async def test_channel_matches_by_config_entry_node_name(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    """intercom-s3's node name (esphome-web-0f4600) shares nothing with its
+    friendly name; the config entry's device_name ties them."""
+    fake_ha.get_registry.return_value = registry(
+        ("d1", "Intercom S3", "media_player.intercom_s3_player", "e1"),
+        ("d2", "Voice S3", "media_player.voice_s3_player", "e2"),
+        names={"e1": "esphome-web-0f4600", "e2": "voice-s3"},
+    )
+    client = await aiohttp_client(lan_app)
+    await _post(client, "esphome-web-0f4600")
+    assert _played(fake_ha) == ["media_player.voice_s3_player"]
+
+
+async def test_override_still_excludes_talker(
     aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
 ):
     players_file.write_text(json.dumps({
-        "routes": {"src-a": []},
-        "default": ["media_player.bedroom"],
+        "routes": {"atom-echo": ["media_player.atom_echo_player", "media_player.sonos"]},
+        "default": [],
     }))
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
     client = await aiohttp_client(lan_app)
-    sid = str(uuid.uuid4())
-    resp = await client.post(
-        "/intercom", data=b"\x00" * 64,
-        headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
-    )
-    assert resp.status == 204
-    assert fake_ha.play_media.call_args_list == []
+    await _post(client, "atom-echo")
+    assert _played(fake_ha) == ["media_player.sonos"]
+
+
+async def test_manual_self_beats_registry(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {}, "default": [],
+        "selves": {"kitchen": "media_player.voice_s3_player"},
+    }))
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    await _post(client, "kitchen")
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+
+async def test_muted_source_plays_nowhere(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "version": 2, "routes": {}, "default": [], "muted": ["atom-echo"],
+    }))
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    assert (await _post(client, "atom-echo")).status == 200
+    assert _played(fake_ha) == []
+    await _post(client, "voice-s3")
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+
+async def test_excluded_player_does_not_receive_channel(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "version": 2, "routes": {}, "default": [],
+        "excluded": ["media_player.speaker_s3_player"],
+    }))
+    fake_ha.get_registry.return_value = registry(
+        *TWO_DEVICES, ("d3", "Speaker S3", "media_player.speaker_s3_player"))
+    client = await aiohttp_client(lan_app)
+    await _post(client, "voice-s3")
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+
+async def test_registry_failure_falls_back_to_default_minus_self(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {}, "default": ["media_player.a", "media_player.b"],
+        "selves": {"dev-a": "media_player.a"},
+    }))
+    fake_ha.get_registry.side_effect = RuntimeError("ws down")
+    client = await aiohttp_client(lan_app)
+    assert (await _post(client, "dev-a")).status == 200
+    assert _played(fake_ha) == ["media_player.b"]
+
+
+async def test_unknown_name_forces_one_registry_refresh(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    """A device adopted after the cache was filled is placed at once; a name
+    that never resolves does not refetch on every press."""
+    stale = registry(("d2", "Voice S3", "media_player.voice_s3_player"))
+    fresh = registry(*TWO_DEVICES)
+
+    async def get_registry(force=False):
+        return fresh if force else stale
+
+    fake_ha.get_registry.side_effect = get_registry
+    client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+    assert _played(fake_ha) == ["media_player.voice_s3_player"]
+    forced = [c for c in fake_ha.get_registry.call_args_list if c.kwargs.get("force")]
+    assert len(forced) == 1
+
+    await _post(client, "ghost")
+    await _post(client, "ghost")
+    forced = [c for c in fake_ha.get_registry.call_args_list if c.kwargs.get("force")]
+    assert len(forced) == 1   # rate-limited
 
 
 async def test_intercom_malicious_session_id_cannot_escape_www_dir(
@@ -349,15 +563,18 @@ async def test_intercom_malicious_session_id_cannot_escape_www_dir(
         "/intercom", data=b"\x00" * 64,
         headers={"X-Session-ID": "../../../pwned", "X-Device-Name": "src-a"},
     )
-    assert resp.status == 204
-    # The traversal must not write outside the www dir.
+    assert resp.status == 200
+    # The traversal must not write anywhere: the label is a fresh uuid and
+    # the served file has a random name inside the media dir.
     assert not (www_dir.parent / "pwned.wav").exists()
     assert list(www_dir.parent.glob("*.wav")) == []
-    # A media file was still written, safely inside www_dir.
-    assert len(list(www_dir.glob("intercom-*.wav"))) == 1
+    assert list(www_dir.glob("*")) == []
+    [(name, label)] = srv.media_store.items()
+    assert "pwned" not in label and "/" not in label
+    assert (srv.media_store.directory() / name).is_file()
 
 
-async def test_intercom_missing_players_file_returns_204_no_call(
+async def test_intercom_missing_players_file_returns_200_no_call(
     aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha, caplog,
 ):
     # players_file fixture monkeypatches PLAYERS_FILE but never creates it
@@ -370,7 +587,7 @@ async def test_intercom_missing_players_file_returns_204_no_call(
             headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
         )
 
-    assert resp.status == 204
+    assert resp.status == 200
     # source auto-enrolled, default is empty, so no HA calls
     assert fake_ha.play_media.call_args_list == []
     assert json.loads(players_file.read_text())["routes"] == {"src-a": []}
@@ -393,52 +610,120 @@ async def test_intercom_wav_includes_chimes(
         headers={"X-Session-ID": sid, "X-Device-Name": "src-a"},
     )
 
-    wav_files = list(www_dir.glob("intercom-*.wav"))
+    wav_files = published("intercom-")
     assert len(wav_files) == 1
-    wav = wav_files[0].read_bytes()
+    wav = wav_files[0]
     pcm_len = struct.unpack_from("<I", wav, 40)[0]
     # Chime is 120ms at 16k/16/1 = 3840 bytes each side.
     # Total PCM = 3840 + 200 + 3840 = 7880.
+    # Default denoise rewrites the payload but keeps its length.
     assert pcm_len == 7880
-    # The payload is no longer byte-identical to the upload: denoise.process()
-    # high-passes, expands and normalises it on the way out (the retained
-    # recording is what keeps the raw bytes). Length is preserved exactly, which
-    # is what the chime offsets and the duration arithmetic depend on.
-    payload = wav[44 + 3840:44 + 3840 + 200]
-    assert len(payload) == len(pcm)
+
+
+async def test_intercom_odd_length_upload_keeps_closing_chime_aligned(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    import struct
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    client = await aiohttp_client(lan_app)
+    await client.post(
+        "/intercom", data=b"\xAA\xBB" * 100 + b"\x7f",
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    wav = published("intercom-")[0]
+    assert struct.unpack_from("<I", wav, 40)[0] == 7880   # odd byte dropped
+    assert wav.endswith(srv.mixer.chime_out)
 
 
 async def test_intercom_levels_but_does_not_clean_when_denoise_off(
     aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
+    fake_streams,
 ):
-    """With cleanup disabled the broadcast skips the noise reduction but still
-    gets its level set — raw speech is far too quiet for a small speaker."""
+    """denoise: false runs the level-only stream, not the full cleanup."""
     players_file.write_text(json.dumps({
         "routes": {"src-a": ["media_player.kitchen"]},
         "default": [],
     }))
     monkeypatch.setattr(srv, "load_options",
-                        lambda: {"ha_url": "http://ha.test:8123", "denoise": False})
-    calls = []
-
-    def no_cleanup(*a, **kw):
-        raise AssertionError("cleanup ran with denoise off")
-
-    def fake_level(pcm, *, sample_rate):
-        calls.append(pcm)
-        return b"\x11\x22" * (len(pcm) // 2)
-
-    monkeypatch.setattr(srv.denoise, "process", no_cleanup)
-    monkeypatch.setattr(srv.denoise, "level", fake_level)
+                        lambda: {"denoise": False})
+    fake_streams.out = lambda pcm, full: (b"\x33\x44" if full else b"\x11\x22") * (len(pcm) // 2)
     client = await aiohttp_client(lan_app)
     pcm = b"\xAA\xBB" * 100
     await client.post(
         "/intercom", data=pcm,
         headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
     )
-    assert calls == [pcm]
-    wav = list(www_dir.glob("intercom-*.wav"))[0].read_bytes()
+    [stream] = fake_streams.made
+    assert (stream.full, stream.sample_rate, stream.fed) == (False, 16000, pcm)
+    wav = published("intercom-")[0]
     assert wav[44 + 3840:44 + 3840 + 200] == b"\x11\x22" * 100
+
+
+async def test_intercom_cleans_when_denoise_on(
+    aiohttp_client, lan_app, players_file, www_dir, fake_ha, monkeypatch,
+    fake_streams,
+):
+    """denoise: true broadcasts the full cleanup's output, fed the upload."""
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen"]},
+        "default": [],
+    }))
+    monkeypatch.setattr(srv, "load_options",
+                        lambda: {"denoise": True})
+    fake_streams.out = lambda pcm, full: (b"\x33\x44" if full else b"\x11\x22") * (len(pcm) // 2)
+    client = await aiohttp_client(lan_app)
+    pcm = b"\xAA\xBB" * 100
+    await client.post(
+        "/intercom", data=pcm,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    [stream] = fake_streams.made
+    assert (stream.full, stream.sample_rate, stream.fed) == (True, 16000, pcm)
+    wav = published("intercom-")[0]
+    assert wav[44 + 3840:44 + 3840 + 200] == b"\x33\x44" * 100
+
+
+async def test_play_media_failure_still_restores_and_cleans_up(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+    monkeypatch,
+):
+    """A failing play_media: others still play, music is restored, no stale
+    snapshot, media file still deleted."""
+    import asyncio as _asyncio
+    players_file.write_text(json.dumps({
+        "routes": {"src-a": ["media_player.kitchen", "media_player.bedroom"]},
+        "default": [],
+    }))
+    fake_ha.get_state.return_value = {"state": "playing", "attributes": {}}
+
+    async def play_media(entity, url):
+        if entity == "media_player.kitchen":
+            raise RuntimeError("HA unreachable")
+        return 200
+
+    fake_ha.play_media.side_effect = play_media
+    deleted = []
+
+    async def fast_delete(path, delay):
+        deleted.append(path)
+
+    monkeypatch.setattr(srv, "_delete_after", fast_delete)
+    client = await aiohttp_client(lan_app)
+    resp = await client.post(
+        "/intercom", data=b"\xAA\xBB" * 100,
+        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "src-a"},
+    )
+    assert resp.status == 200
+    assert [c.args[0] for c in fake_ha.play_media.call_args_list] == [
+        "media_player.kitchen", "media_player.bedroom"]
+    await _asyncio.sleep(2.0)
+    played = sorted(c.args[0] for c in fake_ha.play.call_args_list)
+    assert played == ["media_player.bedroom", "media_player.kitchen"]
+    assert srv.ducker._snapshots == {}
+    assert len(deleted) == 1
 
 
 async def test_intercom_pauses_playing_target_then_resumes(
@@ -466,38 +751,47 @@ async def test_intercom_pauses_playing_target_then_resumes(
     fake_ha.play.assert_awaited_once_with("media_player.kitchen")
 
 
-async def test_talkback_routes_to_sender_self_not_normal_route(
+THREE_DEVICES = TWO_DEVICES + (("d3", "Kitchen", "media_player.kitchen_player"),)
+
+
+async def test_plain_ptt_after_incoming_still_goes_to_channel(
     aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
 ):
-    # kitchen-echo's broadcast targets living-echo's self_player, so a reply
-    # window opens for living-echo. living-echo's normal route is the bedroom.
-    # Talkback should override normal route.
-    players_file.write_text(json.dumps({
-        "routes": {
-            "kitchen-echo": ["media_player.living_speaker"],
-            "living-echo":  ["media_player.bedroom"],
-        },
-        "default": [],
-        "aliases": {},
-        "selves": {
-            "kitchen-echo": "media_player.kitchen_speaker",
-            "living-echo":  "media_player.living_speaker",
-        },
-    }))
+    """A talks to all; B talks to all 10 s later. B must reach everyone, not
+    only A (the old implicit talkback did that)."""
+    fake_ha.get_registry.return_value = registry(*THREE_DEVICES)
     client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+    _played(fake_ha)
+    await _post(client, "voice-s3")
+    assert sorted(_played(fake_ha)) == [
+        "media_player.atom_echo_player", "media_player.kitchen_player"]
 
-    await client.post(
-        "/intercom", data=b"\x00" * 64,
-        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "kitchen-echo"},
-    )
 
-    fake_ha.play_media.reset_mock()
-    await client.post(
-        "/intercom", data=b"\x00" * 64,
-        headers={"X-Session-ID": str(uuid.uuid4()), "X-Device-Name": "living-echo"},
-    )
-    called_entities = [c.args[0] for c in fake_ha.play_media.call_args_list]
-    assert called_entities == ["media_player.kitchen_speaker"]
+@pytest.mark.parametrize("how", [
+    {"path": "/intercom/reply"},
+    {"headers": {"X-Intercom-Reply": "1"}},
+])
+async def test_explicit_reply_goes_to_last_speaker_only(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha, how,
+):
+    fake_ha.get_registry.return_value = registry(*THREE_DEVICES)
+    client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+    _played(fake_ha)
+    await _post(client, "voice-s3", **how)
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+    assert srv.activity["voice-s3"]["last_broadcast"]["mode"] == "reply"
+
+
+async def test_explicit_reply_with_nobody_to_answer_uses_channel(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(*THREE_DEVICES)
+    client = await aiohttp_client(lan_app)
+    await _post(client, "voice-s3", path="/intercom/reply")
+    assert sorted(_played(fake_ha)) == [
+        "media_player.atom_echo_player", "media_player.kitchen_player"]
 
 
 async def test_no_talkback_window_uses_normal_route(
@@ -544,29 +838,68 @@ async def test_announce_explicit_targets_plays_and_chimes(
         "text": "dinner is ready",
         "targets": ["media_player.kitchen", "media_player.bedroom"],
     })
-    assert resp.status == 204
+    assert resp.status == 200
     fake_ha.tts_get_audio.assert_awaited_once()
     assert fake_ha.tts_get_audio.await_args.args == ("tts.piper", "dinner is ready")
     played = [c.args[0] for c in fake_ha.play_media.call_args_list]
     assert played == ["media_player.kitchen", "media_player.bedroom"]
-    wav_files = list(www_dir.glob("announce-*.wav"))
-    assert len(wav_files) == 1
+    assert len(published("announce-")) == 1
+    url = fake_ha.play_media.call_args_list[0].args[1]
+    assert url.startswith(MEDIA_BASE + "/media/") and url.endswith(".wav")
 
 
-async def test_announce_omitted_targets_uses_all_players(
+async def test_announce_omitted_targets_uses_intercom_devices_only(
+    aiohttp_client, announce_app, players_file, www_dir, fake_options, fake_ha,
+):
+    """No targets = the channel, not every media_player (TVs, phones, Cast)."""
+    fake_ha.tts_get_audio.return_value = _wav_bytes(b"\x01\x02" * 100)
+    fake_ha.get_states.return_value = [
+        {"entity_id": "media_player.living_room_tv", "attributes": {}},
+        {"entity_id": "media_player.atom_echo_player", "attributes": {}},
+    ]
+    fake_ha.get_registry.return_value = registry(
+        ("d1", "Atom Echo", "media_player.atom_echo_player"),
+        ("d2", "Speaker S3", "media_player.speaker_s3_player"),
+    )
+    players_file.write_text(json.dumps({
+        "routes": {}, "default": [],
+        "excluded": ["media_player.speaker_s3_player"],
+    }))
+    client = await aiohttp_client(announce_app)
+    resp = await client.post("/announce", json={"text": "hello house"})
+    assert resp.status == 200
+    played = [c.args[0] for c in fake_ha.play_media.call_args_list]
+    assert played == ["media_player.atom_echo_player"]
+    body = await resp.json()
+    assert body["targets"] == ["media_player.atom_echo_player"]
+    assert body["delivered"] == 1
+
+
+async def test_announce_reports_failure_as_502(
     aiohttp_client, announce_app, www_dir, fake_options, fake_ha,
 ):
     fake_ha.tts_get_audio.return_value = _wav_bytes(b"\x01\x02" * 100)
-    fake_ha.get_states.return_value = [
-        {"entity_id": "media_player.kitchen", "attributes": {}},
-        {"entity_id": "light.bulb", "attributes": {}},
-        {"entity_id": "media_player.bedroom", "attributes": {}},
-    ]
+    fake_ha.play_media.side_effect = RuntimeError("HA unreachable")
     client = await aiohttp_client(announce_app)
-    resp = await client.post("/announce", json={"text": "hello house"})
-    assert resp.status == 204
-    played = [c.args[0] for c in fake_ha.play_media.call_args_list]
-    assert played == ["media_player.kitchen", "media_player.bedroom"]
+    resp = await client.post("/announce", json={
+        "text": "hi", "targets": ["media_player.kitchen"]})
+    assert resp.status == 502
+    body = await resp.json()
+    assert body["failed"] == 1 and body["error"]
+
+
+async def test_announce_omitted_targets_falls_back_to_default_players(
+    aiohttp_client, announce_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.tts_get_audio.return_value = _wav_bytes(b"\x01\x02" * 100)
+    fake_ha.get_registry.side_effect = RuntimeError("ws down")
+    players_file.write_text(json.dumps({
+        "routes": {}, "default": ["media_player.kitchen"]}))
+    client = await aiohttp_client(announce_app)
+    resp = await client.post("/announce", json={"text": "hi", "targets": []})
+    assert resp.status == 200
+    assert [c.args[0] for c in fake_ha.play_media.call_args_list] == [
+        "media_player.kitchen"]
 
 
 async def test_announce_empty_text_returns_400(
@@ -607,18 +940,290 @@ async def test_announce_non_wav_tts_plays_without_chime(
     resp = await client.post("/announce", json={
         "text": "hi", "targets": ["media_player.kitchen"],
     })
-    assert resp.status == 204
-    assert list(www_dir.glob("announce-*.mp3")) != []
+    assert resp.status == 200
+    [(name, _)] = srv.media_store.items()
+    assert name.endswith(".mp3")
 
 
 async def test_announce_no_players_available_returns_204_noop(
-    aiohttp_client, announce_app, www_dir, fake_options, fake_ha,
+    aiohttp_client, announce_app, players_file, www_dir, fake_options, fake_ha,
 ):
     fake_ha.get_states.return_value = [
-        {"entity_id": "light.bulb", "attributes": {}},
+        {"entity_id": "media_player.living_room_tv", "attributes": {}},
     ]
     client = await aiohttp_client(announce_app)
     resp = await client.post("/announce", json={"text": "nobody home"})
     assert resp.status == 204
     assert fake_ha.play_media.call_args_list == []
     assert fake_ha.tts_get_audio.call_args_list == []
+
+
+# ---- GET/PATCH /api/devices ------------------------------------------------
+
+async def test_devices_lists_members_with_state_and_last_broadcast(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {}, "default": [], "aliases": {"atom-echo": "Hall"},
+    }))
+    fake_ha.get_registry.return_value = registry(
+        *TWO_DEVICES, ("d3", "Speaker S3", "media_player.speaker_s3_player"))
+    fake_ha.get_states.return_value = [
+        {"entity_id": "media_player.atom_echo_player", "state": "idle"},
+        {"entity_id": "media_player.voice_s3_player", "state": "playing"},
+        {"entity_id": "media_player.speaker_s3_player", "state": "unavailable"},
+    ]
+    client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+
+    resp = await client.get("/api/devices")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["registry"]["ok"] is True
+    assert sorted(body["channel"]) == [
+        "media_player.atom_echo_player", "media_player.speaker_s3_player",
+        "media_player.voice_s3_player"]
+    rows = {r["friendly_name"]: r for r in body["devices"]}
+    assert set(rows) == {"Atom Echo", "Voice S3", "Speaker S3"}
+
+    atom = rows["Atom Echo"]
+    assert atom["name"] == "atom-echo"
+    assert atom["alias"] == "Hall"
+    assert atom["device_id"] == "d1"
+    assert atom["media_player"] == "media_player.atom_echo_player"
+    assert atom["has_mic"] is True
+    assert atom["online"] is True and atom["state"] == "idle"
+    assert atom["override"] is None and atom["muted"] is False
+    assert atom["listening"] is True
+    lb = atom["last_broadcast"]
+    assert lb["mode"] == "channel"
+    assert sorted(lb["targets"]) == [
+        "media_player.speaker_s3_player", "media_player.voice_s3_player"]
+    assert lb["results"]["media_player.voice_s3_player"] == {
+        "ok": True, "outcome": "ok", "via": "duck", "status": 204}
+    # HA would answer 200 for an unavailable entity and play nothing.
+    assert lb["results"]["media_player.speaker_s3_player"] == {
+        "ok": False, "outcome": "skipped", "reason": "unavailable"}
+    assert atom["last_seen"] == lb["ts"]
+
+    spk = rows["Speaker S3"]
+    assert spk["name"] is None          # never talked, node name unknown
+    assert spk["has_mic"] is None
+    assert spk["online"] is False
+    assert spk["last_broadcast"] is None
+
+
+async def test_devices_lists_unmatched_source_and_registry_error(
+    aiohttp_client, lan_app, players_file, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"garage": ["media_player.sonos"]}, "default": [],
+    }))
+    fake_ha.get_registry.side_effect = RuntimeError("ws down")
+    client = await aiohttp_client(lan_app)
+    body = await (await client.get("/api/devices")).json()
+    assert body["registry"] == {"ok": False, "error": "ws down", "fetched_at": None}
+    assert body["devices"] == [{
+        "name": "garage", "device_id": None, "friendly_name": None,
+        "alias": None, "media_player": None, "has_mic": True,
+        "state": None, "online": None, "listening": False, "muted": False,
+        "override": ["media_player.sonos"], "last_seen": None,
+        "last_broadcast": None,
+    }]
+
+
+async def test_patch_device_sets_and_clears_settings(
+    aiohttp_client, lan_app, players_file, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    resp = await client.patch("/api/devices/atom-echo", json={
+        "alias": "Hall", "override": ["media_player.sonos"], "muted": True,
+        "listen": False,
+    })
+    assert resp.status == 204
+    saved = json.loads(players_file.read_text())
+    assert saved["aliases"] == {"atom-echo": "Hall"}
+    assert saved["routes"] == {"atom-echo": ["media_player.sonos"]}
+    assert saved["muted"] == ["atom-echo"]
+    assert saved["excluded"] == ["media_player.atom_echo_player"]
+
+    resp = await client.patch("/api/devices/atom-echo", json={
+        "alias": None, "override": None, "muted": False, "listen": True,
+    })
+    assert resp.status == 204
+    saved = json.loads(players_file.read_text())
+    assert saved["aliases"] == {}
+    assert saved["routes"] == {"atom-echo": []}
+    assert saved["muted"] == []
+    assert saved["excluded"] == []
+
+
+async def test_patch_device_by_device_id_listen_only(
+    aiohttp_client, lan_app, players_file, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    assert (await client.patch("/api/devices/d2", json={"listen": False})).status == 204
+    assert json.loads(players_file.read_text())["excluded"] == [
+        "media_player.voice_s3_player"]
+    # Source settings need a name; d2 has never talked.
+    assert (await client.patch("/api/devices/d2", json={"muted": True})).status == 400
+
+
+async def test_patch_device_rejects_bad_values(
+    aiohttp_client, lan_app, players_file, fake_ha,
+):
+    client = await aiohttp_client(lan_app)
+    for body in ({"override": ["light.x"]}, {"muted": "yes"}, {"alias": 3}, []):
+        resp = await client.patch("/api/devices/a", json=body)
+        assert resp.status == 400, body
+
+
+# ---- DELETE /api/devices/{key} and POST /api/devices/{key}/test ------------
+
+async def test_delete_unregistered_device_forgets_it_until_it_talks_again(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"garage": ["media_player.sonos"]}, "default": [],
+        "aliases": {"garage": "Garage"}, "muted": ["garage"],
+        "selves": {"garage": "media_player.garage"},
+    }))
+    client = await aiohttp_client(lan_app)
+    resp = await client.delete("/api/devices/garage")
+    assert resp.status == 200
+    assert await resp.json() == {"name": "garage", "device_id": None,
+                                 "registry": False, "listening": None}
+    saved = json.loads(players_file.read_text())
+    assert saved["routes"] == {} and saved["aliases"] == {}
+    assert saved["muted"] == [] and saved["selves"] == {}
+    body = await (await client.get("/api/devices")).json()
+    assert body["devices"] == []
+
+    # Gone, so a second delete is a 404 ...
+    assert (await client.delete("/api/devices/garage")).status == 404
+    # ... until it sends audio again: then it is enrolled like a new device.
+    await _post(client, "garage")
+    names = [d["name"] for d in (await (await client.get("/api/devices")).json())["devices"]]
+    assert names == ["garage"]
+
+
+async def test_delete_registry_device_clears_settings_and_stops_listening(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    players_file.write_text(json.dumps({
+        "routes": {"atom-echo": ["media_player.voice_s3_player"]}, "default": [],
+        "aliases": {"atom-echo": "Hall"},
+    }))
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+    _played(fake_ha)
+    assert "atom-echo" in srv.activity
+
+    resp = await client.delete("/api/devices/d1")
+    assert resp.status == 200
+    assert await resp.json() == {"name": "atom-echo", "device_id": "d1",
+                                 "registry": True, "listening": False}
+    assert "atom-echo" not in srv.activity
+    saved = json.loads(players_file.read_text())
+    assert saved["routes"] == {} and saved["aliases"] == {}
+    assert saved["excluded"] == ["media_player.atom_echo_player"]
+
+    # Still listed (HA has it), no longer in the channel.
+    body = await (await client.get("/api/devices")).json()
+    atom = next(d for d in body["devices"] if d["device_id"] == "d1")
+    assert atom["listening"] is False and atom["alias"] is None
+    assert atom["last_broadcast"] is None
+    await _post(client, "voice-s3")
+    assert _played(fake_ha) == []
+
+    # Deleting again is harmless (excluded once); listen:true undoes it.
+    assert (await client.delete("/api/devices/d1")).status == 200
+    assert json.loads(players_file.read_text())["excluded"] == [
+        "media_player.atom_echo_player"]
+    assert (await client.patch("/api/devices/d1", json={"listen": True})).status == 204
+    await _post(client, "voice-s3")
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+
+async def test_delete_unknown_device_is_404(
+    aiohttp_client, lan_app, players_file, fake_ha,
+):
+    client = await aiohttp_client(lan_app)
+    assert (await client.delete("/api/devices/nobody")).status == 404
+    assert not players_file.exists()
+
+
+async def test_test_sound_plays_chimes_on_the_device_only(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    fake_ha.get_states.return_value = [
+        {"entity_id": "media_player.voice_s3_player", "state": "idle",
+         "attributes": {"supported_features": srv.MEDIA_ANNOUNCE}},
+    ]
+    client = await aiohttp_client(lan_app)
+    resp = await client.post("/api/devices/d2/test")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["media_player"] == "media_player.voice_s3_player"
+    assert body["result"] == {"ok": True, "outcome": "ok", "via": "announce",
+                              "status": 204}
+    assert body["delivered"] == 1
+    calls = fake_ha.play_media.call_args_list
+    assert [c.args[0] for c in calls] == ["media_player.voice_s3_player"]
+    assert calls[0].kwargs.get("announce") is True
+
+    (wav,) = published("test-")
+    with _wave.open(_io.BytesIO(wav)) as w:
+        frames = w.readframes(w.getnframes())
+    assert frames.startswith(srv.mixer.chime_in)
+    assert frames.endswith(srv.mixer.chime_out)
+    # A test is not a broadcast.
+    assert srv.activity == {}
+
+
+async def test_test_sound_by_name_and_failures(
+    aiohttp_client, lan_app, players_file, www_dir, fake_options, fake_ha,
+):
+    fake_ha.get_registry.return_value = registry(*TWO_DEVICES)
+    client = await aiohttp_client(lan_app)
+    await _post(client, "atom-echo")
+    _played(fake_ha)
+
+    assert (await client.post("/api/devices/atom-echo/test")).status == 200
+    assert _played(fake_ha) == ["media_player.atom_echo_player"]
+
+    assert (await client.post("/api/devices/nobody/test")).status == 404
+
+    # Known device, but no speaker in HA.
+    await _post(client, "garage")
+    _played(fake_ha)
+    resp = await client.post("/api/devices/garage/test")
+    assert resp.status == 400
+    assert "speaker" in (await resp.json())["error"]
+
+    # Speaker unavailable: skipped, reported as not played.
+    fake_ha.get_states.return_value = [
+        {"entity_id": "media_player.atom_echo_player", "state": "unavailable"}]
+    resp = await client.post("/api/devices/d1/test")
+    assert resp.status == 502
+    assert (await resp.json())["result"] == {
+        "ok": False, "outcome": "skipped", "reason": "unavailable"}
+    assert _played(fake_ha) == []
+
+
+async def test_ingress_app_serves_page_and_device_routes(aiohttp_client, players_file, fake_ha):
+    client = await aiohttp_client(srv.make_ingress_app())
+    resp = await client.get("/")
+    assert resp.status == 200
+    assert resp.headers["Cache-Control"] == "no-cache"
+    html = await resp.text()
+    assert "<title>Intercom</title>" in html
+    # Errors are shown as text, never parsed as HTML.
+    assert "innerHTML" not in html
+    assert "prefers-color-scheme" in html
+    assert (await client.delete("/api/devices/nobody")).status == 404
+    assert (await client.post("/api/devices/nobody/test")).status == 404

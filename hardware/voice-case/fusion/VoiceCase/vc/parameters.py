@@ -1,22 +1,6 @@
-"""The headline numbers, written into the design as REFERENCE user parameters.
-
-They drive nothing. The geometry comes from `params.py`, exactly as it did from
-`params.scad`, and these are copies deposited in the Parameters dialog so that a sketch you
-draw by hand can be dimensioned against the case — `ref_plan_x/2`, `ref_boss_cx`,
-`ref_dac_axis_z` — instead of you looking each one up in the Python.
-
-Two consequences worth being clear about, because a parameter that looks live and is not is
-worse than no parameter at all:
-
-  * Editing one changes NOTHING. The features were built from computed coordinates, with no
-    dimensional constraints tied to these, so the model will not move. Change the value in
-    `params.py` and re-run.
-  * They are all prefixed `ref_`, which keeps them out of the way of any parameter you
-    create yourself (the script would otherwise overwrite a same-named one of yours), sorts
-    them together in the dialog, and says what they are at a glance.
-
-Derived entries are marked "(derived)" in their comment: those have no equivalent line in
-`params.py` to edit — they fall out of the chain, and the comment says what from.
+"""Headline numbers as read-only `ref_*` user parameters, for dimensioning hand sketches
+(e.g. `ref_plan_x/2`). They drive nothing: change `params.py` and re-run. "(derived)"
+entries have no line in params.py to edit.
 """
 
 import adsk.core

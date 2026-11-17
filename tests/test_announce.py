@@ -7,8 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "intercom-addon"))
 import announce  # noqa: E402
 from chimes import ChimeMixer  # noqa: E402
 
-# The device speakers (and the whole intercom chain) are built for this format;
-# announcements must be delivered at it, not at the TTS engine's native rate.
+# Announcements must arrive at the add-on's format, not the TTS native rate.
 TARGET = ChimeMixer(sample_rate=16000, sample_width=2, channels=1)
 
 
@@ -37,8 +36,7 @@ def test_parse_tts_wav_returns_none_for_non_wav():
 
 
 def test_build_announcement_wav_resamples_to_target_rate():
-    # 1 second of 22050 Hz speech must come out at the target 16 kHz so the
-    # Atom Echo's I2S speaker can allocate its (16 kHz-sized) DMA buffers.
+    # 22.05 kHz in -> 16 kHz out (Atom Echo DMA buffers are sized for it).
     speech_frames = 22050
     pcm = b"\x01\x02" * speech_frames
     wav_in = _make_wav(pcm, rate=22050, width=2, channels=1)
@@ -76,8 +74,7 @@ def test_build_announcement_wav_falls_back_for_non_wav():
 
 
 def test_build_announcement_wav_reports_real_duration_for_non_16bit_wav():
-    # 24-bit WAV: ChimeMixer can't mix it (16-bit only), but we can still
-    # measure its true length from the PCM so ducking/cleanup aren't truncated.
+    # 24-bit: not mixable, but the length is still measured.
     rate, width, channels = 22050, 3, 1
     frames = 5000
     pcm = b"\x00\x00\x00" * frames
@@ -87,3 +84,30 @@ def test_build_announcement_wav_reports_real_duration_for_non_16bit_wav():
     assert ext == "wav"
     expected = frames / rate
     assert abs(duration - expected) < 1e-6
+
+
+def _mp3_frame(bitrate_idx: int, pad: int = 0) -> bytes:
+    # MPEG-1 layer III, 44.1 kHz, no CRC.
+    h = (0x7FF << 21) | (3 << 19) | (1 << 17) | (1 << 16) | (bitrate_idx << 12) | (pad << 9)
+    bitrate = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320][bitrate_idx]
+    size = 144 * bitrate * 1000 // 44100 + pad
+    return h.to_bytes(4, "big") + b"\x00" * (size - 4)
+
+
+def test_mp3_duration_sums_frames_after_id3_and_ignores_trailer():
+    id3 = b"ID3\x04\x00\x00" + bytes([0, 0, 0, 10]) + b"\x00" * 10
+    # VBR: frames of different bitrates, one padded.
+    frames = _mp3_frame(9) * 30 + _mp3_frame(5, pad=1) * 10 + _mp3_frame(14) * 2
+    data = id3 + frames + b"TAG" + b"\x00" * 125
+    assert abs(announce.mp3_duration(data) - 42 * 1152 / 44100) < 1e-9
+
+
+def test_mp3_duration_none_for_garbage():
+    assert announce.mp3_duration(b"\x00" * 500) is None
+
+
+def test_build_announcement_wav_times_mp3_tts():
+    data = _mp3_frame(9) * 77          # ~2.0 s
+    out, ext, duration = announce.build_announcement_wav(data, TARGET)
+    assert (out, ext) == (data, "mp3")
+    assert abs(duration - 77 * 1152 / 44100) < 1e-9

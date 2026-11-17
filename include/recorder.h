@@ -14,28 +14,21 @@ static const size_t RBUF_SIZE = 32 * 1024;  // ~1 s at 16 kHz 16-bit
 static StreamBufferHandle_t _sbuf       = nullptr;
 static volatile bool        _rec_active = false;
 static volatile bool        _rec_done   = false;
+static bool                 _rec_full_logged = false;  // "buffer full" once per take
 
-// Software gain for the captured 16-bit PCM stream. Defaults to unity (1/1 = no
-// change). Devices whose mic chain has no PGA (e.g. Atom Echo PDM) can call
-// recorder_set_gain(2, 1) from on_boot to add +6 dB, (4, 1) for +12 dB, etc.
-// Devices whose codec already controls gain (e.g. VoiceS3R ES8311) leave this
-// at the default.
+// Software gain (recorder_set_gain), unity by default. For mics with no PGA.
 static int _gain_num = 1;
 static int _gain_den = 1;
 
-// High-pass filter, off by default (recorder_set_highpass). Measured on both
-// mics: 1-10 Hz drift that correct_dc_offset leaves in, swinging up to ±10000 —
-// 2-12 dB LOUDER than the speech itself. With the add-on's cleanup off, that
-// went straight to the amplifiers, pumped the speakers and ate the headroom any
-// gain needs. It runs BEFORE the gain, so the gain is spent on the voice.
-// RBJ biquad, Q = 0.707 (Butterworth, 12 dB/octave), Direct Form I in float.
+// High-pass (recorder_set_highpass), off by default. Removes 1-10 Hz drift that
+// correct_dc_offset leaves in, louder than speech. Runs before the gain.
+// RBJ biquad, Butterworth Q, Direct Form I.
 static bool  _hp_on = false;
 static float _hp_b0, _hp_b1, _hp_b2, _hp_a1, _hp_a2;
 static float _hp_x1, _hp_x2, _hp_y1, _hp_y2;
 
-// Samples to drop at the start of each recording (recorder_set_skip_ms). The
-// Atom's PDM mic is started on the button press and its decimation filter
-// spends ~50 ms settling at full scale — a click on every broadcast.
+// Samples to drop at the start of each recording (recorder_set_skip_ms), e.g.
+// the Atom's ~50 ms full-scale PDM start-up burst.
 static uint32_t _skip_total = 0;
 static uint32_t _skip_left  = 0;
 
@@ -45,14 +38,14 @@ void recorder_init() {
   else        ESP_LOGI(REC_TAG, "ready (%u KB ring buffer)", (unsigned)(RBUF_SIZE / 1024));
 }
 
-// Same, with a buffer of `bytes` in PSRAM — for boards that have it. Big enough
-// to hold a whole recording, which is what lets a mic test capture first and
-// upload after: Wi-Fi then transmits nothing while the mic is listening (see
-// the "Mic test (Wi-Fi quiet)" button on voice-s3).
+// Buffer in PSRAM, for audio that waits before its upload starts.
 void recorder_init_psram(size_t bytes) {
   _sbuf = xStreamBufferCreateWithCaps(bytes, 1, MALLOC_CAP_SPIRAM);
   if (!_sbuf) {
-    ESP_LOGW(REC_TAG, "PSRAM stream buffer alloc failed — falling back to internal");
+    ESP_LOGE(REC_TAG, "PSRAM stream buffer alloc (%u KB) failed — falling back to "
+             "%u KB internal: anything recorded before its upload starts "
+             "(PTT pre-roll, mic test) will be truncated to ~1 s",
+             (unsigned)(bytes / 1024), (unsigned)(RBUF_SIZE / 1024));
     recorder_init();
     return;
   }
@@ -94,32 +87,38 @@ void recorder_start() {
   xStreamBufferReset(_sbuf);
   _hp_x1 = _hp_x2 = _hp_y1 = _hp_y2 = 0.0f;
   _skip_left = _skip_total;
+  _rec_full_logged = false;
   _rec_done   = false;
   _rec_active = true;
   ESP_LOGI(REC_TAG, "recording started");
 }
 
+// Once per recording: a full buffer would log on every callback.
+static void _rec_dropped(size_t n) {
+  if (_rec_full_logged) return;
+  _rec_full_logged = true;
+  ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes (further drops in this "
+           "recording not logged)", (unsigned) n);
+}
+
 void recorder_on_data(const uint8_t* data, size_t len) {
   if (!_rec_active || !_sbuf) return;
 
-  // Fast path: nothing to do to the samples — straight passthrough.
   if (_gain_num == _gain_den && !_hp_on && _skip_left == 0) {
     size_t sent = xStreamBufferSend(_sbuf, data, len, 0);
-    if (sent < len)
-      ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(len - sent));
+    if (sent < len) _rec_dropped(len - sent);
     return;
   }
 
-  // Slow path: skip, high-pass, then gain with saturation. Process in
-  // stack-resident chunks so we don't allocate per callback. Only one callback
-  // runs at a time, so the filter state needs no locking.
+  // Skip, high-pass, gain. Stack chunks, no per-callback allocation; callbacks
+  // don't overlap, so the filter state needs no lock.
   const float gain = (float) _gain_num / (float) _gain_den;
   uint8_t scaled[512];
   size_t processed = 0;
   while (processed < len) {
     size_t remaining = len - processed;
     size_t chunk     = remaining > sizeof(scaled) ? sizeof(scaled) : remaining;
-    chunk &= ~1u;  // even count — pairs of bytes are one 16-bit sample
+    chunk &= ~1u;  // whole 16-bit samples
     if (chunk == 0) break;
 
     const int16_t* in  = reinterpret_cast<const int16_t*>(data + processed);
@@ -130,8 +129,7 @@ void recorder_on_data(const uint8_t* data, size_t len) {
       float x = (float) in[i];
       float y = x;
       if (_hp_on) {
-        // Keep filtering through the skipped stretch, so the filter has
-        // settled by the time samples are kept.
+        // Filter through the skipped stretch so it has settled.
         y = _hp_b0 * x + _hp_b1 * _hp_x1 + _hp_b2 * _hp_x2
           - _hp_a1 * _hp_y1 - _hp_a2 * _hp_y2;
         _hp_x2 = _hp_x1; _hp_x1 = x;
@@ -147,21 +145,23 @@ void recorder_on_data(const uint8_t* data, size_t len) {
     if (m > 0) {
       size_t bytes = m * 2;
       size_t sent  = xStreamBufferSend(_sbuf, scaled, bytes, 0);
-      if (sent < bytes)
-        ESP_LOGW(REC_TAG, "buffer full, dropped %u bytes", (unsigned)(bytes - sent));
+      if (sent < bytes) _rec_dropped(bytes - sent);
     }
     processed += chunk;
   }
 }
 
-// Throw away a recording in progress without ever marking it done, so no
-// uploader will see it. For a recording started speculatively — voice-s3 starts
-// one on every button press and only learns 1.2 s later whether it was a hold.
+// Discard a recording without marking it done (voice-s3's tap).
 void recorder_cancel() {
   _rec_active = false;
   _rec_done   = false;
   if (_sbuf) xStreamBufferReset(_sbuf);
   ESP_LOGI(REC_TAG, "recording cancelled");
+}
+
+// Empty the buffer, keep the recording state. For an aborted upload.
+void recorder_discard() {
+  if (_sbuf) xStreamBufferReset(_sbuf);
 }
 
 void recorder_stop() {
@@ -170,7 +170,7 @@ void recorder_stop() {
   ESP_LOGI(REC_TAG, "recording stopped");
 }
 
-// Called by the uploader task: blocks up to wait_ms for data, returns bytes read
+// Blocks up to wait_ms; returns bytes read.
 size_t recorder_drain(uint8_t* dst, size_t max_len, uint32_t wait_ms) {
   return xStreamBufferReceive(_sbuf, dst, max_len, pdMS_TO_TICKS(wait_ms));
 }

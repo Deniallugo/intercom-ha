@@ -1,36 +1,16 @@
-"""The CSG vocabulary this port is written in, on standard Fusion sketches and features.
+"""CSG helpers on standard Fusion sketches and features. All API calls live here.
 
-Every solid below is a SKETCH plus an EXTRUDE / REVOLVE / LOFT, and every boolean is a
-COMBINE feature — the same operations you would use by hand, so the timeline reads as a
-list of the shapes the OpenSCAD did and each one can be edited or rolled back in the UI.
+Rules:
+  * Nothing selects faces or edges: profiles come from computed coordinates and booleans
+    name bodies, so a parameter change can't re-target a feature. The top chamfer is a
+    loft for this reason.
+  * One closed loop per sketch, so `profiles.item(0)` is unambiguous.
+  * Plane orientation is probed (`Part._frame`), never assumed — Fusion's XZ/YZ axes
+    don't lay out the way they read, and a wrong guess silently mirrors a part.
 
-Three rules make that survivable in a port this size:
-
-  * NOTHING selects a face or an edge. Fusion's fragile part is topological selection —
-    "the top face", "these four edges" — because it silently picks a different face when
-    a dimension moves. Here every profile is drawn from computed coordinates and every
-    boolean names bodies, so the script cannot mis-select. The 45 deg top chamfer is a
-    LOFT between two computed profiles rather than a ChamferFeature for exactly that
-    reason (and it is what OpenSCAD's hull() did anyway).
-  * EVERY SKETCH HAS EXACTLY ONE CLOSED LOOP, so `profiles.item(0)` is unambiguous.
-    Rings (the register lip) are built as outer-minus-inner solids, not as two loops in
-    one sketch.
-  * NO PLANE'S ORIENTATION IS ASSUMED. A construction plane's u/v axes are its own
-    business, and a wrong guess mirrors a whole part without failing anything — which is
-    exactly what happened here: the button cap came out inside out and the devkit pocket's
-    retention tab with it, because the XZ and YZ planes do not lay out the way they read.
-    So the mapping is PROBED (`Part._frame`): three points into a scratch sketch, read
-    back in world coordinates. Every authored coordinate goes through the answer, and the
-    resulting model geometry is the same whichever way Fusion defines the plane.
-
-Units. The Fusion API is centimetres; every dimension in this design is millimetres. The
-conversion happens HERE and nowhere else — helpers take mm, `mm()` divides by ten on the
-way into a ValueInput or a Point3D. Nothing above this file may call the API directly.
-
-Frame. Authored z is OpenSCAD's: for the case, 0 is the top OUTER face and +z runs DOWN
-into the box. The base plate is drawn in its own frame (0 = inner face, +z outward) with
-its seats inside `with part.mirrored():`, which negates authored z exactly as
-`mirror([0, 0, 1])` did — so those numbers still read as "depth below the inner face".
+Units: helpers take mm; `mm()` converts to the API's cm.
+Frame: case z = 0 at the top face, +z into the box. The base plate uses its own frame,
+with seats inside `with part.mirrored():` (negates z, like ``mirror([0, 0, 1])``).
 """
 
 import math
@@ -40,8 +20,8 @@ import adsk.fusion
 
 TOL = 1e-9
 
-# Per sketch plane: the two MODEL axes a caller authors in, then the axis the extrude runs
-# along. Nothing here says which way the plane's own u/v point — that is probed.
+# Per plane: the two model axes callers author in, then the extrude axis. The plane's own
+# u/v directions are probed.
 _PLANE_AXES = {
     'xy': ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),   # (x, y), depth along z
     'yz': ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)),   # (y, z), depth along x
@@ -71,12 +51,8 @@ def _cross(a, b):
 
 
 class _Mapper:
-    """Authored in-plane pair -> the sketch's own (u, v), whatever those turn out to be.
-
-    Also carries `sweep`: if the plane's u/v are a MIRROR of the authored pair (negative
-    determinant) then counter-clockwise in authored coordinates is clockwise in the
-    sketch, and every arc has to sweep the other way or the rounded corners bulge inward.
-    """
+    """Authored in-plane pair -> sketch (u, v). Also `sweep`: -1 when the plane mirrors
+    the authored pair, so arcs sweep the other way."""
 
     def __init__(self, u, v, a1, a2):
         self.m = ((_dot(a1, u), _dot(a2, u)),
@@ -90,12 +66,10 @@ class _Mapper:
 
 
 class Part:
-    """One component, built like an OpenSCAD module: keeper bodies, then tools.
+    """One component: named keeper bodies plus tool bodies.
 
-    A keeper is created first and NAMED; `union`/`cut`/`intersect` take that name and
-    consume tool bodies into it, re-resolving the target by name after every feature
-    rather than holding a proxy across it. That is what keeps long boolean chains stable,
-    and it lets a part build a sub-assembly (the plate's board seats) before joining it.
+    `union`/`cut`/`intersect` re-resolve the keeper by name after every feature, which
+    keeps long boolean chains stable and allows sub-assemblies.
     """
 
     def __init__(self, design, name, transform=None):
@@ -124,12 +98,8 @@ class Part:
 
     # ---- plane frames, read from Fusion rather than assumed ---------------------
     def _frame(self, kind):
-        """(u, v, n) of a base construction plane, as MODEL unit vectors.
-
-        Probed once per component and cached: a scratch sketch, three points, read back
-        through `worldGeometry`, then thrown away. Cheap, and it turns "which way does the
-        XZ plane's v axis point" from an assumption into a measurement.
-        """
+        """(u, v, n) of a base plane as model unit vectors, probed once with a scratch
+        sketch and cached."""
         if kind in self._frames:
             return self._frames[kind]
         plane = {'xy': self.comp.xYConstructionPlane,
@@ -153,12 +123,8 @@ class Part:
         return _Mapper(u, v, a1, a2)
 
     def span(self, kind, a0, a1):
-        """(start, length) for an extrude between two positions on the plane's own axis.
-
-        Both are measured along the plane's NORMAL, which may point against the authored
-        axis — in which case the start flips sign and the length goes negative, and Fusion
-        extrudes backwards along the normal to land in the same place.
-        """
+        """(start, length) of an extrude between two positions along the plane's normal;
+        negative length when the normal points against the authored axis."""
         s = self._depth_sign(kind)
         return (a0*s, (a1 - a0)*s)
 
@@ -174,11 +140,7 @@ class Part:
         return self._sketch(plane)
 
     def offset_sketch(self, kind, at):
-        """a sketch on a plane parallel to `kind`, at authored position `at` on its axis.
-
-        A parallel offset keeps the base plane's u/v axes and its in-plane origin, so the
-        same mapper applies — only the offset itself has to follow the normal's sign.
-        """
+        """Sketch on a plane parallel to `kind` at authored position `at` on its axis."""
         base = {'xy': self.comp.xYConstructionPlane,
                 'yz': self.comp.yZConstructionPlane,
                 'xz': self.comp.xZConstructionPlane}[kind]
@@ -231,10 +193,7 @@ class Part:
         return lofts.add(inp).bodies.item(0)
 
     # ---- booleans --------------------------------------------------------------
-    # Targets are named, not held: a body proxy taken before a combine may not survive
-    # it, and a plain `bRepBodies.item(0)` breaks the moment a part builds a sub-assembly
-    # of its own (the plate's two board seats are cut and unioned before they join the
-    # plate). Every keeper body gets a name and is re-resolved by it after each feature.
+    # Targets are re-resolved by name: body proxies may not survive a combine.
 
     def body(self, name):
         b = self.comp.bRepBodies.itemByName(name)
@@ -272,14 +231,8 @@ class Part:
                              adsk.fusion.FeatureOperations.IntersectFeatureOperation)
 
     def cut(self, target, tools):
-        """Cut, tolerating a tool that happens to miss.
-
-        OpenSCAD does not care whether a `difference()` tool touches anything; Fusion
-        refuses the whole feature if one body in the set does not intersect. So the fast
-        path is one combine for the lot, and the fallback cuts them one at a time and
-        deletes any that turn out to be misses — a miss is a real finding (a cut that
-        was meant to land somewhere), so it is reported rather than swallowed.
-        """
+        """Cut, tolerating misses: Fusion rejects a combine if any tool misses, so fall back
+        to one tool at a time and report the misses in `warnings`."""
         tools = [t for t in tools if t is not None]
         if not tools:
             return self.body(target)
@@ -313,18 +266,14 @@ class _Mirrored:
 
 
 # ===== 2D profiles ==========================================================
-# All authored in the plane's MODEL axes and mapped through `mp` on the way in. Chained
-# geometry: each curve starts on the previous curve's end POINT object, so the loop is
-# topologically closed rather than merely closed to within a tolerance.
+# Authored in model axes, mapped through `mp`. Each curve starts on the previous curve's
+# end point object, so loops are topologically closed.
 
 def chain_loop(sk, mp, start, segments):
-    """`segments` is a list of ('line', (a, b)) and ('arc', (ca, cb), sweep_deg).
+    """`segments`: ('line', (a, b)) and ('arc', (ca, cb), sweep_deg).
 
-    A line's final segment closes onto the first point OBJECT, so it is already joined. An
-    arc cannot be given its end point, so a loop ending on one needs a coincident
-    constraint to close — added ONCE, at the end, and only if Fusion has not already merged
-    the two points itself. Adding it twice, or adding it to points Fusion merged, is a
-    "Constraint has already been applied" error rather than a no-op.
+    A loop ending on an arc needs one coincident constraint to close — added once, and only
+    if Fusion hasn't merged the points (a second one raises).
     """
     first = sk.sketchPoints.add(_pt(*mp(*start)))
     cur = first
@@ -348,11 +297,8 @@ def chain_loop(sk, mp, start, segments):
 
 
 def rrect_loop(sk, mp, w, d, r, center=(0, 0)):
-    """2D rounded rectangle centred on `center` — OpenSCAD's rounded_rect().
-
-    Degenerate straights are dropped rather than drawn zero-length, which is what lets
-    the same helper draw the vent SLOTS (r == w/2, so the ends are plain semicircles).
-    """
+    """2D rounded rectangle centred on `center`. Zero-length straights are dropped, so
+    r == w/2 draws a slot."""
     cx, cy = center
     r = max(0.0, min(r, min(w, d)/2))
     hx, hy = w/2 - r, d/2 - r          # corner arc centres
@@ -400,7 +346,7 @@ def circle_loop(sk, mp, center, d):
 
 
 # ===== solids ===============================================================
-# One function per OpenSCAD primitive, all taking authored mm and an authored z range.
+# One function per OpenSCAD primitive; authored mm and z ranges.
 
 def box(part, center, size, name=None):
     """`translate(center) cube(size, center = true)`"""
@@ -434,12 +380,8 @@ def cyl_x(part, x0, h, d, center=(0, 0), name=None):
 
 
 def cone_x(part, x0, h, d1, d2, center=(0, 0), name=None):
-    """`cylinder(h, d1 = , d2 = )` along +x, as a loft between two circles.
-
-    A loft rather than a tapered extrude: the taper's SIGN depends on which way Fusion
-    thinks the profile faces, and a lead-in chamfer that tapers the wrong way still
-    cuts a cone — it just cuts the wrong one, silently. Two explicit circles cannot.
-    """
+    """`cylinder(h, d1, d2)` along +x, as a loft between two circles (a tapered extrude's
+    sign depends on profile direction and can silently cut the wrong cone)."""
     mp = part.mapper('yz')
     sketches = []
     for x, d in ((x0, d1), (x0 + h, d2)):
@@ -469,12 +411,8 @@ def rrect_prism(part, z0, h, w, d, r, center=(0, 0), name=None):
 
 
 def rrect_loft(part, z0, z1, lo_size, hi_size, name=None):
-    """the hull of two rounded rects at two heights — the 45 deg top chamfer.
-
-    Each size is (w, d, r). With both profiles' corner arcs sharing a centre (which
-    `chamfer` and `radius - chamfer` guarantee), the ruled surface between them IS the
-    chamfer, which is what hull() produced.
-    """
+    """Loft between two rounded rects sharing corner-arc centres: the 45 deg top chamfer.
+    Each size is (w, d, r)."""
     mp = part.mapper('xy')
     sketches = []
     for z, (w, d, r) in ((z0, lo_size), (z1, hi_size)):
@@ -493,19 +431,15 @@ def prism_yz(part, pts, x_center, x_len, name=None):
 
 
 def revolve_profile(part, start, segments, name=None):
-    """a closed section in authored (radius, z), revolved about the component's Z axis.
-
-    Authored in the component's own frame — the one part that uses it, the button cap, is
-    never drawn mirrored, so `zv()` deliberately does not apply here.
-    """
+    """Closed (radius, z) section revolved about the component Z axis. Never mirrored
+    (only the button cap uses it), so `zv()` is not applied."""
     sk = part.sketch('xz')
     chain_loop(sk, part.mapper('xz'), start, segments)
     return part.revolve(sk, name)
 
 
 def _named(body, name):
-    """Name a body, uniquely — names are how keepers are re-resolved after a combine, so
-    a duplicate would make `body(name)` ambiguous. Repeats get " 2", " 3", ... ."""
+    """Name a body uniquely ("name", "name 2", ...): keepers are found by name."""
     if not name:
         return body
     comp = body.parentComponent

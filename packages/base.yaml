@@ -1,15 +1,5 @@
-# Shared baseline for every ESPHome device in this repo.
-# Devices include via:
-#   packages:
-#     secrets: !include secrets-<device>.yaml   # defines substitutions
-#     base:    !include ../packages/base.yaml   # consumes them
-#
-# Requires the device YAML (or a secrets package loaded first) to define:
-#   ${name}                — used by AP fallback SSID
-#   ${wifi_ssid}           — Wi-Fi SSID
-#   ${wifi_password}       — Wi-Fi password
-#   ${ap_password}         — AP fallback password
-#   ${api_encryption_key}  — HA API encryption key
+# Shared baseline for every device. Needs ${name}, ${wifi_ssid}, ${wifi_password},
+# ${ap_password} and ${api_encryption_key} (from secrets-<device>.yaml).
 
 logger:
 
@@ -23,11 +13,8 @@ ota:
 wifi:
   ssid: ${wifi_ssid}
   password: ${wifi_password}
-  # These devices stream mic audio up and TTS/music down, so the radio must not
-  # sleep between DTIM beacons. Measured with the default power save on voice-s3:
-  # 31/84/138 ms min/avg/max RTT at -49 dBm with 0% loss — a strong link idling
-  # most of the time. That throttles the TTS fetch to seconds of dead air before
-  # the reply starts playing.
+  # Default power save added ~84 ms avg RTT on a strong link, which delayed TTS
+  # replies by seconds.
   power_save_mode: none
   ap:
     ssid: "${name} Fallback"
