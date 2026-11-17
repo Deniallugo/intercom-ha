@@ -19,11 +19,16 @@
 substitutions:
   name: voice-s3
   friendly_name: Voice S3
+  # Button input; a device that wires it elsewhere overrides this (voice-s3-wall: GPIO1).
+  button_pin: GPIO18
   intercom_url: "http://homeassistant.local:9999/intercom"
   # Where the "Mic test recording" button uploads to. Separate from
   # ${intercom_url} so pointing a mic test at tools/mic-capture.py on a laptop
   # does not also divert PTT broadcasts away from the add-on.
   mic_test_url: "http://192.168.31.82:9999/intercom"
+  # How far music drops while the button is held, so it does not drown the
+  # recording. Deeper than Assist's 15 dB: the mic is right next to the speakers.
+  ptt_duck_db: "30"
 
 packages:
   secrets: !include secrets-voice.yaml
@@ -245,6 +250,39 @@ media_player:
       format: FLAC
       sample_rate: 48000
       num_channels: 2
+    # The add-on (4.4+) plays broadcasts with `announce: true` and no longer
+    # pauses the music: duck it here while an announcement plays (from main,
+    # c09fef3). The restore is skipped while Assist runs (its on_end/on_error
+    # restore the level) and while the button is held (the release does).
+    on_announcement:
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: 15
+          duration: 0.3s
+    on_idle:
+      - if:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - lambda: 'return !id(ptt_button).state;'
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_src
+                decibel_reduction: 0
+                duration: 0.5s
+    on_play:
+      - if:
+          condition:
+            and:
+              - not:
+                  voice_assistant.is_running:
+              - lambda: 'return !id(ptt_button).state;'
+          then:
+            - mixer_speaker.apply_ducking:
+                id: media_src
+                decibel_reduction: 0
+                duration: 0.5s
     # Wake-word chime, flashed into the app. Must be played with
     # `announcement: true`; raw speaker.play bypasses the mixer and fails with
     # "Incompatible audio streams". 48 kHz stereo matches the pipeline exactly,
@@ -462,10 +500,17 @@ voice_assistant:
         condition:
           lambda: 'return id(voice_player)->state != media_player::MEDIA_PLAYER_STATE_ANNOUNCING;'
         timeout: 30s
-    - mixer_speaker.apply_ducking:
-        id: media_src
-        decibel_reduction: 0
-        duration: 0.5s
+    # Not while the button is held: a hold that interrupts a run (hold_watch
+    # calls voice_assistant.stop) lands here mid-broadcast, and the button's
+    # own release restores the music.
+    - if:
+        condition:
+          lambda: 'return !id(ptt_button).state;'
+        then:
+          - mixer_speaker.apply_ducking:
+              id: media_src
+              decibel_reduction: 0
+              duration: 0.5s
     # Re-arm the wake word only once the answer has finished, so spawning the
     # inference task and allocating its tensor arena doesn't land on top of the
     # announcement decode. intercom-s3 has to do this first because its mic and
@@ -487,10 +532,14 @@ voice_assistant:
   # No answer coming — restore music and re-arm.
   on_error:
     - script.stop: va_watchdog
-    - mixer_speaker.apply_ducking:
-        id: media_src
-        decibel_reduction: 0
-        duration: 0.5s
+    - if:
+        condition:
+          lambda: 'return !id(ptt_button).state;'   # same as on_end
+        then:
+          - mixer_speaker.apply_ducking:
+              id: media_src
+              decibel_reduction: 0
+              duration: 0.5s
     - micro_wake_word.start:
     # Same as on_end: a failed pipeline definitely didn't cancel the timer, so
     # an unacknowledged alarm must not be swallowed by a network hiccup.
@@ -524,7 +573,7 @@ voice_assistant:
 #   tap (< 1.2 s)   → talk to Assist, same as saying "okay nabu"
 #   hold (≥ 1.2 s)  → record while held and broadcast to the other devices
 #
-# Wire: GPIO18 → button → GND (internal pull-up, active LOW).
+# Wire: ${button_pin} (GPIO18 by default) → button → GND (internal pull-up, active LOW).
 #
 # NOT 38 or 39, measured: with the switch open both flicker at 20-30 edges/s
 # continuously, sub-2 ms glitches included — a floating input, not bounce. They
@@ -643,13 +692,21 @@ binary_sensor:
     id: ptt_button
     name: "Button"
     pin:
-      number: GPIO18
+      number: ${button_pin}
       mode: INPUT_PULLUP
       inverted: true
     filters:
       - delayed_on: 25ms      # debounce
       - delayed_off: 25ms
     on_press:
+      # Music down for as long as the button is held — the recording starts
+      # right here and the mic sits next to the speakers. Every release path
+      # below puts it back (a tap that starts Assist hands over to on_start's
+      # own 15 dB duck instead).
+      - mixer_speaker.apply_ducking:
+          id: media_src
+          decibel_reduction: ${ptt_duck_db}
+          duration: 0.15s
       # Start recording NOW, not when the hold is confirmed 1.2 s later — that
       # wait used to cost the first second of every broadcast, because people
       # talk as they press. A tap throws this away (recorder_cancel below).
@@ -701,6 +758,10 @@ binary_sensor:
                       id: alarm_suspended
                       value: 'false'
                   - script.stop: timer_alarm
+                  - mixer_speaker.apply_ducking:
+                      id: media_src
+                      decibel_reduction: 0
+                      duration: 0.5s
                 else:
                   - if:
                       condition:
@@ -719,6 +780,10 @@ binary_sensor:
                               lambda: 'return id(va)->get_api_connection() == nullptr;'
                             then:
                               - logger.log: "tap ignored — Home Assistant not subscribed"
+                              - mixer_speaker.apply_ducking:
+                                  id: media_src
+                                  decibel_reduction: 0
+                                  duration: 0.5s
                             else:
                               - micro_wake_word.stop:
                               # Same chime as the wake word — feedback, and it
@@ -739,6 +804,11 @@ binary_sensor:
                       recorder_stop();
                       id(intercom_recording) = false;
                       id(ptt_armed) = false;
+                  # Recording is closed — the music can come back now.
+                  - mixer_speaker.apply_ducking:
+                      id: media_src
+                      decibel_reduction: 0
+                      duration: 0.5s
                   - wait_until:
                       condition:
                         lambda: 'return !uploader_is_uploading();'
@@ -748,3 +818,10 @@ binary_sensor:
                   # I²S driver between the two.
                   - micro_wake_word.start:
                   - lambda: id(inmp441_mic).stop();
+                else:
+                  # Hold refused (an upload was still in flight): nothing was
+                  # recorded, just undo the press's duck.
+                  - mixer_speaker.apply_ducking:
+                      id: media_src
+                      decibel_reduction: 0
+                      duration: 0.5s
