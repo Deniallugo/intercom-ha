@@ -64,41 +64,46 @@ def main():
     m = build.unmatrix(build.matrix(xf.mul(xf.T(3, -4, 5), xf.Rx(90))))
     check(xf.same_rotation(m, xf.Rx(90)) and all(abs(a - b) < 1e-9 for a, b in zip(m[1], (3, -4, 5))),
           'matrix() / unmatrix() round-trip')
-    world = xf.apply(assembly.place_box(0), (0, 10, 0))
-    check(abs(world[1] - P.front_y()) < 1e-9 and abs(world[2] - 10) < 1e-9,
-          'box-local front face lands at y = front_y() in the world, local y -> world z')
-    check(abs(xf.det(assembly.PLATE_XF) - 1) < 1e-12, 'the plate placement is a rotation, not a mirror')
-    check(abs(xf.det(assembly.place_box(0)) - 1) < 1e-12, 'the box placement is a rotation')
+    world = xf.apply(elec.box_world(), (0, 10, 0))
+    check(abs(world[1] - P.box_d) < 1e-9 and abs(world[2] - 10) < 1e-9,
+          'box-local front face lands at y = box_d in the world, local y -> world z')
+    check(abs(xf.det(elec.box_world()) - 1) < 1e-12, 'the box placement is a rotation')
+    knob = xf.apply(P.amp_xf(), (P.ctrl_pitch, P.amp_pcb_y() + P.ctrl_axis, P.top_z_a()))
+    check(abs(knob[1] - P.box_h()) < 1e-9 and knob[0] > 0,
+          'the VOL pot comes out of the top on +x (the viewer\'s left)')
 
     print('== nothing that Fusion has to move is a group ==')
     scad_emit.OCCURRENCES.clear()
     d = Design()
     _, items = assembly.build(d, 'all')
     stuck = build.place_all(d, items)
-    groups = [o for o in scad_emit.OCCURRENCES if o.component.name in (assembly.AMP_GROUP, assembly.VOICE_GROUP)]
+    groups = [o for o in scad_emit.OCCURRENCES if o.component.name == assembly.ELEC_GROUP]
     check(stuck == [] and all(xf.same_rotation(build.unmatrix(g.transform2), xf.IDENTITY)
                               and max(map(abs, build.unmatrix(g.transform2)[1])) < 1e-9 for g in groups),
-          'both electronics groups stay at the identity, everything else is placed')
+          'the electronics group stays at the identity, everything else is placed')
 
     print('== a fresh build has nothing to sync ==')
     d = built_document()
     moved, built = sync.read(d)
     check(moved == {}, 'no electronic part is off the identity after a build')
-    check(built is not None and built['s3_z0'] == P.s3_z0, 'the build stamped its placement into the design')
+    check(built is not None and tuple(built['s3_pos']) == P.s3_pos, 'the build stamped its placement into the design')
 
     print('== drag, then sync ==')
     drag(d, 'ESP32-S3 devkit', (3, 1.5, -2))
-    drag(d, 'INMP441', (0, 0, 4))
+    drag(d, 'INMP441', (0, 0, 2))
     drag(d, 'knobs', (5, 0, 0))
     drag(d, 'MP1584', (-1, 0, 0), rot=xf.Rz(10))
+    drag(d, 'ZK-502MT', (2, 0, 0))
     moved, built = sync.read(d)
-    check(set(moved) == {'ESP32-S3 devkit', 'INMP441', 'knobs', 'MP1584'}, 'read() sees exactly the four dragged parts')
+    check(set(moved) == {'ESP32-S3 devkit', 'INMP441', 'knobs', 'MP1584', 'ZK-502MT'},
+          'read() sees exactly the five dragged parts')
     updates, notes = sync.plan(moved, built)
-    check(updates.get('s3_x') == round(P.s3_x + 3, 1), 'devkit x drag -> s3_x')
-    check(updates.get('s3_z0') == round(P.s3_z0 - 2, 1), 'devkit z drag -> s3_z0')
-    check(list(updates.get('mic_pos') or []) == [P.mic_pos[0], P.mic_pos[1] + 4], 'mic z drag (along the top face) -> mic_pos[1]')
-    check(updates.get('mp_x') == round(P.mp_x - 1, 1), 'MP1584 x drag -> mp_x, despite the rotation')
-    check(any('ignored' in n and 'ESP32' in n and ' y' in n for n in notes), "devkit's y drag is reported as ignored")
+    check(list(updates.get('s3_pos') or []) == [round(P.s3_pos[0] + 3, 1), round(P.s3_pos[1] + 1.5, 1)],
+          'devkit x / y drag -> s3_pos')
+    check(list(updates.get('mic_pos') or []) == [P.mic_pos[0], P.mic_pos[1] + 2], 'mic z drag (along the bottom) -> mic_pos[1]')
+    check(list(updates.get('mp_pos') or [])[0] == round(P.mp_pos[0] - 1, 1), 'MP1584 x drag -> mp_pos, despite the rotation')
+    check(updates.get('amp_x') == round(P.amp_x + 2, 1), 'amp drag along its own x -> amp_x')
+    check(any('ignored' in n and 'ESP32' in n and ' z' in n for n in notes), "devkit's z drag is reported as ignored")
     check(any(n.startswith('knobs follows') for n in notes), 'a following part is reported, not synced')
     check(any('rotated' in n and 'MP1584' in n for n in notes), 'a rotation is reported, not synced')
     check('btn_pos' not in updates, 'nothing else changes')
@@ -112,7 +117,7 @@ def main():
     new = sync.rewrite(src, updates)
     ns = {}
     exec(compile(new, 'placement.py', 'exec'), ns)
-    check(ns['s3_x'] == updates['s3_x'] and tuple(ns['mic_pos']) == tuple(updates['mic_pos']),
+    check(tuple(ns['s3_pos']) == tuple(updates['s3_pos']) and tuple(ns['mic_pos']) == tuple(updates['mic_pos']),
           'the rewritten file reads back the new values')
     old_lines, new_lines = src.splitlines(), new.splitlines()
     changed = [i for i, (a, b) in enumerate(zip(old_lines, new_lines)) if a != b]
@@ -124,11 +129,11 @@ def main():
         fh.write(new)
 
     print('== the checks catch a bad drag ==')
-    saved = P.s3_z0
-    P.s3_z0 = 10                                 # devkit dragged into the button holder
+    saved = P.dac_pos
+    P.dac_pos = (5, P.dac_pos[1])               # DAC dragged over the amp
     f = checks.run_checks()
-    P.s3_z0 = saved
-    check(any('button holder' in x for x in f), 'devkit dragged into the button holder is refused')
+    P.dac_pos = saved
+    check(any('PCM5102A' in x and 'ZK-502MT' in x for x in f), 'DAC dragged onto the amp is refused')
 
     print('== every movable axis maps to a real placement number ==')
     for k in elec.components():

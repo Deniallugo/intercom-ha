@@ -1,8 +1,8 @@
 """Builds every entry of ``elec.py`` as its own Fusion component.
 
 One component per part — "ZK-502MT", "MP1584", "ESP32-S3 devkit", "AUX plug (DAC)", ... —
-each built at the identity inside its box's sub-assembly, from the same box-local numbers the
-case features use. So in Fusion each one is a separate item in the browser that can be hidden,
+each built at the identity inside the "electronics" group, from the same numbers the case
+features use. So in Fusion each one is a separate item in the browser that can be hidden,
 isolated, measured, checked with Inspect > Interference, or DRAGGED; `sync` then reads the drag
 back into ``placement.py``.
 
@@ -21,7 +21,7 @@ def _prim(part, p):
 
 
 def build(design, groups):
-    """`groups` maps 'amp' / 'voice' to the group each part goes in.
+    """`groups` maps each part's `where` ('amp' / 'unit') to the group it goes in.
 
     Every part is drawn directly in WORLD coordinates — its box's quarter turn applied to the
     numbers, not to an occurrence — and neither the parts nor their groups are ever moved.

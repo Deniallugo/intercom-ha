@@ -163,6 +163,46 @@ class Constraints:
         self.pairs.add(key)
 
 
+class TextInput:
+    def __init__(self, text, height):
+        self.text, self.height = text, height
+        self.fontName = 'Arial'
+        self.box = None
+
+    def setAsMultiLine(self, corner, diagonal, halign, valign, spacing):
+        self.box = (corner, diagonal)
+        return True
+
+
+class SketchText:
+    """extrudes like a profile: emitted as OpenSCAD text() in its sketch's frame"""
+
+    def __init__(self, sk, inp):
+        self.sk, self.inp = sk, inp
+        self.name = '%s text' % sk.name
+
+    def matrix(self):
+        return self.sk.matrix()
+
+    def scad2d(self):
+        (a, b) = self.inp.box
+        cu, cv = (a.x + b.x)/2*S, (a.y + b.y)/2*S
+        return ('translate([%.6f, %.6f]) text("%s", size = %.6f, font = "%s", halign = "center", '
+                'valign = "center")' % (cu, cv, self.inp.text, self.inp.height*S, self.inp.fontName))
+
+
+class Texts:
+    def __init__(self, sk):
+        self.sk = sk
+
+    def createInput2(self, text, height):
+        return TextInput(text, height)
+
+    def add(self, inp):
+        assert inp.box, 'text with no box'
+        return SketchText(self.sk, inp)
+
+
 class Profiles:
     def __init__(self, sk):
         self.sk = sk
@@ -204,6 +244,7 @@ class Sketch:
         self.deleted = False
         self.sketchCurves = Curves(self)
         self.sketchPoints = Points(self)
+        self.sketchTexts = Texts(self)
         self.geometricConstraints = Constraints()
         self.profiles = Profiles(self)
 
@@ -409,7 +450,19 @@ class Planes:
         self.comp = comp
 
     def createInput(self):
-        return types.SimpleNamespace(setByOffset=self._set)
+        return types.SimpleNamespace(setByOffset=self._set, setByAngle=self._angle)
+
+    def _angle(self, axis, angle, plane):
+        """the plane turned `angle` (radians) about a model axis through the origin"""
+        k = axis.d
+        c, s_ = math.cos(angle), math.sin(angle)
+
+        def rot(v):
+            kv = _cross(k, v)
+            kd = k[0]*v[0] + k[1]*v[1] + k[2]*v[2]
+            return tuple(v[i]*c + kv[i]*s_ + k[i]*kd*(1 - c) for i in range(3))
+        self._pending = Plane('%s@%.3f' % (plane.name, angle), rot(plane.o), rot(plane.u), rot(plane.v))
+        return True
 
     def _set(self, plane, offset):
         self._pending = plane.offset(offset)
@@ -442,7 +495,9 @@ class Component:
         self.xYConstructionPlane = Plane('XY', (0, 0, 0), *PLANES['xy'])
         self.yZConstructionPlane = Plane('YZ', (0, 0, 0), *PLANES['yz'])
         self.xZConstructionPlane = Plane('XZ', (0, 0, 0), *PLANES['xz'])
-        self.zConstructionAxis = types.SimpleNamespace(name='Z')
+        self.zConstructionAxis = types.SimpleNamespace(name='Z', d=(0.0, 0.0, 1.0))
+        self.yConstructionAxis = types.SimpleNamespace(name='Y', d=(0.0, 1.0, 0.0))
+        self.xConstructionAxis = types.SimpleNamespace(name='X', d=(1.0, 0.0, 0.0))
         self.occurrences = Occurrences()
 
     @property
@@ -682,6 +737,8 @@ def install():
     core.ValueInput = types.SimpleNamespace(createByReal=lambda v: v,
                                             createByString=lambda s: s)
     core.ObjectCollection = types.SimpleNamespace(create=lambda: _Coll())
+    core.HorizontalAlignments = types.SimpleNamespace(CenterHorizontalAlignment='center')
+    core.VerticalAlignments = types.SimpleNamespace(MiddleVerticalAlignment='middle')
 
     fusion.FeatureOperations = types.SimpleNamespace(
         NewBodyFeatureOperation='new', JoinFeatureOperation='join',

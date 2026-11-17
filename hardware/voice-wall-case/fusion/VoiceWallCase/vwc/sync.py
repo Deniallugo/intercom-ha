@@ -24,7 +24,7 @@ from . import elec, xf
 from . import params as P
 
 TOL = 0.05      # mm: smaller moves are noise from the drag, not intent
-BOXES = ('amp electronics', 'voice electronics')
+BOXES = ('electronics',)
 
 
 def read(design):

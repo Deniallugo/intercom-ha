@@ -1,80 +1,47 @@
 """What each part selector builds, and where everything goes in the assembled unit.
 
-Every printed part is built in its PRINT frame (so a component exports print-ready) and every
-electronic part in its box's LOCAL frame; the transforms below put each one in place. The tree
-in Fusion's browser is:
+Every printed part is built in its PRINT frame (so a component exports print-ready) and placed
+at the end; every electronic part is drawn straight in world coordinates inside one group,
+"electronics", which is never moved. The browser:
 
-    amp electronics     (sub-assembly, placed where the amp box is)
-        ZK-502MT, knobs, MP1584, power switch, DC plug, AUX plug (amp), amp wiring
-    voice electronics   (sub-assembly, placed where the voice box is)
-        ESP32-S3 devkit, PCM5102A, AUX plug (DAC), INMP441, tactile switch, voice wiring
-    amp shell, amp lid, amp sled, voice shell, voice lid, voice tray, sleeve,
-    plunger, dome, button holder, mic clamp, wall plate, lock bracket
-
-Inside each electronics group every part sits at the IDENTITY, in box-local coordinates — so a
-part you drag shows its move directly as box-local x / y / z, which is what `sync` reads.
+    electronics      ZK-502MT, knobs, DC plug, AUX plug (amp), amp wiring, ESP32-S3 devkit,
+                     PCM5102A, AUX plug (DAC), MP1584, INMP441, tactile switch, voice wiring
+    tray, panel, switch bridge, mic clamp
 """
 
 import json
 
-from . import appearance, button, case, elec, electronics, plate, xf
+from . import appearance, button, case, elec, electronics, xf
 from . import params as P
 from .build import Group, Part
 
-
-AMP_GROUP, VOICE_GROUP = 'amp electronics', 'voice electronics'
-
-
-def place_box(z0):
-    """box-local -> world: OpenSCAD's translate([0, front_y, z0]) rotate([90, 0, 0])"""
-    return xf.mul(xf.T(0, P.front_y(), z0), xf.Rx(90))
+ELEC_GROUP = 'electronics'
 
 
-def box_xf(where):
-    return elec.box_xf(where)
-
-
-# plate frame (x, y up, z out of the wall) -> world (-x, z, y). A rotation, not the OpenSCAD's
-# mirror (Fusion takes rigid transforms only); identical because the plate is x-symmetric.
-PLATE_XF = xf.M(((-1, 0, 0), (0, 0, 1), (0, 1, 0)))
-FLAT_INV = xf.inverse(case.FLAT)
-
-
-def box_parts():
-    """[(name, builder, transform within the box)] for both boxes"""
-    bx, by = P.btn_pos
-    mx, my = P.mic_pos
-    amp = [(case.AMP_SHELL, case.amp_shell, xf.IDENTITY),
-           (case.AMP_LID, case.amp_lid, xf.T(0, 0, P.box_d())),
-           (case.AMP_SLED, case.amp_sled, FLAT_INV)]
-    voice = [(case.VOICE_SHELL, case.voice_shell, xf.IDENTITY),
-             (case.VOICE_LID, case.voice_lid, xf.T(0, 0, P.box_d())),
-             (case.VOICE_TRAY, case.voice_tray, FLAT_INV),
-             (case.SLEEVE, case.sleeve, xf.mul(xf.T(P.sleeve_x, P.tray_top() + 1.6, P.sleeve_zc()),
-                                               xf.Rx(90))),
-             (button.PLUNGER, button.plunger, xf.T(bx, by, P.btn_flange_top_z())),
-             (button.DOME, button.dome, xf.mul(xf.T(bx, by, P.btn_dome_base_z()), xf.Rx(180))),
-             (button.HOLDER, button.holder, xf.mul(xf.T(bx, by, P.bh_z1()), xf.Rx(180))),
-             # the bar rests ON the post tops, so its outer face is clamp_t beyond them
-             (button.CLAMP, button.clamp, xf.chain(P.top_face(P.voice_h),
-                                                   xf.T(mx, my, P.wall + P.mic_post_h + P.mic_clamp_t),
-                                                   xf.Rx(180)))]
-    return amp, voice
+def placements():
+    """[(name, builder, print frame -> world)] for every printed part of the unit"""
+    W = elec.box_world()
+    mx, mz = P.mic_pos
+    return [(case.TRAY, case.tray, xf.mul(W, xf.inverse(case.tray_print()))),
+            (case.PANEL, case.panel, W),
+            (case.BRIDGE, case.bridge, xf.mul(W, P.bridge_xf())),
+            # bar under the post tips, pad pressing UP onto the mic board
+            (button.CLAMP, button.clamp, xf.chain(W, xf.T(mx, P.box_h() - P.wall - P.mic_post_h - P.mic_clamp_t, mz),
+                                                  xf.Rx(-90)))]
 
 
 SINGLE = {
-    'amp-shell': (case.AMP_SHELL, case.amp_shell), 'amp-lid': (case.AMP_LID, case.amp_lid),
-    'amp-sled': (case.AMP_SLED, case.amp_sled), 'voice-shell': (case.VOICE_SHELL, case.voice_shell),
-    'voice-lid': (case.VOICE_LID, case.voice_lid), 'voice-tray': (case.VOICE_TRAY, case.voice_tray),
-    'sleeve': (case.SLEEVE, case.sleeve), 'plunger': (button.PLUNGER, button.plunger),
-    'dome': (button.DOME, button.dome), 'holder': (button.HOLDER, button.holder),
-    'clamp': (button.CLAMP, button.clamp), 'plate': (plate.PLATE, plate.plate),
-    'lock': (plate.LOCK, plate.lock),
-    'coupon-amp': ('coupon amp', lambda p: case.coupon(p, 'amp')),
-    'coupon-voice': ('coupon voice', lambda p: case.coupon(p, 'voice')),
+    'tray': (case.TRAY, case.tray), 'panel': (case.PANEL, case.panel),
+    'bridge': (case.BRIDGE, case.bridge), 'clamp': (button.CLAMP, button.clamp),
+    'coupon-button': ('coupon button', lambda p: case.coupon(p, 'button')),
+    'coupon-top': ('coupon top', lambda p: case.coupon(p, 'top')),
 }
-PARTS = ('all', 'electronics') + tuple(SINGLE) + ('sync',)
-SHELLS = (case.AMP_SHELL, case.VOICE_SHELL, case.AMP_LID, case.VOICE_LID, plate.PLATE)
+# `small`: the small printed parts on one bed, each in its print orientation
+SMALL = ('bridge', 'clamp')
+BED_W = 220         # mm, rows wrap at this width
+BED_GAP = 6         # mm between parts
+PARTS = ('all', 'electronics', 'small') + tuple(SINGLE) + ('sync',)
+SHELLS = (case.TRAY, case.PANEL)
 
 
 def _timeline_mark(design):
@@ -110,24 +77,23 @@ def build(design, which, ghost=None):
         name, builder = SINGLE[which]
         p = _make(design, name, builder)
         return [p], [p]
+    if which == 'small':
+        # Fusion grounds the FIRST component of a design, and a grounded one would not take its
+        # bed position. A group that is never moved goes first.
+        Group(design, 'print bed')
+        parts = [_make(design, *SINGLE[k]) for k in SMALL]
+        lay_out(parts)
+        return parts, parts
     printed, items = [], []
-    # The groups hold the ELECTRONICS only, each part at the group's identity. Printed parts
-    # are top-level components placed in root coordinates: Fusion misplaced printed parts
-    # positioned INSIDE a group (the amp shell landed rotated off its box, first real run), and
-    # a root-level placement is the one form that came out right every time.
-    groups = {'amp': Group(design, AMP_GROUP), 'voice': Group(design, VOICE_GROUP)}
-    # the groups are never moved — see electronics.build()
-    items += groups.values()
+    # The group holds the ELECTRONICS only, each part at its identity, and is never moved — it is
+    # also the design's first component, so Fusion grounding it costs nothing.
+    group = Group(design, ELEC_GROUP)
+    items.append(group)
     if which == 'all':
-        amp, voice = box_parts()
-        for where, plist in (('amp', amp), ('voice', voice)):
-            bx = box_xf(where)
-            for name, builder, x in plist:
-                printed.append(_make(design, name, builder, None, xf.mul(bx, x)))
-        printed.append(_make(design, plate.PLATE, plate.plate, None, PLATE_XF))
-        printed.append(_make(design, plate.LOCK, plate.lock, None, xf.T(0, 0, P.plate_h())))
+        for name, builder, x in placements():
+            printed.append(_make(design, name, builder, None, x))
     start = _timeline_mark(design)
-    elec_parts = electronics.build(design, groups)
+    elec_parts = electronics.build(design, {'amp': group, 'unit': group})
     _timeline_group(design, 'electronics', start)
     items += printed + elec_parts
     if ghost is not None:
@@ -136,6 +102,37 @@ def build(design, which, ghost=None):
                 appearance.ghost(p.occ, ghost)
     remember_placement(design)
     return printed, items
+
+
+def footprint(p):
+    """(min, max) corners in mm of a built part, in its own (print) frame"""
+    bb = p.comp.bRepBodies.item(0).boundingBox
+    lo, hi = bb.minPoint, bb.maxPoint
+    return (lo.x*10, lo.y*10, lo.z*10), (hi.x*10, hi.y*10, hi.z*10)
+
+
+def pack(sizes, bed_w=BED_W, gap=BED_GAP):
+    """shelf packing: [(w, d)] -> [(x, y)] lower-left corners. Tallest-first rows, wrapping at
+    bed_w; a part wider than the bed gets a row of its own."""
+    order = sorted(range(len(sizes)), key=lambda i: -sizes[i][1])
+    out = [None]*len(sizes)
+    x = y = row_d = 0.0
+    for i in order:
+        w, d = sizes[i]
+        if x > 0 and x + w > bed_w:
+            x, y, row_d = 0.0, y + row_d + gap, 0.0
+        out[i] = (x, y)
+        x += w + gap
+        row_d = max(row_d, d)
+    return out
+
+
+def lay_out(parts):
+    """every part's print frame put on one bed: bottom on z = 0, no two footprints touching"""
+    boxes = [footprint(p) for p in parts]
+    spots = pack([(hi[0] - lo[0], hi[1] - lo[1]) for lo, hi in boxes])
+    for p, (lo, _), (x, y) in zip(parts, boxes, spots):
+        p.place(xf.T(x - lo[0], y - lo[1], -lo[2]))
 
 
 ATTR_GROUP, ATTR_NAME = 'voice-wall-case', 'placement'

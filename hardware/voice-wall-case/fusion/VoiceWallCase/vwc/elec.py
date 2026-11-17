@@ -1,15 +1,18 @@
 """Every electronic part in the unit, as data — pure Python, no adsk.
 
 One description, three consumers:
-  * ``electronics.py`` builds each entry as its own Fusion component (inside its box's
-    sub-assembly), so it shows up in the browser, can be hidden, measured, or DRAGGED;
+  * ``electronics.py`` builds each entry as its own Fusion component (inside the "electronics"
+    group), so it shows up in the browser, can be hidden, measured, or DRAGGED;
   * ``checks.py`` tests every pair of parts for overlap and every part against the box's
-    cavity and the printed obstacles in it (lid bosses, floor, button holder, mic clamp);
+    cavity and the printed obstacles in it (standoffs, pockets, posts, the button bridge);
   * ``sync.py`` maps a drag in Fusion back to the placement number that moved it.
 
-A part is a list of primitives in its box's LOCAL frame (x across, y up from the box bottom,
-z into the box from the front face) — the same frame every case feature is authored in, so a
-dummy and the pocket made for it are drawn from the same numbers.
+Each part is drawn in the frame its numbers are measured in (``params`` docstring):
+  where = 'amp'   the ZK-502MT and what plugs into it, in the A frame; ``params.amp_xf()`` puts
+                  it in the box;
+  where = 'unit'  everything else, already in box-local B (front-wall boards are drawn in their
+                  tray frame and put on the plate or the tower here, with ``params.plate_xf()``).
+``in_box(comp)`` gives any part's primitives in B; ``box_xf(where)`` takes its frame to the world.
 
 The shapes are DUMMIES. Board outlines, connector positions and heights come from
 ``params.py`` and carry its tags; the bodies standing on them (pot cans, jack bodies, the
@@ -20,8 +23,8 @@ Kinds of primitive:
   box     axis-aligned, `lo`..`hi`
   cyl     along `axis`, centre `c` in the other two axes in (x, y, z) order, `d`, `a0`..`a1`
 Flags:
-  outside   deliberately outside the cavity (a knob, a flange, a part in a wall rebate) —
-            skipped by the cavity check, still checked against other parts
+  outside   deliberately outside the cavity (a knob, a shaft through the top) — skipped by the
+            cavity check, still checked against other parts
   soft      a cable: drawn, never checked. Cables bend; the routes are illustrations
 """
 
@@ -32,11 +35,19 @@ except ImportError:
     import xf
 
 
+def box_world():
+    """B -> world: the box on the wall, front face box_d out, bottom on z = 0"""
+    return xf.mul(xf.T(0, P.box_d, 0), xf.Rx(90))
+
+
+def frame(where):
+    """the part's own frame -> B"""
+    return P.amp_xf() if where == 'amp' else xf.IDENTITY
+
+
 def box_xf(where):
-    """box-local -> world for 'amp' / 'voice': OpenSCAD's translate([0, front_y, z0])
-    rotate([90, 0, 0]). A quarter turn, so axis-aligned stays axis-aligned."""
-    z0 = 0 if where == 'amp' else P.voice_z0()
-    return xf.mul(xf.T(0, P.front_y(), z0), xf.Rx(90))
+    """the part's own frame -> world"""
+    return xf.mul(box_world(), frame(where))
 
 
 def to_world(p, x):
@@ -128,8 +139,9 @@ class Comp:
         self.note = note
 
 
+
 # =====================================================================================
-# amplifier box
+# amplifier, A frame
 # =====================================================================================
 def _amp():
     ax = P.amp_x
@@ -139,9 +151,9 @@ def _amp():
     zr = P.amp_rear_z()                        # PCB rear edge
     pr = [
         box('PCB', (ax - P.amp_w/2, y0, zp), (ax + P.amp_w/2, y1, zr), 'pcb_dark'),
-        # The faceplate sits in the front wall's rebate by design, so it is "outside".
+        # the faceplate lies just under the top wall; the pot nuts sit in the face_gap above it
         cbox('faceplate', (ax + P.amp_face_x, P.amp_face_y() + P.amp_face_h/2, zf + P.amp_face_t/2),
-             (P.amp_face_w, P.amp_face_h, P.amp_face_t), 'black', outside=True),
+             (P.amp_face_w, P.amp_face_h, P.amp_face_t), 'black'),
         cbox('heatsink', (ax + P.amp_hs[0], (y1 + P.amp_env_top())/2, P.amp_bz(P.amp_hs[1])),
              (P.amp_hs[2], P.amp_env_top() - y1, P.amp_hs[3]), 'alu'),
     ]
@@ -151,8 +163,8 @@ def _amp():
         bw, bd, bh = P.amp_pot_body
         pr.append(box('pot', (x - bw/2, y1, zp), (x + bw/2, y1 + bh, zp + bd), 'metal'))
         # bushing + nut through the faceplate, and the shaft out of the box
-        pr.append(cyl('bushing', 'z', (x, axis_y), P.ctrl_bush_d, zf - 1.5, zp, 'metal',
-                      outside=True))
+        # into the knob hole in the top: through a wall on purpose, so "outside" the cavity
+        pr.append(cyl('bushing', 'z', (x, axis_y), P.ctrl_bush_d, zf - 1.5, zp, 'metal', outside=True))
         pr.append(cyl('shaft', 'z', (x, axis_y), P.amp_pot_shaft_d, zf - P.ctrl_shaft_proj,
                       zf - 1.5, 'metal', outside=True))
     pr.append(cyl('LED', 'z', (ax + P.ctrl_led[0], y0 + P.ctrl_led[1]), P.amp_led_d,
@@ -167,6 +179,8 @@ def _amp():
                   (ax + P.amp_aux_x + w/2, y1 + h, z0), 'black'))
     pr.append(box('barrier block', (ax + P.amp_term_x[0], y1, zr - P.amp_term_depth),
                   (ax + P.amp_term_x[1], y1 + P.amp_term_h, zr), 'green'))
+    for cx, cr in P.amp_caps:                  # the two big electrolytics: tallest after the heatsink
+        pr.append(cyl('470 uF cap', 'y', (ax + cx, P.amp_bz(cr)), P.amp_cap_d, y1, y1 + P.amp_cap_h, 'metal'))
     sx, sz = P.amp_sw_onboard_at
     w, d, h = P.amp_sw_onboard
     pr.append(cbox('onboard switch', (ax + sx, y1 + h/2, P.amp_bz(sz)), (w, h, d), 'yellow'))
@@ -175,269 +189,262 @@ def _amp():
     for hx, hr in P.amp_holes:
         pr.append(cyl('screw head', 'y', (ax + hx, P.amp_bz(hr)), hd, y1, y1 + hh, 'metal'))
     return Comp('ZK-502MT', 'amp', pr,
-                moves={'x': ('amp_x', None), 'y': ('amp_lift', None), 'z': ('amp_setback', None)},
-                note='board + faceplate + heatsink + pots + rear connectors')
+                moves={'x': ('amp_x', None), 'y': ('amp_lift', None)},
+                note='upright on the back plate, parts facing the front, knobs up through the top')
+
+
 
 
 def _knobs():
     pr = []
     axis_y = P.amp_pcb_y() + P.ctrl_axis
-    for i in (-1, 0, 1):
-        x = P.amp_x + P.ctrl_x0 + i*P.ctrl_pitch
-        pr.append(cyl('knob', 'z', (x, axis_y), P.knob_d, -P.knob_gap - P.knob_h, -P.knob_gap,
-                      'knob', outside=True))
+    z_top = P.top_z_a()                          # the top's outer face, as an A-frame z
+    for x, _ in P.knob_xs():                     # A x == B x for the amp
+        pr.append(cyl('knob', 'z', (x, axis_y), P.knob_d,
+                      z_top - P.knob_gap - P.knob_h, z_top - P.knob_gap, 'knob', outside=True))
     return Comp('knobs', 'amp', pr, follows='ZK-502MT', mates=('ZK-502MT',),
-                note='on the pot shafts, outside the front face')
-
-
-def _mp1584():
-    yb = P.wall + P.sled_t                     # sits on the sled, inside its pocket
-    yt = yb + 1.2
-    zc = P.mp_zc()
-    pr = [cbox('PCB', (P.mp_x, (yb + yt)/2, zc), (P.mp_w, yt - yb, P.mp_l), 'pcb_blue')]
-    w, d, h = P.mp_inductor
-    pr.append(cbox('inductor', (P.mp_x - 4, yt + h/2, zc), (w, h, d), 'black'))
-    w, d, h = P.mp_trim
-    pr.append(cbox('trim pot', (P.mp_x + 6, yt + h/2, zc + 4), (w, h, d), 'blue'))
-    return Comp('MP1584', 'amp', pr, moves={'x': ('mp_x', None), 'z': ('mp_dz', None)},
-                note='24 V -> 5 V buck, in the sled pocket. Set to 5.0 V BEFORE connecting')
-
-
-def _psw():
-    xo = P.box_w/2                             # outer face of the +x wall
-    xi = xo - P.wall
-    zc, yc = P.psw_zc(), P.amp_psw_y
-    fz, fy, fx = P.psw_flange
-    bx, bz, by = P.amp_psw_body
-    pr = [cbox('bezel', (xo + fx/2, yc, zc), (fx, fy, fz), 'black', outside=True),
-          cbox('through wall', (xo - P.wall/2, yc, zc), (P.wall, P.amp_psw_cut[1] - 0.4,
-                                                          P.amp_psw_cut[0] - 0.4),
-               'black', outside=True),
-          box('body', (xi - bx, yc - by/2, zc - bz/2), (xi, yc + by/2, zc + bz/2), 'black')]
-    return Comp('power switch', 'amp', pr,
-                moves={'z': ('psw_dz', None), 'y': ('amp_psw_y', None)},
-                note='panel rocker on the +x wall, replaces the unreachable onboard switch')
+                note='on the pot shafts, above the top')
 
 
 def _amp_plugs():
+    """right-angle plugs in the connector edge, which faces DOWN: head along the jack axis, the
+    cable turning toward the plate"""
     y1 = P.amp_pcb_top()
     z0 = P.plug_z0()
-    # straight barrel plug, out through the lid's cable window, then down the channel
-    dc_c = (P.amp_x + P.amp_dc_x, y1 + P.amp_dc_axis)
-    zl = P.box_d() + P.lid_t
-    dc = [cyl('plug', 'z', dc_c, P.amp_dc_plug_d, z0, z0 + P.dc_plug_len, 'black', outside=True)]
-    dc += route('cable', [(dc_c[0], dc_c[1], z0 + P.dc_plug_len), (dc_c[0], dc_c[1], zl + 8),
-                          (dc_c[0], -25, zl + 8)], P.dc_cable_d)
-    # right-angle AUX plug in the amp's jack; head along z, cable up out of its top
+    dx, dy = P.amp_x + P.amp_dc_x, y1 + P.amp_dc_axis
+    # straight in from under the box, through the base: the body passes the bottom wall
+    dc = [cyl('plug', 'z', (dx, dy), P.amp_dc_plug_d, z0, z0 + P.amp_dc_plug_len, 'black', outside=True)]
+    dc += route('cable', [(dx, dy, z0 + P.amp_dc_plug_len), (dx, dy, z0 + P.amp_dc_plug_len + 25)],
+                P.dc_cable_d)
     ax, ay = P.amp_x + P.amp_aux_x, y1 + P.amp_aux_axis
     hd = P.aux_plug_d
     aux = [box('plug head', (ax - hd/2 - 0.5, ay - hd/2, z0), (ax + hd/2 + 0.5, ay + hd/2 + 4,
                                                                z0 + P.aux_plug_barrel), 'black')]
     return [Comp('DC plug', 'amp', dc, follows='ZK-502MT', mates=('ZK-502MT',),
-                 note='24 V in; out through the lid window and down the channel'),
+                 note='24 V in, straight up through the bottom of the base'),
             Comp('AUX plug (amp)', 'amp', aux, follows='ZK-502MT', mates=('ZK-502MT',),
-                 note='right-angle; the patch cable leaves its top')]
+                 note='right-angle; the patch cable from the DAC')]
 
 
 def _amp_leads():
     y1 = P.amp_pcb_top()
-    zl = P.box_d() + P.lid_t
-    # speaker leads off the barrier block, out of the lid window and down the channel
-    xs = P.amp_x + (P.amp_term_x[0] + P.amp_term_x[1])/2
+    xc = P.amp_x + (P.amp_term_x[0] + P.amp_term_x[1])/2
     ys = y1 + P.amp_term_h/2
-    spk = route('speaker leads', [(xs, ys, P.amp_rear_z()), (xs, ys, zl + 4), (xs, -25, zl + 4)],
-                P.spk_cable_d)
-    # 24 V tap: barrel-jack solder pins (under the PCB) to the MP1584's IN end
-    yt = P.wall + P.sled_t + 1.5
-    xdc = P.amp_x + P.amp_dc_x
-    zdc = P.plug_z0() - P.amp_dc_body[1]/2
-    xin = P.mp_x - P.mp_w/2 + 1
-    tap = route('24 V tap', [(xdc, P.amp_pcb_y(), zdc), (xdc, yt, zdc), (xdc, yt, P.mp_zc()),
-                             (xin, yt, P.mp_zc())], P.lead_d)
-    # panel switch leads, to the onboard switch's pads
-    sx, sz = P.amp_sw_onboard_at
-    xo = P.amp_x + sx
-    xsw = P.box_w/2 - P.wall - P.amp_psw_body[0]
-    sw = route('switch leads', [(xsw, P.amp_psw_y, P.psw_zc()), (xo, P.amp_psw_y, P.psw_zc()),
-                                (xo, P.amp_psw_y, P.amp_bz(sz)), (xo, y1 + P.amp_sw_onboard[2],
-                                                                  P.amp_bz(sz))], P.lead_d)
-    return [Comp('amp wiring', 'amp', spk + tap + sw, follows='(routes)',
-                 note='speaker leads, 24 V tap, switch leads — illustrative routes')]
+    zr, zo = P.amp_rear_z(), P.plug_z0() + P.plug_room + P.wall + 15
+    spk = []
+    for s in (-1, 1):                          # one cable per speaker, straight down and out
+        spk += route('speaker leads', [(xc + s*P.spk_hole_dx, ys, zr), (xc + s*P.spk_hole_dx, ys, zo)],
+                     P.spk_cable_d)
+    return [Comp('amp wiring', 'amp', spk, follows='(routes)',
+                 note='speaker leads straight down out of the bottom — illustrative')]
 
 
 # =====================================================================================
-# voice box
+# front wall: drawn in the tray frame, put on the wall
 # =====================================================================================
+def _placed(prims, x):
+    return [to_world(p, x) for p in prims]
+
+
 def _devkit():
-    yb = P.board_seat_y()
+    yb = P.tray_seat
     yt = yb + P.pcb_t
-    xc, zc = P.s3_x, P.s3_zc()
-    pr = [cbox('PCB', (xc, (yb + yt)/2, zc), (P.s3_w, P.pcb_t, P.s3_l), 'pcb_dark')]
+    pr = [cbox('PCB', (0, (yb + yt)/2, 0), (P.s3_w, P.pcb_t, P.s3_l), 'pcb_dark')]
     mx, mz, mh = P.s3_module
-    pr.append(box('ESP32-S3 module', (xc + P.s3_w/2 - mx, yt, zc - mz/2),
-                  (xc + P.s3_w/2, yt + mh, zc + mz/2), 'metal'))
+    pr.append(box('ESP32-S3 module', (P.s3_w/2 - mx, yt, -mz/2), (P.s3_w/2, yt + mh, mz/2), 'metal'))
     ux, uz, uh = P.s3_usb
-    # flush with the board end: s3_w (63) is the measured end-to-end length, connectors included
     for s in (-1, 1):
-        pr.append(box('USB-C', (xc - P.s3_w/2, yt, zc + s*P.s3_usb_pitch/2 - uz/2),
-                      (xc - P.s3_w/2 + ux, yt + uh, zc + s*P.s3_usb_pitch/2 + uz/2), 'metal'))
-    # header rows on both long edges: plastic + pins + dressed dupont housings above, tails below
+        pr.append(box('USB-C', (-P.s3_w/2, yt, s*P.s3_usb_pitch/2 - uz/2),
+                      (-P.s3_w/2 + ux, yt + uh, s*P.s3_usb_pitch/2 + uz/2), 'metal'))
     hw, _ = P.s3_hdr
     for s in (-1, 1):
-        zr = zc + s*(P.s3_l/2 - 1.27 - 0.6)
-        pr.append(box('header + duponts', (xc - 28, yt, zr - hw/2), (xc + 28, yt + P.s3_dupont_h,
-                                                                       zr + hw/2), 'black'))
-        pr.append(box('pin tails', (xc - 28, yb - P.board_pin_h, zr - 0.8),
-                      (xc + 28, yb, zr + 0.8), 'metal'))
-    return Comp('ESP32-S3 devkit', 'voice', pr, moves={'x': ('s3_x', None), 'z': ('s3_z0', None)},
-                note='DevKitC-1 N16R8, long axis across x, module at +x, USB-C at -x')
+        zr = s*(P.s3_l/2 - 1.27 - 0.6)
+        pr.append(box('header + duponts', (-28, yt, zr - hw/2), (28, yt + P.s3_dupont_h, zr + hw/2),
+                      'black'))
+        pr.append(box('pin tails', (-28, yb - P.board_pin_h, zr - 0.8), (28, yb, zr + 0.8), 'metal'))
+    return Comp('ESP32-S3 devkit', 'unit', _placed(pr, P.s3_xf()),
+                moves={'x': ('s3_pos', 0), 'y': ('s3_pos', 1)},
+                note='DevKitC-1 standing on the back plate, USB-C down through the bottom')
+
+
+def dac_prims():
+    """component side down on its seat, socket edge at tray +z (see params)"""
+    yb, yt = P.dac_seat_y(), P.dac_pcb_top_y()
+    pr = [cbox('PCB', (0, (yb + yt)/2, 0), (P.dac_l, P.pcb_t, P.dac_w), 'pcb_purple')]
+    jw, jx = P.dac_jack_w, P.dac_jack_off()
+    pr.append(box('3.5 mm socket', (jx - jw/2, yb - P.dac_jack_h, P.dac_edge_z() - P.dac_jack_depth),
+                  (jx + jw/2, yb, P.dac_socket_z()), 'black', outside=True))   # into its recess in the plate
+    xh, zh = P.dac_relief_x(), (P.dac_relief_z0() + P.dac_relief_z1())/2
+    pr.append(box('header + duponts', (xh - 1.25, yt, zh - P.dac_hdr_len/2),
+                  (xh + 1.25, yt + P.s3_dupont_h, zh + P.dac_hdr_len/2), 'black'))
+    tl = 5*2.54 + 0.64
+    pr.append(box('pin tails', (xh - 0.32, yb - P.board_pin_h, zh - tl/2), (xh + 0.32, yb, zh + tl/2),
+                  'metal'))
+    return pr
 
 
 def _dac():
-    yb = P.board_seat_y()
-    yt = yb + P.pcb_t
-    xc, zc = P.dac_xc(), P.dac_zc()
-    pr = [cbox('PCB', (xc, (yb + yt)/2, zc), (P.dac_l, P.pcb_t, P.dac_w), 'pcb_purple')]
-    jw = P.dac_jack_w
-    pr.append(box('3.5 mm socket', (P.dac_jack_x() - jw/2, yt, P.dac_socket_z() - 12),
-                  (P.dac_jack_x() + jw/2, yt + P.dac_jack_h, P.dac_socket_z()), 'black'))
-    zh = zc - P.dac_w/2 + 1.5
-    pr.append(box('header + duponts', (xc - P.dac_hdr_len/2, yt, zh - 1.25),
-                  (xc + P.dac_hdr_len/2, yt + P.s3_dupont_h, zh + 1.25), 'black'))
-    return Comp('PCM5102A', 'voice', pr, moves={'x': ('dac_dx', None), 'z': ('dac_dz', None)},
-                note='I2S DAC, socket facing the rear, over the sleeve')
+    return Comp('PCM5102A', 'unit', _placed(dac_prims(), P.dac_xf()),
+                moves={'x': ('dac_pos', 0), 'y': ('dac_pos', 1)},
+                note='I2S DAC, top of the right column, socket facing down')
 
 
 def _dac_plug():
-    ay = P.board_seat_y() + P.pcb_t + P.dac_jack_h/2
-    hd = P.aux_plug_d
-    x = P.dac_jack_x()
+    ay, hd, x = P.dac_axis_y(), P.aux_plug_d, P.dac_jack_off()
     pr = [box('plug head', (x - hd/2 - 0.5, ay - hd/2, P.dac_socket_z()),
-              (x + hd/2 + 0.5, ay + hd/2, P.dac_socket_z() + P.dac_aux_plug), 'black')]
-    return Comp('AUX plug (DAC)', 'voice', pr, follows='PCM5102A', mates=('PCM5102A',),
-                note='right-angle; the cable leaves downward into the sleeve')
+              (x + hd/2 + 0.5, ay + hd/2, P.dac_socket_z() + P.dac_aux_plug), 'black', outside=True)]  # in its groove
+    return Comp('AUX plug (DAC)', 'unit', _placed(pr, P.dac_xf()), follows='PCM5102A',
+                mates=('PCM5102A',), note='right-angle; the cable runs down beside the devkit')
+
+
+def _mp1584():
+    yb, yt = 0.0, 1.2
+    pr = [cbox('PCB', (0, (yb + yt)/2, 0), (P.mp_w, yt - yb, P.mp_l), 'pcb_blue')]
+    w, d, h = P.mp_inductor
+    pr.append(cbox('inductor', (-4, yt + h/2, 0), (w, h, d), 'black'))
+    w, d, h = P.mp_trim
+    pr.append(cbox('trim pot', (6, yt + h/2, 4), (w, h, d), 'blue'))
+    return Comp('MP1584', 'unit', _placed(pr, P.mp_xf()),
+                moves={'x': ('mp_pos', 0), 'y': ('mp_pos', 1)},
+                note='24 V -> 5 V buck, bottom of the right column. Set to 5.0 V BEFORE connecting')
 
 
 def _mic():
-    x, y = P.mic_pos
-    zb = P.wall - P.mic_seat_depth             # board's front face, on the gasket
-    pr = [cbox('PCB', (x, y, zb + P.pcb_t/2), (P.mic_board_w, P.mic_board_l, P.pcb_t), 'pcb_dark',
+    """lying in the top wall's seat, port facing UP through the grille"""
+    x, z = P.mic_pos
+    yt = P.box_h() - (P.wall - P.mic_seat_depth)    # board's outer face, on the gasket
+    pr = [cbox('PCB', (x, yt - P.pcb_t/2, z), (P.mic_board_w, P.pcb_t, P.mic_board_l), 'pcb_dark',
                outside=True)]
-    # No MEMS package drawn: the board lies flat on its gasket and the port is a hole through
-    # the PCB (voice-case's printed, working seat), so nothing stands on the gasket side. Where
-    # the package sits on the back is not known, and the clamp pad presses the back's centre.
     hw, hh, hl = P.mic_hdr
-    yh = y - P.mic_board_l/2 + 1.5
-    pr.append(box('header + duponts', (x - hw/2, yh - hh/2, zb + P.pcb_t),
-                  (x + hw/2, yh + hh/2, zb + P.pcb_t + P.s3_dupont_h), 'black'))
-    top = P.top_face(P.voice_h)
-    return Comp('INMP441', 'voice', [to_world(p, top) for p in pr],
-                moves={'x': ('mic_pos', 0), 'z': ('mic_pos', 1)},
-                note='in the gasket seat on the TOP face, port up; the clamp presses it')
+    zh = z - P.mic_board_l/2 + 1.5
+    pr.append(box('header + duponts', (x - hw/2, yt - P.pcb_t - P.s3_dupont_h, zh - hh/2),
+                  (x + hw/2, yt - P.pcb_t, zh + hh/2), 'black'))
+    return Comp('INMP441', 'unit', pr, moves={'x': ('mic_pos', 0), 'z': ('mic_pos', 1)},
+                note='in the gasket seat in the top beside the knobs, port up; the clamp presses it')
 
 
 def _tactile():
     x, y = P.btn_pos
     s = P.sw_body
-    pr = [box('body', (x - s/2, y - s/2, P.sw_top_z()), (x + s/2, y + s/2, P.bh_relief_z1()), 'black'),
-          cyl('plunger', 'z', (x, y), P.sw_plunger_d, P.plunger_z(), P.sw_top_z(), 'metal')]
+    pr = [box('body', (x - s/2, y - s/2, P.sw_front_z()), (x + s/2, y + s/2, P.sw_back_z()), 'black'),
+          cyl('plunger', 'z', (x, y), P.sw_plunger_d, P.sw_tip_z(), P.sw_front_z(), 'metal')]
     for px, py in P.sw_pin_pos():
-        pr.append(cbox('pin', (x + px, y + py, (P.bh_relief_z1() + P.sw_pin_z1())/2),
-                       (0.8, 0.8, P.sw_pin_z1() - P.bh_relief_z1()), 'metal'))
-    return Comp('tactile switch', 'voice', pr,
-                moves={'x': ('btn_pos', 0), 'y': ('btn_pos', 1)},
-                note='11 mm tactile in the button holder; moving it moves the whole button')
+        a = xf.apply(xf.Rz(P.bridge_angle), (px, py, 0))     # pins turn with the bridge
+        pr.append(cbox('pin', (x + a[0], y + a[1], P.sw_back_z() + P.sw_pin_len/2),
+                       (0.8, 0.8, P.sw_pin_len), 'metal'))
+    return Comp('tactile switch', 'unit', pr, moves={'x': ('btn_pos', 0), 'y': ('btn_pos', 1)},
+                note='on the bridge behind the panel\'s flexure disc; the panel\'s only wires')
 
 
 def _voice_leads():
-    """Both cables that cross the box interface, in VOICE-box coordinates (the amp box is
-    voice_z0() lower, so an amp-local y becomes y - voice_z0())."""
-    dz = P.voice_z0()
-    ya = lambda y: y - dz
-    zc = P.sleeve_zc()
-    # patch: DAC plug's underside -> down the sleeve -> along the amp's top -> AUX plug's top
-    xp, zp = P.sleeve_x - 2, zc - 2
-    xd = P.dac_jack_x()
-    zd = P.dac_socket_z() + P.dac_aux_plug - P.aux_plug_d/2
-    yd = P.board_seat_y() + P.pcb_t + P.dac_jack_h/2 - P.aux_plug_d/2
-    y_hi = ya(P.amp_h() - P.wall - 3)
-    ax = P.amp_x + P.amp_aux_x
-    az = P.plug_z0() + P.aux_plug_barrel/2
-    atop = ya(P.amp_pcb_top() + P.amp_aux_axis + P.aux_plug_d/2 + 4)
-    patch = route('patch cable', [(xd, yd, zd), (xd, P.tray_top() + 2, zd), (xp, P.tray_top() + 2, zd),
-                                  (xp, P.tray_top() + 2, zp), (xp, y_hi, zp), (ax, y_hi, zp),
-                                  (ax, y_hi, az), (ax, atop, az)], P.patch_cable_d)
-    # 5 V: MP1584's OUT end -> up -> sleeve -> devkit's rear header row (5V pin end, -x)
-    xl, zl = P.sleeve_x + 3, zc + 2
-    xo = P.mp_x + P.mp_w/2 - 1
-    ym = ya(P.wall + P.sled_t + 1.5)
-    yh = P.board_seat_y() + P.pcb_t + P.s3_dupont_h
-    x5 = P.s3_x - 26
-    z5 = P.s3_zc() + P.s3_l/2 - 1.87
-    lead = route('5 V lead', [(xo, ym, P.mp_zc()), (xo, ym, zl), (xo, y_hi - 2, zl), (xl, y_hi - 2, zl),
-                              (xl, yh + 2, zl), (x5, yh + 2, zl), (x5, yh + 2, z5), (x5, yh, z5)],
-                  P.lead_d)
-    return [Comp('voice wiring', 'voice', patch + lead, follows='(routes)',
-                 note='patch cable and 5 V lead through the sleeve — illustrative routes')]
+    """Every board-to-board run, along the WIRE CHANNEL: the bottom front strip under the amp's
+    connector edge, behind the panel. Illustrative routes — but they are what the channel is
+    kept clear for."""
+    yc = P.wall + 9                              # channel height, above the panel bosses
+    zc = P.wall + P.lip_d + 6                    # channel depth, behind the panel's lip
+    amp = P.amp_xf()
+    aux = xf.apply(amp, (P.amp_x + P.amp_aux_x, P.amp_pcb_top() + P.amp_aux_axis,
+                         P.plug_z0() + P.aux_plug_barrel - 1))
+    plug = xf.apply(P.dac_xf(), (P.dac_jack_off(), P.dac_axis_y(), P.dac_socket_z() + P.dac_aux_plug - 1))
+    patch = route('patch cable', [plug, (plug[0], yc, plug[2]), (plug[0], yc, zc), (aux[0], yc, zc),
+                                  (aux[0], yc, aux[2]), (aux[0], aux[1] - 2, aux[2])], P.patch_cable_d)
+    # devkit header (bottom end, left) -> along the channel -> DAC header / MP1584 OUT (right)
+    s3 = xf.apply(P.s3_xf(), (-P.s3_w/2 + 6, P.tray_seat + P.pcb_t + P.s3_dupont_h, 0))
+    dac = xf.apply(P.dac_xf(), (P.dac_relief_x(), P.dac_pcb_top_y() + P.s3_dupont_h, 0))
+    i2s = route('I2S lead', [s3, (s3[0], yc + 2, s3[2]), (s3[0], yc + 2, zc), (dac[0], yc + 2, zc),
+                             (dac[0], dac[1], zc), (dac[0], dac[1], dac[2])], P.lead_d)
+    mp = xf.apply(P.mp_xf(), (P.mp_w/2 - 1, P.mp_lip, 0))
+    v5 = route('5 V lead', [mp, (mp[0], mp[1], zc + 3), (mp[0], yc + 4, zc + 3), (s3[0] - 3, yc + 4, zc + 3),
+                            (s3[0] - 3, s3[1], zc + 3)], P.lead_d)
+    return [Comp('voice wiring', 'unit', patch + i2s + v5, follows='(routes)',
+                 note='patch cable, I2S and 5 V along the bottom wire channel — illustrative')]
 
 
 def components():
     """Every part, freshly derived from the current parameters."""
-    return ([_amp(), _knobs(), _mp1584(), _psw()] + _amp_plugs() + _amp_leads()
-            + [_devkit(), _dac(), _dac_plug(), _mic(), _tactile()] + _voice_leads())
+    return ([_amp(), _knobs()] + _amp_plugs() + _amp_leads()
+            + [_devkit(), _dac(), _dac_plug(), _mp1584(), _mic(), _tactile()] + _voice_leads())
 
 
 def by_name():
     return {c.name: c for c in components()}
 
 
+def in_box(comp):
+    """the part's primitives in box-local B"""
+    if comp.where == 'unit':
+        return list(comp.prims)
+    x = P.amp_xf()
+    return [to_world(p, x) for p in comp.prims]
+
+
 # =====================================================================================
 # printed obstacles — what a dragged part can run into that is not another part
 # =====================================================================================
-def obstacles(where):
-    """[(name, lo, hi)] in the box's local frame. Conservative boxes, not the exact shapes."""
-    h = P.amp_h() if where == 'amp' else P.voice_h
-    d = P.box_d()
-    ih = P.inner_w()/2
+def obstacles():
+    """[(name, lo, hi)] in B. Conservative boxes, not the exact shapes."""
     out = []
-    for i, (x, y) in enumerate(P.lid_boss_pts(h)):
-        up = y > h/2
-        ylo, yhi = (y - P.lid_boss_od/2, h - P.wall) if up else (P.wall, y + P.lid_boss_od/2)
-        out.append(('lid boss', (x - P.lid_boss_od/2, ylo, d - P.lid_boss_len),
-                    (x + P.lid_boss_od/2, yhi, d)))
-    floor = P.wall + (P.sled_t if where == 'amp' else P.tray_t)
-    out.append(('sled' if where == 'amp' else 'tray', (-ih, P.wall, P.wall), (ih, floor, d)))
-    if where == 'amp':
-        # sleeve end, reaching sleeve_engage down through the top
-        r = P.sleeve_od()/2
-        out.append(('sleeve', (P.sleeve_x - r, h - P.wall - P.sleeve_engage, P.sleeve_zc() - r),
-                    (P.sleeve_x + r, h, P.sleeve_zc() + r)))
-        r = P.sled_boss_od/2
-        for x, z in P.sled_screw_pts():
-            out.append(('hold-down boss', (x - r, floor, z - r), (x + r, floor + P.sled_boss_h, z + r)))
-        for hx, hr in P.amp_holes:
-            r = P.amp_standoff_od/2
-            out.append(('standoff', (P.amp_x + hx - r, floor, P.amp_bz(hr) - r),
-                        (P.amp_x + hx + r, P.amp_pcb_y(), P.amp_bz(hr) + r)))
-    else:
-        x, y = P.btn_pos
-        out.append(('button holder', (x - (P.btn_pilot_pitch + P.bh_ear_d)/2, y - P.bh_collar_od()/2,
-                                      P.wall), (x + (P.btn_pilot_pitch + P.bh_ear_d)/2,
-                                                y + P.bh_collar_od()/2, P.bh_z1())))
-        x, z = P.mic_pos
-        w, _ = P.mic_size()
-        h = P.voice_h
-        out.append(('mic posts + clamp', (x - w/2, h - P.wall - P.mic_post_h - P.mic_clamp_t,
-                                          z - P.mic_clamp_w/2), (x + w/2, h - P.wall, z + P.mic_clamp_w/2)))
-        r = P.sleeve_od()/2 + P.sleeve_flange
-        out.append(('sleeve flange', (P.sleeve_x - r, P.tray_top(), P.sleeve_zc() - r),
-                    (P.sleeve_x + r, P.tray_top() + 1.6, P.sleeve_zc() + r)))
+    pz = P.plate_z()
+    for x, y in P.standoff_pts():
+        r = P.amp_standoff_od/2
+        out.append(('standoff', (x - r, y - r, pz - P.amp_standoff_len()), (x + r, y + r, pz)))
+    for name, (lo, hi) in seat_boxes().items():
+        out.append((name, lo, hi))
+    x, z = P.mic_pos
+    w, h = P.mic_size()
+    top = P.box_h() - P.wall
+    out.append(('mic posts + clamp', (x - w/2, top - P.mic_post_h - P.mic_clamp_t, z - h/2), (x + w/2, top, z + h/2)))
+    # the panel: the disc's travel and the nub, the bridge and its feet, the lip, hooks, bosses
+    bx, by = P.btn_pos
+    r = P.btn_r_out()
+    out.append(('button travel', (bx - r, by - r, P.wall), (bx + r, by + r, P.wall + P.btn_travel)))
+    rn = P.btn_nub_d/2
+    out.append(('button nub', (bx - rn, by - rn, P.wall), (bx + rn, by + rn, P.btn_nub_end())))
+    for fx, fy in P.bridge_feet():
+        rp = max(P.bridge_post_od, P.bridge_w)/2
+        out.append(('bridge foot', (fx - rp, fy - rp, P.wall), (fx + rp, fy + rp, P.bridge_back_z())))
+    hp = P.bridge_pad/2
+    out.append(('bridge pad', (bx - hp, by - hp, P.bridge_z()), (bx + hp, by + hp, P.bridge_back_z())))
+    ih, h = P.ih(), P.box_h()
+    lip = P.lip_t + P.clr
+    zl = (P.wall, P.wall + P.lip_d)
+    for lo, hi in (((-ih, P.wall, zl[0]), (ih, P.wall + lip, zl[1])),
+                   ((-ih, h - P.wall - lip, zl[0]), (ih, h - P.wall, zl[1])),
+                   ((-ih, P.wall, zl[0]), (-ih + lip, h - P.wall, zl[1])),
+                   ((ih - lip, P.wall, zl[0]), (ih, h - P.wall, zl[1]))):
+        out.append(('panel lip', lo, hi))
+    for x in P.hook_xs:
+        out.append(('panel hook', (x - P.hook_w/2, h - P.wall - lip - 1, P.wall),
+                    (x + P.hook_w/2, h - P.wall, P.wall + P.hook_len + 3)))
+    z0, z1 = P.pboss_z()
+    for x in P.pboss_xs:
+        r = P.pboss_od/2
+        out.append(('panel boss', (x - r, P.wall, z0), (x + r, P.wall + P.pboss_od, z1)))
     return out
+
+
+def seat_boxes():
+    """the devkit pocket, the MP1584 pocket and the DAC seat, as B boxes"""
+    def bx(lo, hi, x):
+        p = to_world(box('x', lo, hi, ''), x)
+        return (p.lo, p.hi)
+    sp = P.s3_pocket()
+    rx, rz = P.mp_ring()
+    return {
+        'devkit pocket': bx((-sp[0]/2, -0.01, -sp[1]/2), (sp[0]/2, P.s3_pocket_h(), sp[1]/2), P.s3_xf()),
+        'DAC seat': bx((-P.dac_block_x(), -0.01, P.dac_block_z0()),
+                       (P.dac_block_x(), P.dac_block_top(), P.dac_block_z1()), P.dac_xf()),
+        'MP1584 pocket': bx((-rx/2, -0.01, -rz/2), (rx/2, P.mp_lip, rz/2), P.mp_xf()),
+    }
 
 
 # which printed obstacle each part is ALLOWED to sit in or on
 OBSTACLE_MATES = {
-    'tactile switch': {'button holder'},
-    'INMP441': {'mic posts + clamp'},
     'ZK-502MT': {'standoff'},
+    'ESP32-S3 devkit': {'devkit pocket'},
+    'PCM5102A': {'DAC seat'},
+    'AUX plug (DAC)': {'DAC seat'},
+    'MP1584': {'MP1584 pocket'},
+    'INMP441': {'mic posts + clamp'},
+    'tactile switch': {'bridge pad', 'button nub'},
 }

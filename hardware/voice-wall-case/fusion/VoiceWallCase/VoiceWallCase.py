@@ -2,21 +2,22 @@
 
 Run it from Fusion's Scripts and Add-Ins palette (Shift+S). It asks what to do:
 
-  all          the whole unit on the wall: both boxes with every printed part AND every
-               electronic part as its own component, the plate and the lock bracket
-  electronics  the electronics alone, in their boxes' positions
-  amp-shell  amp-lid  amp-sled  voice-shell  voice-lid  voice-tray  sleeve
-  plunger  dome  holder  clamp  plate  lock  coupon-amp  coupon-voice
+  all          the whole unit on the wall: tray, panel, switch bridge, mic clamp AND every
+               electronic part as its own component
+  electronics  the electronics alone, where they sit in the unit
+  small        the small printed parts (switch bridge, mic clamp) on one bed, print-oriented
+  tray  panel  bridge  clamp  coupon-button  coupon-top
                one printed part, in its print orientation
   sync         read parts you DRAGGED in the active document back into vwc/placement.py
 
 The adjust-in-place loop:
   1. run `all`
   2. drag a part — the devkit, the DAC, the MP1584, the mic, the switch, the amp board — inside
-     its box (Move/Copy, or drag in the canvas). Inspect > Interference shows what it hits.
+     the "electronics" group (Move/Copy, or drag in the canvas). Inspect > Interference shows
+     what it hits.
   3. run `sync` on that document: the move is written to vwc/placement.py and the design checks
      run on the result
-  4. run `all` again: pockets, standoffs, windows and holes follow the part
+  4. run `all` again: pockets, standoffs, posts and holes follow the part
 
 Numbers that are not positions — board sizes, clearances, connector heights — live in
 vwc/params.py. A part is never built on a design that fails a check (vwc/checks.py, also
@@ -37,7 +38,7 @@ ASK = True
 NEW_DOCUMENT = True
 # ref_* reference parameters in the Parameters dialog. They drive nothing — see vwc/parameters.py
 USER_PARAMETERS = True
-# see-through shells, lids and plate in the assembled views, so the electronics show. None = off
+# see-through tray and panel in the assembled views, so the electronics show. None = off
 GHOST = 0.35
 # one STL per PRINTED component into VoiceWallCase/stl/ (electronics are never exported)
 EXPORT_STL = False
@@ -74,6 +75,16 @@ def _export(parts, folder):
     return written
 
 
+def _export_plate(design, folder, stem):
+    """the whole root as ONE STL, parts where the layout put them — the bed as a single file"""
+    path = os.path.join(folder, '%s.stl' % stem)
+    opts = design.exportManager.createSTLExportOptions(design.rootComponent, path)
+    opts.isOneFilePerBody = False
+    opts.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementHigh
+    design.exportManager.execute(opts)
+    return os.path.basename(path)
+
+
 def _sync(vwc, app, ui):
     design = adsk.fusion.Design.cast(app.activeProduct)
     if not design:
@@ -82,7 +93,7 @@ def _sync(vwc, app, ui):
     moved, built = vwc.sync.read(design)
     if not moved:
         ui.messageBox('Nothing has moved: every electronic part is where the build put it.\n\n'
-                      'Drag a part inside its group ("amp electronics" / "voice electronics" in the browser), then '
+                      'Drag a part inside the "electronics" group in the browser, then '
                       'run sync again.', TITLE)
         return
     if built is None:
@@ -164,6 +175,8 @@ def run(_context):
         if EXPORT_STL and printed:
             folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'stl')
             notes.append('exported: %s' % ', '.join(_export(printed, folder)))
+            if part == 'small':
+                notes.append('exported: %s' % _export_plate(design, folder, 'small-parts'))
         if notes:
             ui.messageBox('\n'.join(notes), TITLE)
     except:  # noqa: E722 — Fusion's convention: log, never let a script die silently

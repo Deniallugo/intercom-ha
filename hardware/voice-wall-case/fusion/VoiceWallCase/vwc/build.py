@@ -127,6 +127,23 @@ class Part:
         moves.add(inp)
         return self
 
+    def move_tools(self, bodies, x):
+        """A Move feature on SOME bodies — a pocket drawn in its own frame, put in place before
+        it joins the part. Returns them re-resolved by name: a body object held across a
+        feature is not to be trusted (see `body`)."""
+        names = [b.name for b in bodies]
+        coll = adsk.core.ObjectCollection.create()
+        for b in bodies:
+            coll.add(b)
+        moves = self.comp.features.moveFeatures
+        try:
+            inp = moves.createInput2(coll)
+            inp.defineAsFreeMove(matrix(x))
+        except AttributeError:
+            inp = moves.createInput(coll, matrix(x))
+        moves.add(inp)
+        return [self.body(n) for n in names]
+
     # ---- frame -----------------------------------------------------------------
     def mirrored(self):
         """`mirror([0, 0, 1])`: authored z is negated for the duration of the block."""
@@ -149,11 +166,14 @@ class Part:
         through `worldGeometry`, then thrown away. Cheap, and it turns "which way does the
         XZ plane's v axis point" from an assumption into a measurement.
         """
-        if kind in self._frames:
-            return self._frames[kind]
-        plane = {'xy': self.comp.xYConstructionPlane,
-                 'yz': self.comp.yZConstructionPlane,
-                 'xz': self.comp.xZConstructionPlane}[kind]
+        if kind not in self._frames:
+            plane = {'xy': self.comp.xYConstructionPlane,
+                     'yz': self.comp.yZConstructionPlane,
+                     'xz': self.comp.xZConstructionPlane}[kind]
+            self._frames[kind] = self._probe(plane)
+        return self._frames[kind]
+
+    def _probe(self, plane):
         sk = self.comp.sketches.add(plane)
         probe = []
         for c in ((0, 0, 0), (1, 0, 0), (0, 1, 0)):
@@ -163,8 +183,7 @@ class Part:
         o, pu, pv = probe
         u = (pu[0] - o[0], pu[1] - o[1], pu[2] - o[2])
         v = (pv[0] - o[0], pv[1] - o[1], pv[2] - o[2])
-        self._frames[kind] = (u, v, _cross(u, v))
-        return self._frames[kind]
+        return (u, v, _cross(u, v))
 
     def mapper(self, kind):
         u, v, _ = self._frame(kind)
@@ -633,6 +652,77 @@ def rrect_loft_ax(part, axis, a0, a1, lo_size, hi_size, c=(0, 0), name=None):
         rrect_loop(sk, mp, w, h, r, c)
         sketches.append(sk)
     return _named(part.loft(sketches), name)
+
+
+def sector_loop(sk, mp, c, r0, r1, a0, a1):
+    """an annular sector: radii r0 < r1, angles a0 -> a1 (deg, counter-clockwise in authored
+    coordinates). Out along a0, round the outside, in along a1, back round the inside — so the
+    loop ENDS ON A LINE (see rrect_loop)."""
+    def p(r, a):
+        return (c[0] + r*math.cos(math.radians(a)), c[1] + r*math.sin(math.radians(a)))
+    sweep = a1 - a0
+    return chain_loop(sk, mp, p(r1, a0), [('arc', c, sweep), ('line', p(r0, a1)),
+                                          ('arc', c, -sweep), ('line', None)])
+
+
+def prism_sector(part, axis, c, r0, r1, a0, a1, z0, z1, name=None):
+    return _ext(part, axis, lambda sk, mp: sector_loop(sk, mp, c, r0, r1, a0, a1), z0, z1, name)
+
+
+def text_tools(part, c, text, height, z0, z1, right, up, font=None, name='letters'):
+    """Letters as tool bodies through z0..z1 along MODEL z, reading along `right` with `up` up.
+
+    Sketch text reads along its sketch's +u with +v up and cannot be mirrored, so the plane is
+    chosen to fit: the XY plane, or the XY plane turned half a turn about Y (normal -z). Both
+    are PROBED, and the one whose (u, v) is a rotation of (right, up) is used. Returns every
+    body the extrude made — Fusion can make one per letter."""
+    comp = part.comp
+
+    def turned(base, axis):
+        pin = comp.constructionPlanes.createInput()
+        pin.setByAngle(axis, adsk.core.ValueInput.createByReal(math.pi), base)
+        return comp.constructionPlanes.add(pin)
+
+    # XY, then half turns about Y, about X, and about both (= a half turn in the plane): one of
+    # them has (u, v) = (right, up) whatever Fusion's own plane conventions are
+    xy = comp.xYConstructionPlane
+    makers = (lambda: xy, lambda: turned(xy, comp.yConstructionAxis),
+              lambda: turned(xy, comp.xConstructionAxis),
+              lambda: turned(turned(xy, comp.yConstructionAxis), comp.xConstructionAxis))
+    plane = None
+    for make in makers:
+        cand = make()
+        u, v, n = part._probe(cand)
+        if _dot(u, right) > 0 and _dot(v, up) > 0:
+            plane = cand
+            break
+    if plane is None:
+        raise RuntimeError('no sketch plane reads "%s" the right way round' % text)
+    mp = _Mapper(u, v, (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    sk = part._sketch(plane)
+    w, h = 2.0*height*max(len(text), 1), 2.0*height     # roomy: a box too narrow wraps the text
+    a = mp(c[0] - w/2, c[1] - h/2)
+    b = mp(c[0] + w/2, c[1] + h/2)
+    texts = sk.sketchTexts
+    inp = texts.createInput2(text, mm(height))
+    inp.setAsMultiLine(_pt(min(a[0], b[0]), min(a[1], b[1])), _pt(max(a[0], b[0]), max(a[1], b[1])),
+                       adsk.core.HorizontalAlignments.CenterHorizontalAlignment,
+                       adsk.core.VerticalAlignments.MiddleVerticalAlignment, 0)
+    if font:
+        try:
+            inp.fontName = font
+        except Exception:
+            pass                    # a missing font falls back to Fusion's default
+    st = texts.add(inp)
+    part._finish(sk)
+    s = 1.0 if _dot(n, (0.0, 0.0, 1.0)) > 0 else -1.0
+    exts = part.comp.features.extrudeFeatures
+    ext = exts.createInput(st, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    ext.setDistanceExtent(False, _val((z1 - z0)*s))
+    if abs(z0) > TOL:
+        ext.startExtent = adsk.fusion.OffsetStartDefinition.create(_val(z0*s))
+    f = exts.add(ext)
+    return [_named(f.bodies.item(i), name) for i in range(f.bodies.count)]
 
 
 # ===== assemblies ============================================================

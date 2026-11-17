@@ -4,9 +4,9 @@ Every placement in the assembly is one of these, composed here and handed to Fus
 the end (``build.matrix``), so the same arithmetic serves the build, the offline emitter and
 `sync` (which has to invert a box's placement to turn a drag back into box-local numbers).
 
-Fusion occurrences only take RIGID transforms — no mirrors. The OpenSCAD placed the wall plate
-with mirror([0, 1, 0]) rotate([90, 0, 0]); here it is a proper rotation that also flips x,
-which is the same solid because the plate is symmetric in x (checked in `plate`).
+Fusion occurrences only take RIGID transforms — no mirrors. The one mirror in the design,
+``params.amp_xf()``, is applied to numbers (the amp's dummies and the standoff positions),
+never to an occurrence.
 """
 
 import math
