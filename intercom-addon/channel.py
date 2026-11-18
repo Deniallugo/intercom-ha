@@ -110,11 +110,22 @@ def self_player(source: str, state: dict, members: list[Member]) -> Optional[str
 
 
 def channel_players(state: dict, members: list[Member]) -> list[str]:
+    """Every intercom speaker, plus each manual selves speaker that is still
+    in force: a device without an ESPHome media_player of its own (a tablet
+    whose sound goes to a Sonos) is heard through the speaker named for it.
+    No members means the registry was unreadable: stay empty so the plan
+    falls back to `default`."""
     excluded = set(state["excluded"])
     out = []
     for m in members:
         if m.media_player and m.media_player not in excluded and m.media_player not in out:
             out.append(m.media_player)
+    if not members:
+        return out
+    for source, speaker in sorted(state["selves"].items()):
+        if (speaker not in excluded and speaker not in out
+                and self_player(source, state, members) == speaker):
+            out.append(speaker)
     return out
 
 
