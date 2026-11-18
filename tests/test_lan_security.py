@@ -225,3 +225,21 @@ def test_access_log_hides_query_token_and_media_names():
     lines = [c.args[0] % c.args[1:] for c in logger.info.call_args_list]
     assert "/intercom" in lines[0] and "token" not in lines[0]
     assert "SECRETNAME" not in lines[1]
+
+
+# ── ingress upload (dashboard cards over HTTPS) ──────────────────────────────
+
+@pytest.mark.parametrize("path", ["/api/intercom", "/api/intercom/reply"])
+async def test_ingress_takes_uploads(aiohttp_client, setup, path):
+    client = await aiohttp_client(srv.make_ingress_app())
+    resp = await _post(client, path)
+    assert resp.status == 200
+    assert (await resp.json())["source"] == "src-a"
+
+
+async def test_ingress_upload_allows_long_recordings(aiohttp_client, setup):
+    client = await aiohttp_client(srv.make_ingress_app())
+    body = b"\x01\x00" * 16000 * 40          # 40 s at 16 kHz, over aiohttp's 1 MiB default
+    resp = await client.post("/api/intercom", data=body,
+                             headers={"X-Device-Name": "src-a"})
+    assert resp.status == 200

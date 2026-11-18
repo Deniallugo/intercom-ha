@@ -246,6 +246,13 @@ labels its answers for any request that carries an `Origin`. The headers
 above then work from a page's `fetch()`; `lan_token`, when set, still
 guards the upload. Firmware sends no `Origin` and sees no change.
 
+A dashboard served over HTTPS (or opened from outside the LAN) cannot reach
+the LAN port, so the ingress app takes the same upload at
+`POST /api/intercom` and `POST /api/intercom/reply` (same headers and JSON
+answer), behind Home Assistant's own auth: a card gets an ingress session
+(`supervisor/api` → `/ingress/session`), sets the `ingress_session` cookie and
+posts to `/api/hassio_ingress/<token>/api/intercom`.
+
 How a broadcast is played:
 
 - Speakers that support announcements (`MEDIA_ANNOUNCE`: ESPHome speaker media

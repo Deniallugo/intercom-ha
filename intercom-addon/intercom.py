@@ -1058,8 +1058,13 @@ def make_lan_app(token: Optional[str] = None) -> web.Application:
 
 
 def make_ingress_app() -> web.Application:
-    app = web.Application()
+    # Uploads come through here too: a dashboard push-to-talk card on a phone
+    # posts via HA's ingress proxy (same origin, HTTPS, HA auth), where the
+    # LAN port is out of reach (mixed content, or outside the LAN).
+    app = web.Application(client_max_size=MAX_UPLOAD_BYTES)
     app.router.add_get("/", handle_picker_index)
+    app.router.add_post("/api/intercom", handle_intercom)
+    app.router.add_post("/api/intercom/reply", handle_intercom)
     app.router.add_get("/api/players", handle_picker_get)
     app.router.add_post("/api/players", handle_picker_post)
     app.router.add_get("/api/devices", handle_devices_get)
