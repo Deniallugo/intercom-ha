@@ -358,15 +358,19 @@ async def _intercom(request: web.Request, mx: ChimeMixer, session_id: str,
     # partial delivery is still a delivery, so 200 (207 is WebDAV's and tells
     # an HTTP client nothing that 200 + the per-target body does not).
     status = 502 if targets and not (counts["delivered"] or counts["queued"]) else 200
-    log.info("delivery  session=%s  status=%d  %s", session_id[:8], status, counts)
-    return web.json_response({
+    body = {
         "session": session_id,
         "source": source,
         "mode": plan.mode,
         "targets": list(targets),
         "results": results,
         **counts,
-    }, status=status)
+    }
+    if status != 200:
+        body["error"] = delivery_error(counts)
+    log.info("delivery  session=%s  status=%d  %s%s", session_id[:8], status, counts,
+             f"  error={body['error']!r}" if "error" in body else "")
+    return web.json_response(body, status=status)
 
 
 async def _read_upload(request: web.Request, cleaner: "_Cleaner") -> bytes:
@@ -478,6 +482,17 @@ def _discard(fut: Optional[asyncio.Future]) -> None:
     fut.add_done_callback(lambda f: f.cancelled() or f.exception())
 
 
+def delivery_error(counts: dict) -> str:
+    """Why nothing was delivered, in words (the 502 body's "error")."""
+    total = sum(counts.values())
+    if counts["skipped"] == total:
+        return f"all {total} target speaker(s) are offline/unavailable"
+    if counts["skipped"]:
+        return (f"playback failed on {counts['failed']} speaker(s), "
+                f"{counts['skipped']} offline/unavailable")
+    return f"playback failed on all {total} speaker(s)"
+
+
 def delivery_counts(results: dict) -> dict:
     """{"delivered", "queued", "failed", "skipped"} over per-target results."""
     counts = {"delivered": 0, "queued": 0, "failed": 0, "skipped": 0}
@@ -542,7 +557,7 @@ async def handle_announce(request: web.Request) -> web.Response:
     ok = counts["delivered"] or counts["queued"]
     body = {"targets": list(targets), "results": results, **counts}
     if not ok:
-        body["error"] = "not delivered to any speaker"
+        body["error"] = delivery_error(counts)
     return web.json_response(body, status=200 if ok else 502)
 
 
