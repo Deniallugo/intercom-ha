@@ -358,15 +358,19 @@ async def _intercom(request: web.Request, mx: ChimeMixer, session_id: str,
     # partial delivery is still a delivery, so 200 (207 is WebDAV's and tells
     # an HTTP client nothing that 200 + the per-target body does not).
     status = 502 if targets and not (counts["delivered"] or counts["queued"]) else 200
-    log.info("delivery  session=%s  status=%d  %s", session_id[:8], status, counts)
-    return web.json_response({
+    body = {
         "session": session_id,
         "source": source,
         "mode": plan.mode,
         "targets": list(targets),
         "results": results,
         **counts,
-    }, status=status)
+    }
+    if status != 200:
+        body["error"] = delivery_error(counts)
+    log.info("delivery  session=%s  status=%d  %s%s", session_id[:8], status, counts,
+             f"  error={body['error']!r}" if "error" in body else "")
+    return web.json_response(body, status=status)
 
 
 async def _read_upload(request: web.Request, cleaner: "_Cleaner") -> bytes:
@@ -478,6 +482,17 @@ def _discard(fut: Optional[asyncio.Future]) -> None:
     fut.add_done_callback(lambda f: f.cancelled() or f.exception())
 
 
+def delivery_error(counts: dict) -> str:
+    """Why nothing was delivered, in words (the 502 body's "error")."""
+    total = sum(counts.values())
+    if counts["skipped"] == total:
+        return f"all {total} target speaker(s) are offline/unavailable"
+    if counts["skipped"]:
+        return (f"playback failed on {counts['failed']} speaker(s), "
+                f"{counts['skipped']} offline/unavailable")
+    return f"playback failed on all {total} speaker(s)"
+
+
 def delivery_counts(results: dict) -> dict:
     """{"delivered", "queued", "failed", "skipped"} over per-target results."""
     counts = {"delivered": 0, "queued": 0, "failed": 0, "skipped": 0}
@@ -542,7 +557,7 @@ async def handle_announce(request: web.Request) -> web.Response:
     ok = counts["delivered"] or counts["queued"]
     body = {"targets": list(targets), "results": results, **counts}
     if not ok:
-        body["error"] = "not delivered to any speaker"
+        body["error"] = delivery_error(counts)
     return web.json_response(body, status=200 if ok else 502)
 
 
@@ -962,6 +977,45 @@ async def lan_auth(request: web.Request, handler):
     return await handler(request)
 
 
+# Browser talkers (a wall-tablet dashboard) post from Home Assistant's origin,
+# port 8123, so every upload is cross-origin and its X-Device-Name /
+# X-Sample-Rate headers need a preflight. Firmware sends no Origin and is
+# untouched. The lan_token, when set, still guards the POST itself.
+_CORS_ALLOW_HEADERS = ("Authorization, Content-Type, X-Device-Name, "
+                       "X-Session-ID, X-Sample-Rate, X-Intercom-Reply")
+
+
+def _cors_headers(request: web.Request) -> dict:
+    return {
+        "Access-Control-Allow-Origin": request.headers.get("Origin", "*"),
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": _CORS_ALLOW_HEADERS,
+        "Access-Control-Max-Age": "600",
+        "Vary": "Origin",
+    }
+
+
+@web.middleware
+async def lan_cors(request: web.Request, handler):
+    """Answer CORS preflights and label answers for browser talkers.
+    Outside lan_auth, so a preflight (which carries no token) gets through
+    and a 401 still reaches the page readably."""
+    if "Origin" not in request.headers or request.path.startswith(_LAN_PUBLIC_PREFIX):
+        return await handler(request)
+    if request.method == "OPTIONS":
+        headers = _cors_headers(request)
+        if request.headers.get("Access-Control-Request-Private-Network"):
+            headers["Access-Control-Allow-Private-Network"] = "true"
+        return web.Response(status=204, headers=headers)
+    try:
+        resp = await handler(request)
+    except web.HTTPException as e:
+        e.headers.update(_cors_headers(request))
+        raise
+    resp.headers.update(_cors_headers(request))
+    return resp
+
+
 # The loop holds tasks weakly; keep them alive until done.
 _background_tasks: set = set()
 
@@ -1009,7 +1063,7 @@ def remove_stale_www_media() -> int:
 
 def make_lan_app(token: Optional[str] = None) -> web.Application:
     app = web.Application(client_max_size=MAX_UPLOAD_BYTES,
-                          middlewares=[lan_auth])
+                          middlewares=[lan_cors, lan_auth])
     app[LAN_TOKEN_KEY] = lan_token() if token is None else token
     app.router.add_post("/intercom", handle_intercom)
     app.router.add_post("/intercom/reply", handle_intercom)
@@ -1019,8 +1073,13 @@ def make_lan_app(token: Optional[str] = None) -> web.Application:
 
 
 def make_ingress_app() -> web.Application:
-    app = web.Application()
+    # Uploads come through here too: a dashboard push-to-talk card on a phone
+    # posts via HA's ingress proxy (same origin, HTTPS, HA auth), where the
+    # LAN port is out of reach (mixed content, or outside the LAN).
+    app = web.Application(client_max_size=MAX_UPLOAD_BYTES)
     app.router.add_get("/", handle_picker_index)
+    app.router.add_post("/api/intercom", handle_intercom)
+    app.router.add_post("/api/intercom/reply", handle_intercom)
     app.router.add_get("/api/players", handle_picker_get)
     app.router.add_post("/api/players", handle_picker_post)
     app.router.add_get("/api/devices", handle_devices_get)

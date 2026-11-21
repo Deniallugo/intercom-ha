@@ -133,3 +133,23 @@ def test_manual_self_kept_when_registry_cannot_place_source():
     members = _two_voice_members()
     s = state(selves={"kitchen-mic": "media_player.sonos"})
     assert channel.self_player("kitchen-mic", s, members) == "media_player.sonos"
+
+
+def test_manual_self_speaker_joins_the_channel():
+    # A tablet satellite has no ESPHome media_player; its sound is a Sonos.
+    members = _two_voice_members()
+    s = state(selves={"ks-tablet": "media_player.sonos"})
+    p = channel.plan("voice-s3", s, members)
+    assert p.targets == ["media_player.atom_echo_player", "media_player.sonos"]
+    # It never hears itself, and excluding the speaker takes it out.
+    assert "media_player.sonos" not in channel.plan("ks-tablet", s, members).targets
+    s2 = state(selves={"ks-tablet": "media_player.sonos"}, excluded=["media_player.sonos"])
+    assert "media_player.sonos" not in channel.plan("voice-s3", s2, members).targets
+    rows = {r["name"]: r for r in channel.describe(s, members, {}, None)}
+    assert rows["ks-tablet"]["listening"] is True
+
+
+def test_stale_manual_self_does_not_join_the_channel():
+    members = _two_voice_members()
+    s = state(selves={"voice-s3": "media_player.office_voice_s3_player"})
+    assert "media_player.office_voice_s3_player" not in channel.channel_players(s, members)
