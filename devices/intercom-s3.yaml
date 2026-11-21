@@ -258,8 +258,8 @@ micro_wake_word:
   id: mww
   microphone: s3_mic
   models:
-    - model: okay_nabu
-      id: okay_nabu
+    - model: hey_jarvis
+      id: hey_jarvis
       probability_cutoff: 0.7      # default 0.97 too strict at our gain
   on_wake_word_detected:
     # Without a subscribed HA client, start() fails without firing on_error,

@@ -26,6 +26,10 @@ substitutions:
   local_audio: "id(assist_active) || id(timer_alarm).is_running()"
   feedback_src: feedback_src
   announce_src: announcement_src
+  # Wake word threshold. A device far from people (wall) needs a higher one,
+  # otherwise it wakes first on speech meant for a closer satellite and steals
+  # the conversation (HA keeps only the first of duplicate wake-ups).
+  wake_cutoff: "0.7"
 
 packages:
   secrets: !include secrets-voice.yaml
@@ -279,9 +283,9 @@ micro_wake_word:
     # raise probability_cutoff, not this.
     gain_factor: 4
   models:
-    - model: okay_nabu
-      id: okay_nabu
-      probability_cutoff: 0.7  # default 0.97 is too strict at this gain
+    - model: hey_jarvis
+      id: hey_jarvis
+      probability_cutoff: ${wake_cutoff}  # default 0.97 is too strict at this gain
   on_wake_word_detected:
     # Without a subscribed HA client, start() fails without firing on_error,
     # so nothing re-arms the wake word: deaf until reboot. (api.connected is
