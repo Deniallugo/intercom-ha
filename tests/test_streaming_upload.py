@@ -108,7 +108,8 @@ async def test_work_starts_before_the_last_byte(aiohttp_client, lan_app, env,
     resp = await post
     assert resp.status == 200
     calls = {c.args[0]: c.kwargs for c in env.play_media.await_args_list}
-    assert calls == {"media_player.cast": {}, "media_player.echo": {"announce": True}}
+    assert calls == {"media_player.cast": {},
+                     "media_player.echo": {"announce": True, "timeout": 4.0}}
     # The Ducker was not asked twice: one snapshot, one pause.
     assert env.get_state.await_count == 1 and env.pause.await_count == 1
     assert fake_streams.made[0].fed == first + b"\x02\x00" * 800
@@ -197,7 +198,7 @@ async def test_recording_is_saved_before_the_broadcast(aiohttp_client, lan_app,
                                                        env, fake_streams):
     seen = []
 
-    async def play_media(entity, url, announce=False):
+    async def play_media(entity, url, announce=False, timeout=None):
         seen.append(len(recordings.listing()))
         return 500
 

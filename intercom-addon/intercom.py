@@ -12,7 +12,7 @@ from typing import Optional
 from aiohttp import web
 from aiohttp.abc import AbstractAccessLogger
 
-from ha_client import HAClient
+from ha_client import ANNOUNCE_MARGIN, PLAY_TIMEOUT, HAClient
 from chimes import ChimeMixer
 from ducking import Ducker
 from airtime import Airtime
@@ -872,13 +872,22 @@ def skip_reason(state: Optional[dict], states_known: bool) -> Optional[str]:
     return None
 
 
+def announce_timeout(duration: float) -> float:
+    """How long to wait for an announce: the clip's length plus a margin."""
+    return max(PLAY_TIMEOUT, duration + ANNOUNCE_MARGIN)
+
+
 async def _deliver(player: str, media_url: str, duration: float, slot,
                    use_announce: bool) -> dict:
     """play_media on one player in its booked slot; frees the slot on failure."""
     via = "announce" if use_announce else "duck"
     try:
         if use_announce:
-            status = await ha.play_media(player, media_url, announce=True)
+            # MA-backed players answer after the clip ends; a fixed 4 s cut a
+            # 4 s message off as "timed out" though it played (2026-11-21).
+            status = await ha.play_media(
+                player, media_url, announce=True,
+                timeout=announce_timeout(duration))
         else:
             # Restore in `finally`, or a failure leaves music paused and a
             # stale snapshot in the Ducker.

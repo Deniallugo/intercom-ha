@@ -145,7 +145,7 @@ async def test_announce_capable_player_gets_announce_and_no_ducking(
     results = await srv._play_on_targets(b"RIFF", "wav", 1.0, ["media_player.echo"], name="t1")
 
     fake_ha.play_media.assert_awaited_once_with(
-        "media_player.echo", served("t1"), announce=True)
+        "media_player.echo", served("t1"), announce=True, timeout=4.0)
     # The player keeps its own music: no snapshot, pause or resume.
     fake_ha.get_state.assert_not_called()
     fake_ha.pause.assert_not_called()
@@ -176,7 +176,8 @@ async def test_mixed_targets_each_take_their_own_path(
     results = await srv._play_on_targets(
         b"RIFF", "wav", 1.0, ["media_player.echo", "media_player.sonos_old"], name="t3")
     calls = {c.args[0]: c.kwargs for c in fake_ha.play_media.await_args_list}
-    assert calls == {"media_player.echo": {"announce": True}, "media_player.sonos_old": {}}
+    assert calls == {"media_player.echo": {"announce": True, "timeout": 4.0},
+                     "media_player.sonos_old": {}}
     assert {k: v["via"] for k, v in results.items()} == {
         "media_player.echo": "announce", "media_player.sonos_old": "duck"}
 
@@ -205,12 +206,21 @@ async def test_unavailable_and_unknown_players_are_skipped(
     assert results["media_player.gone"]["outcome"] == "skipped"
 
 
+async def test_announce_waits_for_the_whole_clip(
+    www_dir, fake_options, fake_ha, fast_delete,
+):
+    fake_ha.get_states.return_value = [st("media_player.sonos", ESPHOME)]
+    await srv._play_on_targets(b"RIFF", "wav", 3.99, ["media_player.sonos"], name="t9")
+    assert fake_ha.play_media.await_args.kwargs["timeout"] == pytest.approx(6.99)
+    assert srv.announce_timeout(0.4) == 4.0
+
+
 async def test_http_error_and_exception_are_reported(
     www_dir, fake_options, fake_ha, fast_delete,
 ):
     fake_ha.get_states.return_value = [st("media_player.a", ESPHOME), st("media_player.b", ESPHOME)]
 
-    async def play_media(entity, url, announce=False):
+    async def play_media(entity, url, announce=False, timeout=None):
         if entity == "media_player.a":
             return 500
         raise asyncio.TimeoutError()
@@ -303,7 +313,7 @@ async def test_intercom_reports_per_target_results(
         st("media_player.a", ESPHOME), st("media_player.b", ESPHOME),
         st("media_player.c", ESPHOME, "unavailable")]
 
-    async def play_media(entity, url, announce=False):
+    async def play_media(entity, url, announce=False, timeout=None):
         return 200 if entity == "media_player.a" else 500
 
     fake_ha.play_media.side_effect = play_media
