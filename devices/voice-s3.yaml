@@ -91,6 +91,14 @@ esp32:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      # Pausing music hung the network (2026-11-21): the paused HTTP stream
+      # stops being read, its socket keeps up to RECVMBOX pbufs, each pins a
+      # Wi-Fi RX buffer, and 64 of them = all 64 dynamic RX buffers. TX still
+      # worked (logs kept streaming) but nothing came in: no ping, no HA
+      # commands. Keep one socket well below the RX buffer pool.
+      CONFIG_LWIP_TCP_RECVMBOX_SIZE: "24"
+      CONFIG_LWIP_TCP_WND_DEFAULT: "32768"
+      CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM: "96"
 
 # 80 MHz boot-loops on these boards; keep 40.
 psram:
@@ -101,6 +109,32 @@ psram:
 # 39 clicks/s at 20 dBm, 1.3/s at 8.5. If Wi-Fi drops out, raise this first.
 wifi:
   output_power: 8.5dB
+
+# Resuming music after a pause hung the wall unit twice (2026-11-21): still
+# associated to the AP but no IP traffic, LED on, no recovery until a power
+# cycle. Reboot on its own when HA can't reach the API instead of 15 min default.
+api:
+  reboot_timeout: 3min
+
+# Diagnostics for that hang: did it reboot, what was the signal, was internal
+# RAM running out after pause/resume.
+debug:
+  update_interval: 30s
+
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 30s
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    psram:
+      name: "PSRAM Free"
 
 # USB_CDC re-enumerates on boot and loses early logs.
 logger:
