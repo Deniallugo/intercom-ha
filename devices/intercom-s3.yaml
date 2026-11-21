@@ -63,10 +63,41 @@ esp32:
       CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
       CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
       CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      # Pausing music hung the network (2026-11-21, same as voice-s3): the
+      # paused HTTP stream stops being read, its socket keeps up to RECVMBOX
+      # pbufs, each pins a Wi-Fi RX buffer, and 64 of them = all 64 dynamic
+      # RX buffers. TX still works, nothing comes in. Keep one socket well
+      # below the RX buffer pool.
+      CONFIG_LWIP_TCP_RECVMBOX_SIZE: "24"
+      CONFIG_LWIP_TCP_WND_DEFAULT: "32768"
+      CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM: "96"
 
 psram:
   mode: octal
   speed: 80MHz
+
+# Reboot on its own when HA can't reach the API, instead of 15 min default.
+api:
+  reboot_timeout: 3min
+
+# Diagnostics: reboots, signal (it sits at about -81 dBm), internal RAM.
+debug:
+  update_interval: 30s
+
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 30s
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    psram:
+      name: "PSRAM Free"
 
 # No UART pins broken out.
 logger:

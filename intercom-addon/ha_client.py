@@ -18,9 +18,12 @@ TTS_WAV_OPTIONS = {"preferred_format": "wav", "preferred_sample_rate": 16000,
 # REST has no device/entity registry; only the WebSocket API does.
 SUPERVISOR_WS = "ws://supervisor/core/websocket"
 WS_TIMEOUT = 10.0
-# A play_media call; several run in parallel inside a device's 8 s upload
-# timeout (include/uploader.h), after denoise.
+# A play_media call; several run in parallel while the device waits for our
+# reply (25 s, include/uploader.h), after denoise.
 PLAY_TIMEOUT = 4.0
+# An announce through Music Assistant (Sonos etc.) answers only once the clip
+# has played, so it gets the clip's length plus this. ESPHome answers at once.
+ANNOUNCE_MARGIN = 3.0
 
 # The ESPHome node name (what devices send as X-Device-Name) is not in the
 # device registry: HA keeps it only in the config entry's data
@@ -75,7 +78,8 @@ class HAClient:
         return await resp.json()
 
     async def play_media(self, entity_id: str, media_url: str, *,
-                         announce: bool = False) -> int:
+                         announce: bool = False,
+                         timeout: float = PLAY_TIMEOUT) -> int:
         """Call media_player.play_media; returns the HTTP status.
 
         announce=True plays it as an announcement (players with
@@ -84,7 +88,8 @@ class HAClient:
         plays it as an audio clip over the music. The type stays "music", as
         HA's own tts.speak sends it; ESPHome ignores it.
 
-        Bounded by PLAY_TIMEOUT: the device's upload waits for our reply."""
+        Bounded by `timeout` (PLAY_TIMEOUT by default): the device's upload
+        waits for our reply."""
         data = {
             "entity_id": entity_id,
             "media_content_id": media_url,
@@ -96,7 +101,7 @@ class HAClient:
             f"{HA_API}/services/media_player/play_media",
             headers=self._auth_headers(),
             json=data,
-            timeout=ClientTimeout(total=PLAY_TIMEOUT),
+            timeout=ClientTimeout(total=timeout),
         )
         try:
             if resp.status >= 300:
