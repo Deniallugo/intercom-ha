@@ -6,6 +6,9 @@ substitutions:
   name: voice-s3-wall
   friendly_name: Voice S3 Wall
   ptt_pin: GPIO1
+  # It hears the living room too and woke ~1 s before the tablet there, then
+  # misheard the command. 0.9 still stole wake-ups (2026-11-18), so 0.97 (microWakeWord default).
+  wake_cutoff: "0.97"
 
 packages:
   voice_s3: !include voice-s3.yaml
