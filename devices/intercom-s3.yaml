@@ -163,7 +163,10 @@ media_player:
     buffer_size: 1000000     # 1 MB, in PSRAM
     media_pipeline:
       speaker: media_src
-      format: FLAC
+      # MP3: MA's output_codec for this player is mp3 (lighter on weak Wi-Fi);
+      # with FLAC here the MP3 decoder isn't built and every stream fails
+      # with ESP_ERR_NOT_SUPPORTED.
+      format: MP3
       sample_rate: 48000
       num_channels: 1
     announcement_pipeline:
