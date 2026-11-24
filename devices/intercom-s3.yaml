@@ -294,7 +294,7 @@ micro_wake_word:
   models:
     - model: hey_jarvis
       id: hey_jarvis
-      probability_cutoff: 0.7      # default 0.97 too strict at our gain
+      probability_cutoff: 0.6      # default 0.97 too strict; 0.7 missed wakes in the bedroom (2026-11-22)
   on_wake_word_detected:
     # Without a subscribed HA client, start() fails without firing on_error,
     # so nothing re-arms the wake word: deaf until reboot. (api.connected is
